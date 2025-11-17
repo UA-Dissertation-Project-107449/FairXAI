@@ -1,0 +1,16 @@
+{
+  "n_datasets": 2,
+  "dataset_names": [
+    "cleveland",
+    "kaggle_heart"
+  ],
+  "total_samples": 1215,
+  "sample_sizes": {
+    "cleveland": 297,
+    "kaggle_heart": 918
+  },
+  "target_prevalence": {
+    "cleveland": 0.4612794612794613,
+    "kaggle_heart": 0.5533769063180828
+  }
+}
