@@ -147,13 +147,14 @@ class CardiacDataLoader:
     ) -> pd.DataFrame:
         """
         Standardize target variable to 'heart_disease' (binary: 0/1).
+        Drops the original target column to prevent data leakage.
         
         Args:
             df: DataFrame with dataset-specific target
             dataset_name: Dataset identifier
             
         Returns:
-            DataFrame with 'heart_disease' column
+            DataFrame with 'heart_disease' column (original target dropped)
         """
         df = df.copy()
         target_col = self.get_target_column(dataset_name)
@@ -163,6 +164,9 @@ class CardiacDataLoader:
         
         # Binary mapping (assume 0=no disease, 1=disease)
         df['heart_disease'] = df[target_col].astype(int)
+        
+        # Drop original target column to prevent data leakage
+        df = df.drop(columns=[target_col])
         
         return df
 

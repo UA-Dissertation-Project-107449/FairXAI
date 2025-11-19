@@ -1,0 +1,160 @@
+{
+  "dataset_name": "cleveland_train",
+  "basic_stats": {
+    "n_samples": 206,
+    "n_features": 18,
+    "target_name": "heart_disease",
+    "target_prevalence": 0.4563106796116505
+  },
+  "sensitive_attr_distribution": {
+    "age_group": {
+      "counts": {
+        "50-59": 88,
+        "40-49": 52,
+        "60-69": 51,
+        "<40": 11,
+        "70+": 4
+      },
+      "proportions": {
+        "50-59": 0.42718446601941745,
+        "40-49": 0.2524271844660194,
+        "60-69": 0.24757281553398058,
+        "<40": 0.05339805825242718,
+        "70+": 0.019417475728155338
+      }
+    },
+    "sex": {
+      "counts": {
+        "Male": 140,
+        "Female": 66
+      },
+      "proportions": {
+        "Male": 0.6796116504854369,
+        "Female": 0.32038834951456313
+      }
+    }
+  },
+  "target_distribution": {
+    "counts": {
+      "0": 112,
+      "1": 94
+    },
+    "proportions": {
+      "0": 0.5436893203883495,
+      "1": 0.4563106796116505
+    },
+    "imbalance_ratio": 1.1914893617021276
+  },
+  "group_statistics": {
+    "age_group": {
+      "60-69": {
+        "n_samples": 51,
+        "proportion_of_total": 0.24757281553398058,
+        "target_prevalence": 0.5882352941176471,
+        "target_counts": {
+          "1": 30,
+          "0": 21
+        }
+      },
+      "50-59": {
+        "n_samples": 88,
+        "proportion_of_total": 0.42718446601941745,
+        "target_prevalence": 0.5113636363636364,
+        "target_counts": {
+          "1": 45,
+          "0": 43
+        }
+      },
+      "70+": {
+        "n_samples": 4,
+        "proportion_of_total": 0.019417475728155338,
+        "target_prevalence": 0.0,
+        "target_counts": {
+          "0": 4
+        }
+      },
+      "40-49": {
+        "n_samples": 52,
+        "proportion_of_total": 0.2524271844660194,
+        "target_prevalence": 0.28846153846153844,
+        "target_counts": {
+          "0": 37,
+          "1": 15
+        }
+      },
+      "<40": {
+        "n_samples": 11,
+        "proportion_of_total": 0.05339805825242718,
+        "target_prevalence": 0.36363636363636365,
+        "target_counts": {
+          "0": 7,
+          "1": 4
+        }
+      }
+    },
+    "sex": {
+      "Male": {
+        "n_samples": 140,
+        "proportion_of_total": 0.6796116504854369,
+        "target_prevalence": 0.5571428571428572,
+        "target_counts": {
+          "1": 78,
+          "0": 62
+        }
+      },
+      "Female": {
+        "n_samples": 66,
+        "proportion_of_total": 0.32038834951456313,
+        "target_prevalence": 0.24242424242424243,
+        "target_counts": {
+          "0": 50,
+          "1": 16
+        }
+      }
+    }
+  },
+  "representation_balance": {
+    "age_group": {
+      "coefficient_of_variation": 0.8318906983715698,
+      "min_group_size": 4,
+      "max_group_size": 88,
+      "size_ratio": 22.0
+    },
+    "sex": {
+      "coefficient_of_variation": 0.508018464153442,
+      "min_group_size": 66,
+      "max_group_size": 140,
+      "size_ratio": 2.121212121212121
+    }
+  },
+  "label_imbalance_by_group": {
+    "age_group": {
+      "positive_rates": {
+        "40-49": 0.28846153846153844,
+        "50-59": 0.5113636363636364,
+        "60-69": 0.5882352941176471,
+        "70+": 0.0,
+        "<40": 0.36363636363636365
+      },
+      "statistical_parity_difference": {
+        "max_difference": 0.5882352941176471,
+        "max_ratio": null
+      }
+    },
+    "sex": {
+      "positive_rates": {
+        "Female": 0.24242424242424243,
+        "Male": 0.5571428571428572
+      },
+      "statistical_parity_difference": {
+        "max_difference": 0.31471861471861473,
+        "max_ratio": 2.2982142857142858
+      }
+    }
+  },
+  "missing_value_analysis": {
+    "total_missing": 0,
+    "columns_with_missing": {},
+    "missing_by_group": {}
+  }
+}

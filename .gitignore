@@ -1,3 +1,24 @@
+# ===================================================================
+# FairXAI Project-Specific
+# ===================================================================
+
+# Data & Models (ignored for size)
+data/raw/
+data/processed/
+data/external/
+models/
+!models/README.md
+
+# Logs
+logs/
+
+# TODO see if we want to keep any of experiments/
+
+# Notebook outputs
+notebooks/runs/
+
+# ===================================================================
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

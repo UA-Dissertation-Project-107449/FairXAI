@@ -4,7 +4,7 @@
   "datasets": {
     "cleveland": {
       "n_samples": 297,
-      "n_features": 19,
+      "n_features": 18,
       "age_groups": {
         "50-59": 126,
         "40-49": 75,
@@ -24,7 +24,7 @@
     },
     "kaggle_heart": {
       "n_samples": 918,
-      "n_features": 18,
+      "n_features": 17,
       "age_groups": {
         "50-59": 381,
         "40-49": 223,

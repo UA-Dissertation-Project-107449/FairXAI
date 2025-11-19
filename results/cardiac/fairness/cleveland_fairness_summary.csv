@@ -1,0 +1,17 @@
+sensitive_attribute,metric,is_fair,max_difference,tpr_max_difference,fpr_max_difference,split
+age_group_cat,demographic_parity,False,0.6078431372549019,,,train
+age_group_cat,equalized_odds,False,,1.0,0.23809523809523808,train
+age_group_cat,equal_opportunity,False,1.0,,,train
+age_group_cat,predictive_parity,False,1.0,,,train
+sex_cat,demographic_parity,False,0.32987012987012987,,,train
+sex_cat,equalized_odds,False,,0.1842948717948718,0.08129032258064516,train
+sex_cat,equal_opportunity,False,0.1842948717948718,,,train
+sex_cat,predictive_parity,False,0.13846153846153852,,,train
+age_group_cat,demographic_parity,False,0.5909090909090909,,,test
+age_group_cat,equalized_odds,False,,0.8333333333333334,0.3333333333333333,test
+age_group_cat,equal_opportunity,False,0.8333333333333334,,,test
+age_group_cat,predictive_parity,False,1.0,,,test
+sex_cat,demographic_parity,False,0.17183908045977014,,,test
+sex_cat,equalized_odds,False,,0.11742424242424243,0.07936507936507936,test
+sex_cat,equal_opportunity,False,0.11742424242424243,,,test
+sex_cat,predictive_parity,False,0.1064516129032258,,,test
