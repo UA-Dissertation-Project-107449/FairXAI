@@ -1,0 +1,176 @@
+# Clustering-Based Fairness Analysis Experiment
+# Discovers hidden subgroups and evaluates fairness within clusters
+
+experiment:
+  name: "clustering_fairness"
+  type: "subgroup_discovery"
+  description: |
+    Use unsupervised clustering to discover latent subgroups in feature space
+    and evaluate fairness within and across clusters. Identifies intersectional
+    effects and hidden biases not captured by predefined sensitive attributes.
+
+data:
+  base_config: "domain/cardiac.yaml"
+  datasets:
+    - cleveland
+    - kaggle_heart
+  
+  feature_selection:
+    exclude: ["heart_disease", "age_group", "sex"]  # Exclude target and sensitive attrs
+    clinical_only: true  # Use only clinical features for clustering
+    scaling: "standard"  # Required for distance-based clustering
+
+clustering_methods:
+  
+  kmeans:
+    algorithm: "K-Means"
+    library: "sklearn"
+    description: "Partition-based clustering with Euclidean distance"
+    parameters:
+      n_clusters: [3, 4, 5, 6, 7, 8]  # Test multiple k values
+      init: "k-means++"
+      n_init: 10
+      max_iter: 300
+      random_state: 42
+    selection_method: "elbow"  # or "silhouette"
+  
+  hierarchical:
+    algorithm: "Agglomerative Clustering"
+    library: "sklearn"
+    description: "Bottom-up hierarchical clustering"
+    parameters:
+      n_clusters: [3, 4, 5, 6]
+      linkage: "ward"
+      affinity: "euclidean"
+    selection_method: "dendrogram"
+  
+  dbscan:
+    algorithm: "DBSCAN"
+    library: "sklearn"
+    description: "Density-based clustering (finds arbitrary shapes)"
+    parameters:
+      eps: [0.3, 0.5, 0.7, 1.0]  # Grid search
+      min_samples: [5, 10, 15]
+      metric: "euclidean"
+    selection_method: "silhouette"
+  
+  gaussian_mixture:
+    algorithm: "Gaussian Mixture Model"
+    library: "sklearn"
+    description: "Probabilistic clustering with soft assignments"
+    parameters:
+      n_components: [3, 4, 5, 6]
+      covariance_type: "full"
+      max_iter: 100
+      n_init: 10
+      random_state: 42
+    selection_method: "bic"  # Bayesian Information Criterion
+
+fairness_analysis:
+  
+  # How do protected attributes distribute across clusters?
+  cluster_composition:
+    metrics:
+      - protected_attribute_entropy  # Diversity within clusters
+      - disparity_impact_ratio  # Cluster composition vs population
+      - segregation_index  # How segregated are protected groups?
+    
+    visualization:
+      - composition_heatmap
+      - sankey_diagram  # Flow from demographics to clusters
+  
+  # Are clusters treated fairly by the model?
+  cluster_fairness:
+    metrics:
+      - demographic_parity_by_cluster
+      - equalized_odds_by_cluster
+      - calibration_by_cluster
+      - prediction_consistency  # Similar features → similar predictions
+    
+    comparison:
+      - cluster_vs_traditional_groups  # Clusters vs age/sex groups
+      - intersectional_analysis  # Clusters within demographic groups
+  
+  # Individual fairness: similar patients should have similar outcomes
+  similarity_based_fairness:
+    method: "k-nearest_neighbors"
+    parameters:
+      k: [5, 10, 20]
+      metric: "euclidean"
+    
+    metrics:
+      - consistency_score  # Prediction similarity among neighbors
+      - local_outlier_factor  # Identify anomalous predictions
+      - fairness_violation_density  # Spatial distribution of violations
+    
+    analysis:
+      - identify_unfairly_treated_individuals
+      - map_fairness_violation_hotspots
+
+subgroup_discovery:
+  
+  # Find subgroups with significantly different outcomes
+  statistical_tests:
+    - chi_square_test  # Independence of cluster and outcome
+    - mann_whitney_u   # Distribution differences
+    - permutation_test  # Fairness metric significance
+  
+  # Characterize discovered subgroups
+  profile_clusters:
+    - feature_means_by_cluster
+    - clinical_interpretation  # What makes this cluster unique?
+    - risk_stratification  # Disease prevalence per cluster
+    - fairness_vulnerability  # Which clusters face bias?
+  
+  # Intersectional analysis
+  intersectionality:
+    method: "fairness_aware_clustering"
+    description: "Cluster within each demographic group separately"
+    comparison:
+      - within_group_heterogeneity
+      - cross_group_similarity
+      - intersectional_fairness_violations
+
+validation:
+  
+  # Ensure clusters are meaningful, not artifacts
+  stability:
+    - bootstrap_resampling  # Cluster stability across samples
+    - cross_dataset_validation  # Do clusters generalize?
+  
+  # Clinical relevance
+  clinical_validation:
+    - consult_domain_expert: true
+    - literature_comparison: true
+    - known_risk_factors_alignment: true
+
+output:
+  results_dir: "results/experiments/clustering"
+  artifacts:
+    - cluster_assignments_csv
+    - composition_heatmap_png
+    - fairness_by_cluster_csv
+    - similarity_fairness_scores_csv
+    - subgroup_profiles_md
+    - intersectional_analysis_png
+    - recommendation_report_md
+  
+  recommendations:
+    - identified_vulnerable_subgroups
+    - fairness_interventions_by_cluster
+    - monitoring_priorities
+    - feature_engineering_suggestions
+
+interpretation:
+  # Help users understand what clusters represent
+  generate:
+    - cluster_prototypes  # Representative examples
+    - feature_importance_by_cluster
+    - clinical_narratives  # "Cluster 3: elderly males with high BP..."
+    - fairness_risk_profiles
+  
+  # Actionable insights
+  clinical_utility:
+    - risk_stratification_improvement
+    - personalized_fairness_interventions
+    - monitoring_protocols_by_subgroup

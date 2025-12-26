@@ -1,0 +1,70 @@
+# Domain-specific configuration for cardiac disease datasets
+
+dataset_info:
+  name: "cardiac"
+  description: "Cardiac disease prediction datasets"
+  target_column: "heart_disease"
+  target_type: "binary"
+  positive_class: 1
+
+datasets:
+  cleveland:
+    source: "UCI Heart Disease Cleveland"
+    path: "data/raw/cardiac/cleveland_standardized.csv"
+    n_samples: 297  # After preprocessing
+    n_features: 13
+    
+  kaggle_heart:
+    source: "Kaggle Heart Disease Dataset"
+    path: "data/raw/cardiac/kaggle_heart_standardized.csv"
+    n_samples: 918  # After preprocessing
+    n_features: 11
+
+sensitive_attributes:
+  age_group:
+    type: "categorical"
+    description: "Age group bins"
+    categories: ["<40", "40-49", "50-59", "60-69", "70+"]
+    
+  sex:
+    type: "binary"
+    description: "Biological sex"
+    categories: ["female", "male"]
+
+feature_groups:
+  demographic:
+    - age
+    - sex
+    
+  clinical_measurements:
+    - trestbps  # resting blood pressure
+    - chol      # serum cholesterol
+    - thalach   # max heart rate
+    - oldpeak   # ST depression
+    
+  diagnostic_tests:
+    - fbs       # fasting blood sugar
+    - restecg   # resting ECG results
+    - exang     # exercise induced angina
+    - slope     # slope of peak exercise ST segment
+    - ca        # number of major vessels
+    - thal      # thalassemia
+
+fairness_context:
+  protected_groups:
+    - age_group
+    - sex
+  
+  known_biases:
+    - "Age groups 60+ are overrepresented in positive class"
+    - "Males have higher disease prevalence in Cleveland dataset"
+    - "Females underrepresented in both datasets (historical bias)"
+  
+  clinical_relevance:
+    critical_metrics:
+      - recall  # Minimize false negatives (missing actual disease)
+      - calibration  # Probability estimates must be reliable
+    
+    acceptable_tradeoffs:
+      precision: "Can tolerate some false positives for safety"
+      specificity: "Secondary to sensitivity in healthcare context"

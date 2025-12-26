@@ -1,0 +1,28 @@
+# Cardiac pipeline configuration (YAML)
+
+paths:
+  external_dir: data/external
+  raw_dir: data/raw/cardiac
+  processed_dir: data/processed/cardiac
+  experiments_dir: experiments/cardiac/baseline
+  models_dir: models/cardiac
+  results_fairness_dir: results/cardiac/fairness
+  results_binning_dir: results/experiments/binning
+
+runtime:
+  datasets: [cleveland, kaggle_heart]
+  schema_mapping_json: experiments/cardiac/configs/schema_mapping.json
+
+split:
+  test_size: 0.3
+  random_state: 42
+
+training:
+  model: logistic_regression
+  solver: lbfgs
+  C: 1.0
+  max_iter: 1000
+  thresholds: [0.3, 0.4, 0.5, 0.6, 0.7]
+
+fairness:
+  sensitive_attributes: [age_group, sex, ethnicity, group_cluster]

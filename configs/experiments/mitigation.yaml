@@ -1,0 +1,196 @@
+# Fairness Mitigation Methods Comparison Experiment
+# Tests pre-processing, in-processing, and post-processing mitigation techniques
+
+experiment:
+  name: "mitigation_comparison"
+  type: "fairness_mitigation"
+  description: |
+    Systematically compare fairness mitigation techniques across the ML pipeline.
+    Evaluates accuracy-fairness trade-offs and identifies optimal interventions
+    for cardiac disease prediction while maintaining clinical utility.
+
+data:
+  base_config: "domain/cardiac.yaml"
+  datasets:
+    - cleveland
+    - kaggle_heart
+  preprocessing: "configs/pipelines/baseline.yaml"  # Use baseline preprocessing
+  
+baseline:
+  model: "logistic_regression"
+  config: "configs/models/logistic_regression.yaml"
+  no_mitigation: true  # Establish baseline metrics
+
+mitigation_strategies:
+  
+  # === Pre-processing Techniques ===
+  # Applied to training data before model training
+  
+  reweighting:
+    stage: "pre-processing"
+    method: "sample_reweighting"
+    library: "aif360"
+    description: "Adjust sample weights to equalize representation"
+    parameters:
+      unprivileged_groups: [{"sex": 0}, {"age_group": 0}]
+      privileged_groups: [{"sex": 1}, {"age_group": 4}]
+  
+  smote:
+    stage: "pre-processing"
+    method: "synthetic_minority_oversampling"
+    library: "imblearn"
+    description: "Generate synthetic samples for minority groups"
+    parameters:
+      sampling_strategy: "auto"
+      k_neighbors: 5
+      random_state: 42
+  
+  ros:
+    stage: "pre-processing"
+    method: "random_oversampling"
+    library: "imblearn"
+    description: "Random duplication of minority samples"
+    parameters:
+      sampling_strategy: "auto"
+      random_state: 42
+  
+  rus:
+    stage: "pre-processing"
+    method: "random_undersampling"
+    library: "imblearn"
+    description: "Random removal of majority samples"
+    parameters:
+      sampling_strategy: "auto"
+      random_state: 42
+  
+  adasyn:
+    stage: "pre-processing"
+    method: "adaptive_synthetic_sampling"
+    library: "imblearn"
+    description: "Adaptive synthetic sampling focusing on harder-to-learn examples"
+    parameters:
+      sampling_strategy: "auto"
+      n_neighbors: 5
+      random_state: 42
+  
+  # === In-processing Techniques ===
+  # Fairness-aware training algorithms
+  
+  exponentiated_gradient:
+    stage: "in-processing"
+    method: "fairness_constrained_optimization"
+    library: "fairlearn"
+    description: "Optimize for fairness constraints during training"
+    parameters:
+      constraints: "DemographicParity"  # or "EqualizedOdds"
+      eps: 0.05
+      max_iter: 50
+      nu: 1e-6
+  
+  grid_search:
+    stage: "in-processing"
+    method: "fairness_aware_grid_search"
+    library: "fairlearn"
+    description: "Grid search over lambda values for fairness-accuracy trade-off"
+    parameters:
+      constraints: "EqualizedOdds"
+      grid_size: 20
+      grid_limit: 2.0
+  
+  adversarial_debiasing:
+    stage: "in-processing"
+    method: "adversarial_network"
+    library: "aif360"
+    description: "Learn fair representations via adversarial training"
+    parameters:
+      privileged_groups: [{"sex": 1}]
+      unprivileged_groups: [{"sex": 0}]
+      scope_name: "debiased_classifier"
+      debias: true
+      adversary_loss_weight: 0.1
+  
+  # === Post-processing Techniques ===
+  # Applied to model predictions
+  
+  threshold_optimizer:
+    stage: "post-processing"
+    method: "threshold_optimization"
+    library: "fairlearn"
+    description: "Find group-specific decision thresholds"
+    parameters:
+      constraints: "equalized_odds"
+      objective: "balanced_accuracy_score"
+      grid_size: 100
+  
+  calibrated_equalized_odds:
+    stage: "post-processing"
+    method: "calibration_adjustment"
+    library: "aif360"
+    description: "Adjust predictions to satisfy equalized odds while maintaining calibration"
+    parameters:
+      cost_constraint: "fnr"  # false negative rate
+      unprivileged_groups: [{"sex": 0}]
+      privileged_groups: [{"sex": 1}]
+  
+  reject_option_classification:
+    stage: "post-processing"
+    method: "reject_option_boundary"
+    library: "aif360"
+    description: "Give favorable outcomes to unprivileged groups near decision boundary"
+    parameters:
+      unprivileged_groups: [{"sex": 0}]
+      privileged_groups: [{"sex": 1}]
+      low_class_thresh: 0.01
+      high_class_thresh: 0.99
+      num_class_thresh: 100
+      metric_name: "Statistical parity difference"
+
+evaluation:
+  # Metrics to track for each technique
+  performance_metrics:
+    - accuracy
+    - precision
+    - recall
+    - f1_score
+    - roc_auc
+    - balanced_accuracy
+  
+  fairness_metrics:
+    - demographic_parity_difference
+    - demographic_parity_ratio
+    - equalized_odds_difference
+    - equal_opportunity_difference
+    - predictive_parity_difference
+    - calibration_by_group
+  
+  clinical_metrics:
+    - false_negative_rate  # Critical: missing actual disease
+    - false_positive_rate  # Cost: unnecessary treatment
+    - positive_predictive_value  # Probability prediction is correct
+  
+  trade_off_analysis:
+    - accuracy_vs_fairness_pareto
+    - recall_vs_equalized_odds
+    - calibration_vs_demographic_parity
+
+comparison:
+  baseline_comparison: true
+  cross_technique_ranking: true
+  by_dataset: true
+  by_sensitive_attribute: true
+
+output:
+  results_dir: "results/experiments/mitigation"
+  artifacts:
+    - comparison_table_csv
+    - pareto_frontier_png
+    - technique_ranking_csv
+    - per_dataset_comparison_png
+    - fairness_improvement_heatmap_png
+    - recommendation_report_md
+  
+  recommendation_criteria:
+    min_recall: 0.70  # Healthcare safety threshold
+    max_fairness_violation: 0.10  # Demographic parity
+    prefer_pre_processing: true  # Easier to deploy
+    interpretability_weight: 0.3  # Clinical trust requirement

@@ -1,0 +1,90 @@
+# Age Binning Strategy Comparison Experiment
+# Tests different age discretization approaches for fairness analysis
+
+experiment:
+  name: "age_binning_comparison"
+  type: "fairness_analysis"
+  description: |
+    Systematically compare age binning strategies to determine optimal 
+    discretization for fairness assessment. Evaluates impact on:
+    - Statistical parity across demographic groups
+    - Group size balance and statistical power
+    - Cross-dataset generalization
+    - Sensitive attribute distribution within bins
+
+data:
+  base_config: "domain/cardiac.yaml"
+  datasets:
+    - cleveland
+    - kaggle_heart
+  age_column: "age_raw"
+  sensitive_attributes:
+    - sex  # Analyze distribution within age bins
+  target: "heart_disease"
+
+binning_strategies:
+  fixed_10yr:
+    description: "Current baseline - 10-year fixed intervals"
+    method: "fixed"
+    bins: [0, 40, 50, 60, 70, 100]
+    labels: ["<40", "40-49", "50-59", "60-69", "70+"]
+    
+  fixed_5yr:
+    description: "Finer granularity - 5-year fixed intervals"
+    method: "fixed"
+    bins: [0, 35, 40, 45, 50, 55, 60, 65, 70, 75, 100]
+    labels: ["<35", "35-39", "40-44", "45-49", "50-54", "55-59", "60-64", "65-69", "70-74", "75+"]
+    
+  clinical:
+    description: "Clinical cardiovascular risk guidelines"
+    method: "fixed"
+    bins: [0, 45, 55, 65, 100]
+    labels: ["<45", "45-54", "55-64", "65+"]
+    reference: "ACC/AHA guidelines"
+    
+  quantile_3:
+    description: "Data-driven terciles (equal sample sizes)"
+    method: "quantile"
+    n_bins: 3
+    
+  quantile_5:
+    description: "Data-driven quintiles (equal sample sizes)"
+    method: "quantile"
+    n_bins: 5
+
+metrics:
+  fairness:
+    - statistical_parity_difference  # Max difference in positive rates across bins
+    - demographic_parity_ratio       # Min/max ratio
+    
+  balance:
+    - coefficient_of_variation  # Group size balance
+    - min_group_size           # Smallest bin size
+    - max_group_size           # Largest bin size
+    
+  stability:
+    - cross_dataset_consistency  # Compare metrics across datasets
+    - sensitive_attribute_balance  # Sex distribution within bins
+
+scoring:
+  weights:
+    min_group_size: 0.4       # 40% - Statistical power is critical
+    group_balance: 0.3        # 30% - Balanced groups preferred
+    fairness_sensitivity: 0.3 # 30% - Must detect bias but not over-fragment
+  
+  fairness_ideal_range: [0.15, 0.40]  # Detectable but not extreme
+  min_group_size_threshold: 30  # Minimum for statistical validity
+
+output:
+  results_dir: "results/experiments/binning"
+  artifacts:
+    - comparison_table_csv
+    - stability_analysis_csv
+    - tradeoff_plots_png
+    - group_distribution_plots_png
+    - recommendation_report_md
+  
+  recommendation_criteria:
+    - best_overall_score
+    - cross_dataset_generalization
+    - clinical_interpretability

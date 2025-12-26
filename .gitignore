@@ -6,8 +6,7 @@
 data/raw/
 data/processed/
 data/external/
-models/
-!models/README.md
+*.pkl
 
 # Experiment/result artifacts
 results/
