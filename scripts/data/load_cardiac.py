@@ -23,6 +23,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 
 from fairxai.data.loaders import CardiacDataLoader, get_dataset_summary
+from fairxai.utils.config import load_yaml_config
 
 
 def setup_logging(log_dir: Path):
@@ -40,16 +41,17 @@ def setup_logging(log_dir: Path):
     )
     
     logging.info("="*60)
-    logging.info("CARDIAC DATA LOADING PIPELINE")
+    logging.info("Cardiac data loading")
     logging.info("="*60)
 
 
 def main():
     # Paths
     project_root = Path(__file__).parent.parent.parent
-    config_path = project_root / 'experiments/cardiac/configs/schema_mapping.json'
-    data_external = project_root / 'data/external'
-    data_raw_cardiac = project_root / 'data/raw/cardiac'
+    pipeline_cfg = load_yaml_config(str(project_root / 'configs/pipelines/cardiac.yaml'))
+    config_path = project_root / pipeline_cfg['runtime']['schema_mapping_json']
+    data_external = project_root / pipeline_cfg['paths']['external_dir']
+    data_raw_cardiac = project_root / pipeline_cfg['paths']['raw_dir']
     log_dir = project_root / 'logs/cardiac'
     results_profiling = project_root / 'results/cardiac/data_profiling'
     
@@ -59,7 +61,7 @@ def main():
     results_profiling.mkdir(parents=True, exist_ok=True)
     
     # Load datasets
-    logging.info("Initializing CardiacDataLoader...")
+    logging.info("Initializing cardiac loader...")
     loader = CardiacDataLoader(str(config_path))
     
     logging.info(f"Loading cardiac datasets from: {data_external}")
@@ -83,30 +85,27 @@ def main():
         logging.info(f"Shape: {df_raw.shape}")
         logging.info(f"Missing values: {df_raw.isnull().sum().sum()} total")
         
-        # Standardize
+        # Datasets returned by loader are already harmonized and standardized
         try:
-            df_std = loader.standardize_sensitive_attributes(df_raw, dataset_name)
-            df_std = loader.standardize_target(df_std, dataset_name)
-            
-            # Verify standardization
-            assert 'age_group' in df_std.columns, "Missing age_group"
-            assert 'sex' in df_std.columns, "Missing sex"
-            assert 'heart_disease' in df_std.columns, "Missing heart_disease"
-            
-            standardized_datasets[dataset_name] = df_std
-            
+            # Verify expected columns
+            assert 'age_group' in df_raw.columns, "Missing age_group"
+            assert 'sex' in df_raw.columns, "Missing sex"
+            assert 'heart_disease' in df_raw.columns, "Missing heart_disease"
+
+            standardized_datasets[dataset_name] = df_raw
+
             # Save to raw/cardiac
             output_file = data_raw_cardiac / f"{dataset_name}_standardized.csv"
-            df_std.to_csv(output_file, index=False)
+            df_raw.to_csv(output_file, index=False)
             logging.info(f"✓ Saved standardized dataset to: {output_file}")
-            
+
             # Quick stats
-            logging.info(f"  Age groups: {df_std['age_group'].value_counts().to_dict()}")
-            logging.info(f"  Sex: {df_std['sex'].value_counts().to_dict()}")
-            logging.info(f"  Heart disease: {df_std['heart_disease'].value_counts().to_dict()}")
-            
+            logging.info(f"  Age groups: {df_raw['age_group'].value_counts().to_dict()}")
+            logging.info(f"  Sex: {df_raw['sex'].value_counts().to_dict()}")
+            logging.info(f"  Heart disease: {df_raw['heart_disease'].value_counts().to_dict()}")
+
         except Exception as e:
-            logging.error(f"✗ Failed to standardize {dataset_name}: {e}")
+            logging.error(f"✗ Failed to verify/save {dataset_name}: {e}")
             continue
     
     # Save summaries

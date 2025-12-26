@@ -1,5 +1,5 @@
 """
-Phase 4: Post-Prediction Fairness Assessment
+Post-prediction fairness assessment.
 
 Evaluates fairness of model predictions across sensitive attributes.
 Calculates group fairness metrics, calibration, and individual fairness.
@@ -18,6 +18,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root / 'src'))
 
 from fairxai.fairness.metrics import FairnessMetrics, summarize_fairness_results
+from fairxai.utils.config import load_yaml_config
 
 
 def setup_logging(log_dir: Path):
@@ -35,8 +36,7 @@ def setup_logging(log_dir: Path):
     )
     
     logging.info("="*60)
-    logging.info("POST-PREDICTION FAIRNESS ASSESSMENT")
-    logging.info("Stage: POST-PROCESSING (Prediction Evaluation)")
+    logging.info("Post-prediction fairness assessment")
     logging.info("="*60)
 
 
@@ -287,6 +287,11 @@ def compare_fairness(train_metrics: Dict, test_metrics: Dict) -> Dict:
 
 def main():
     """Main execution function."""
+    project_root = Path(__file__).parent.parent.parent
+    pipeline_cfg = load_yaml_config(str(project_root / 'configs/pipelines/cardiac.yaml'))
+    experiments_dir = project_root / pipeline_cfg['paths']['experiments_dir']
+    results_dir = project_root / pipeline_cfg['paths']['results_fairness_dir']
+    log_dir = project_root / 'logs/cardiac'
     
     # Paths
     project_root = Path(__file__).parent.parent.parent
@@ -345,7 +350,7 @@ def main():
         json.dump(all_results, f, indent=2, default=lambda o: float(o) if isinstance(o, (np.integer, np.floating)) else str(o))
     
     logging.info(f"\n{'='*60}")
-    logging.info("POST-PREDICTION FAIRNESS ASSESSMENT COMPLETE")
+    logging.info("Fairness assessment complete")
     logging.info(f"{'='*60}")
     logging.info(f"Results saved to: {results_dir}")
     logging.info(f"Combined report: {combined_file}")
