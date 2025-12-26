@@ -8,18 +8,20 @@ from typing import Dict, List, Tuple, Optional
 import json
 import logging
 
+from .schemas import available_sensitive, preferred_sensitive
+
 
 class CardiacPreprocessor:
     """Preprocess cardiac datasets for modeling."""
     
-    def __init__(self, sensitive_attrs: List[str] = ['age_group', 'sex']):
+    def __init__(self, sensitive_attrs: Optional[List[str]] = None):
         """
         Initialize preprocessor.
         
         Args:
             sensitive_attrs: List of sensitive attribute column names
         """
-        self.sensitive_attrs = sensitive_attrs
+        self.sensitive_attrs = preferred_sensitive(sensitive_attrs)
         self.scalers = {}
         self.encoders = {}
         self.metadata = {}
@@ -125,9 +127,16 @@ class CardiacPreprocessor:
         """
         if exclude_cols is None:
             exclude_cols = [
-                target, '_dataset_source', '_dataset_file',
-                'age_raw'  # Keep age_group instead
+                target,
+                '_dataset_source',
+                '_dataset_file',
+                'age_raw',  # Keep age_group instead
             ]
+
+        # Always exclude sensitive/group columns from model features to avoid leakage
+        exclude_cols = list(dict.fromkeys(exclude_cols + self.sensitive_attrs + [
+            'sex_extended', 'sex_bin'
+        ]))
         
         # Exclude target and metadata columns
         feature_cols = [col for col in df.columns if col not in exclude_cols]
@@ -272,9 +281,7 @@ class CardiacPreprocessor:
         }
         
         # Check sensitive attribute distributions
-        for attr in self.sensitive_attrs:
-            if attr not in train_df.columns:
-                continue
+        for attr in available_sensitive(train_df, self.sensitive_attrs):
             
             train_dist = train_df[attr].value_counts(normalize=True).to_dict()
             test_dist = test_df[attr].value_counts(normalize=True).to_dict()

@@ -9,7 +9,10 @@ from .plots import (
     plot_train_test_comparison,
     plot_equalized_odds_details,
     plot_calibration_by_group,
-    plot_fairness_evolution
+    plot_fairness_evolution,
+    plot_distribution,
+    plot_correlation_matrix,
+    plot_model_performance
 )
 
 __all__ = [
@@ -21,5 +24,8 @@ __all__ = [
     'plot_train_test_comparison',
     'plot_equalized_odds_details',
     'plot_calibration_by_group',
-    'plot_fairness_evolution'
+    'plot_fairness_evolution',
+    'plot_distribution',
+    'plot_correlation_matrix',
+    'plot_model_performance'
 ]

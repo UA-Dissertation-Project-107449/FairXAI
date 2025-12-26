@@ -1,194 +1,154 @@
 """Data loading utilities for cardiac datasets."""
 
-import pandas as pd
+import os
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, Tuple, Optional
+import pandas as pd
+
+from .schemas import harmonize_cardiac_schema
 
 
 class CardiacDataLoader:
     """Loader for cardiac disease datasets with schema mapping."""
-    
+
     def __init__(self, config_path: str):
-        """
-        Initialize loader with schema mapping configuration.
-        
-        Args:
-            config_path: Path to schema_mapping.json
-        """
         with open(config_path, 'r') as f:
             self.config = json.load(f)
-        
-        self.datasets = self.config['datasets']
-        self.cardiac_datasets = self.config['cardiac_relevant_datasets']
-        
+        self.datasets = self.config.get('datasets', {})
+        self.cardiac_datasets = self.config.get('cardiac_relevant_datasets', ["cleveland", "kaggle_heart"])
+
     def load_dataset(self, dataset_name: str, data_dir: str) -> pd.DataFrame:
-        """
-        Load a single dataset by name.
-        
-        Args:
-            dataset_name: Name from schema_mapping.json (e.g., 'cleveland')
-            data_dir: Directory containing raw CSV files
-            
-        Returns:
-            Raw DataFrame
-        """
         if dataset_name not in self.datasets:
             raise ValueError(f"Unknown dataset: {dataset_name}")
-        
         dataset_config = self.datasets[dataset_name]
-        filepath = Path(data_dir) / dataset_config['filename']
-        
+        filename = dataset_config.get('filename')
+
+        # Prefer data/external/cardiac/{filename}, then data/external/{filename}
+        p1 = Path(data_dir) / 'cardiac' / filename
+        p2 = Path(data_dir) / filename
+        filepath = p1 if p1.exists() else p2
         if not filepath.exists():
             raise FileNotFoundError(f"Dataset file not found: {filepath}")
-        
+
         logging.info(f"Loading {dataset_name} from {filepath}")
         df = pd.read_csv(filepath)
-        
-        # Add metadata columns
         df['_dataset_source'] = dataset_name
-        df['_dataset_file'] = dataset_config['filename']
-        
+        df['_dataset_file'] = filename
+
+        # Harmonize base schema and apply sensitive/target standardization
+        df = harmonize_cardiac_schema(df, dataset_name)
+        df = self._apply_sensitive_standardization(df, dataset_name)
+        df = self._apply_target_standardization(df, dataset_name)
         return df
-    
+
     def load_all_cardiac_datasets(self, data_dir: str) -> Dict[str, pd.DataFrame]:
-        """
-        Load all cardiac-relevant datasets.
-        
-        Args:
-            data_dir: Directory containing raw CSV files
-            
-        Returns:
-            Dictionary mapping dataset names to DataFrames
-        """
-        datasets = {}
+        datasets: Dict[str, pd.DataFrame] = {}
         for name in self.cardiac_datasets:
             try:
                 datasets[name] = self.load_dataset(name, data_dir)
                 logging.info(f"✓ Loaded {name}: {len(datasets[name])} rows")
             except Exception as e:
                 logging.error(f"✗ Failed to load {name}: {e}")
-        
         return datasets
-    
-    def get_sensitive_attributes(self, dataset_name: str) -> Dict[str, dict]:
-        """Get sensitive attribute configuration for a dataset."""
-        return self.datasets[dataset_name]['sensitive_attributes']
-    
-    def get_target_column(self, dataset_name: str) -> str:
-        """Get target column name for a dataset."""
-        return self.datasets[dataset_name]['target']
-    
-    def get_clinical_features(self, dataset_name: str) -> List[str]:
-        """Get list of clinical feature columns for a dataset."""
-        return self.datasets[dataset_name]['clinical_features']
-    
-    def standardize_sensitive_attributes(
-        self, 
-        df: pd.DataFrame, 
-        dataset_name: str
-    ) -> pd.DataFrame:
-        """
-        Standardize sensitive attributes to unified schema.
-        
-        Creates new columns: 'age_group', 'sex'
-        
-        Args:
-            df: Raw DataFrame
-            dataset_name: Dataset identifier
-            
-        Returns:
-            DataFrame with standardized sensitive attributes
-        """
-        df = df.copy()
-        sens_attrs = self.get_sensitive_attributes(dataset_name)
-        
-        # Standardize age
-        if 'age' in sens_attrs:
-            age_col = 'age'
-        elif 'Age' in sens_attrs:
-            age_col = 'Age'
-        else:
-            raise ValueError(f"No age column found for {dataset_name}")
-        
-        age_config = sens_attrs[age_col]
-        df['age_group'] = pd.cut(
-            df[age_col],
-            bins=age_config['bins'],
-            labels=age_config['labels'],
-            include_lowest=True
-        )
-        df['age_raw'] = df[age_col]  # Keep original
-        
-        # Standardize sex
-        if 'sex' in sens_attrs:
-            sex_col = 'sex'
-        elif 'Sex' in sens_attrs:
-            sex_col = 'Sex'
-        elif 'Gender' in sens_attrs:
-            sex_col = 'Gender'
-        else:
-            raise ValueError(f"No sex/gender column found for {dataset_name}")
-        
-        sex_mapping = sens_attrs[sex_col]['mapping']
-        # Convert keys to match data types (handle both int and string keys)
-        if df[sex_col].dtype in ['int64', 'int32', 'int16', 'int8']:
-            # Convert string keys to integers for integer columns
-            sex_mapping = {int(k): v for k, v in sex_mapping.items()}
-        df['sex'] = df[sex_col].map(sex_mapping)
-        
+
+    def _apply_sensitive_standardization(self, df: pd.DataFrame, dataset_name: str) -> pd.DataFrame:
+        sens = self.datasets.get(dataset_name, {}).get('sensitive_attributes', {})
+
+        # Age binning to age_group if age_raw exists
+        age_key = 'age' if 'age' in sens else 'Age' if 'Age' in sens else None
+        if age_key and 'age_raw' in df.columns:
+            bins = sens[age_key].get('bins', [0, 40, 50, 60, 70, 120])
+            labels = sens[age_key].get('labels', ['<40', '40-49', '50-59', '60-69', '70+'])
+            df['age_group'] = pd.cut(df['age_raw'], bins=bins, labels=labels, include_lowest=True)
+
+        # Sex mapping to "sex"
+        sex_key = 'sex' if 'sex' in sens else 'Sex' if 'Sex' in sens else 'Gender' if 'Gender' in sens else None
+        if sex_key:
+            mapping = sens[sex_key].get('mapping', {})
+            if sex_key in df.columns and 'sex' not in df.columns:
+                if pd.api.types.is_numeric_dtype(df[sex_key]):
+                    # Convert mapping keys to ints when source is numeric
+                    mapping = {int(k): v for k, v in mapping.items()}
+                df['sex'] = df[sex_key].map(mapping).fillna(df[sex_key])
+
+        # Extended and binary encodings
+        if 'sex' in df.columns:
+            df['sex_extended'] = df['sex'].astype('object')
+            df['sex_bin'] = df['sex'].map({'Female': 0, 'Male': 1})
+
         return df
-    
-    def standardize_target(
-        self, 
-        df: pd.DataFrame, 
-        dataset_name: str
-    ) -> pd.DataFrame:
-        """
-        Standardize target variable to 'heart_disease' (binary: 0/1).
-        Drops the original target column to prevent data leakage.
-        
-        Args:
-            df: DataFrame with dataset-specific target
-            dataset_name: Dataset identifier
-            
-        Returns:
-            DataFrame with 'heart_disease' column (original target dropped)
-        """
-        df = df.copy()
-        target_col = self.get_target_column(dataset_name)
-        
-        if target_col not in df.columns:
-            raise ValueError(f"Target column '{target_col}' not found in {dataset_name}")
-        
-        # Binary mapping (assume 0=no disease, 1=disease)
-        df['heart_disease'] = df[target_col].astype(int)
-        
-        # Drop original target column to prevent data leakage
-        df = df.drop(columns=[target_col])
-        
+
+    def _apply_target_standardization(self, df: pd.DataFrame, dataset_name: str) -> pd.DataFrame:
+        cfg = self.datasets.get(dataset_name, {})
+        tgt_col = cfg.get('target')
+        mapping = cfg.get('target_mapping')
+        if tgt_col and tgt_col in df.columns:
+            if mapping:
+                mapped = df[tgt_col].astype(str).map(mapping)
+                df['heart_disease'] = mapped.map({'no_disease': 0, 'disease': 1})
+            else:
+                df['heart_disease'] = pd.to_numeric(df[tgt_col], errors='coerce')
         return df
 
 
 def get_dataset_summary(df: pd.DataFrame, dataset_name: str) -> Dict:
-    """
-    Generate summary statistics for a dataset.
-    
-    Args:
-        df: DataFrame to summarize
-        dataset_name: Name for identification
-        
-    Returns:
-        Dictionary with summary statistics
-    """
-    summary = {
-        'dataset': dataset_name,
-        'n_rows': len(df),
-        'n_cols': len(df.columns),
+    """Basic summary used by loading script."""
+    return {
+        'dataset_name': dataset_name,
+        'n_samples': int(len(df)),
+        'n_features': int(len(df.columns)),
         'columns': list(df.columns),
-        'missing_values': df.isnull().sum().to_dict(),
-        'dtypes': df.dtypes.astype(str).to_dict()
+        'missing_total': int(df.isnull().sum().sum())
     }
-    
-    return summary
+
+
+def load_standardized_raw(dataset: str, root: str) -> pd.DataFrame:
+    """
+    Load standardized raw cardiac dataset and harmonize schema.
+    Expected location: {root}/data/raw/cardiac/{dataset}_standardized.csv
+    """
+    path = os.path.join(root, "data", "raw", "cardiac", f"{dataset}_standardized.csv")
+    df = pd.read_csv(path)
+    return harmonize_cardiac_schema(df, dataset)
+
+
+def load_processed_splits(dataset: str, root: str, scaled: bool = True) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Load processed train/test splits for a cardiac dataset.
+    scaled=True loads *_train_scaled.csv and *_test_scaled.csv; otherwise loads *_train.csv and *_test.csv
+    Paths (legacy): {root}/data/processed/cardiac/{dataset}_train[_scaled].csv
+           {root}/data/processed/cardiac/{dataset}_test[_scaled].csv
+    Use load_processed_dataset for binning-aware paths.
+    """
+    suffix = "_scaled" if scaled else ""
+    droot = os.path.join(root, "data", "processed", "cardiac")
+    train_path = os.path.join(droot, f"{dataset}_train{suffix}.csv")
+    test_path = os.path.join(droot, f"{dataset}_test{suffix}.csv")
+    X_train = pd.read_csv(train_path)
+    X_test = pd.read_csv(test_path)
+    return X_train, X_test
+
+
+def load_processed_dataset(
+    dataset: str,
+    root: str,
+    area: str = "cardiac",
+    binning: Optional[str] = None,
+    scaled: bool = True,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Load processed splits, supporting per-binning subdirectories.
+
+    Paths: {root}/data/processed/{area}/{dataset}_{binning}/{dataset}_train[_scaled].csv
+           (if binning is None, uses {dataset}/…)
+    """
+    suffix = "_scaled" if scaled else ""
+    base = Path(root) / "data" / "processed" / area
+    subdir = f"{dataset}_{binning}" if binning else dataset
+    data_dir = base / subdir
+    train_path = data_dir / f"{dataset}_train{suffix}.csv"
+    test_path = data_dir / f"{dataset}_test{suffix}.csv"
+    if not train_path.exists() or not test_path.exists():
+        raise FileNotFoundError(f"Processed split not found under {data_dir} (looked for {train_path.name} & {test_path.name})")
+    return pd.read_csv(train_path), pd.read_csv(test_path)

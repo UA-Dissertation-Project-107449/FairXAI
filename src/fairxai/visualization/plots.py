@@ -460,3 +460,122 @@ def plot_fairness_evolution(pre_profiles: Dict[str, Dict[str, Any]],
     
     plt.tight_layout()
     return fig
+
+
+def plot_distribution(data: pd.Series, title: str = "Distribution", bins: int = 30, **kwargs):
+    """
+    Plot distribution of a single variable.
+    
+    Args:
+        data: Series to plot
+        title: Plot title
+        bins: Number of bins for histogram
+        **kwargs: Additional arguments for matplotlib
+    
+    Returns:
+        matplotlib Figure object
+    """
+    fig, ax = plt.subplots(figsize=kwargs.get('figsize', (10, 6)))
+    
+    ax.hist(data.dropna(), bins=bins, color='steelblue', alpha=0.7, edgecolor='black')
+    ax.set_title(title, fontsize=12, fontweight='bold')
+    ax.set_xlabel(data.name or 'Value', fontsize=10)
+    ax.set_ylabel('Frequency', fontsize=10)
+    ax.grid(axis='y', alpha=0.3)
+    
+    plt.tight_layout()
+    return fig
+
+
+def plot_correlation_matrix(df: pd.DataFrame, title: str = "Correlation Matrix", **kwargs):
+    """
+    Plot correlation matrix heatmap.
+    
+    Args:
+        df: DataFrame with numeric columns
+        title: Plot title
+        **kwargs: Additional arguments for seaborn heatmap
+    
+    Returns:
+        matplotlib Figure object
+    """
+    fig, ax = plt.subplots(figsize=kwargs.get('figsize', (12, 10)))
+    
+    # Compute correlation matrix
+    corr = df.corr()
+    
+    # Create heatmap
+    sns.heatmap(
+        corr,
+        annot=kwargs.get('annot', True),
+        fmt=kwargs.get('fmt', '.2f'),
+        cmap=kwargs.get('cmap', 'coolwarm'),
+        center=0,
+        square=True,
+        ax=ax,
+        cbar_kws={'shrink': 0.8}
+    )
+    
+    ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
+    plt.tight_layout()
+    return fig
+
+
+def plot_model_performance(y_true, y_pred, y_proba=None, model_name: str = "Model"):
+    """
+    Plot model performance metrics including confusion matrix and ROC curve.
+    
+    Args:
+        y_true: True labels
+        y_pred: Predicted labels
+        y_proba: Predicted probabilities (optional, for ROC curve)
+        model_name: Name of the model for title
+    
+    Returns:
+        matplotlib Figure object
+    """
+    from sklearn.metrics import confusion_matrix, roc_curve, auc
+    
+    # Create figure with subplots
+    if y_proba is not None:
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    else:
+        fig, axes = plt.subplots(1, 1, figsize=(7, 5))
+        axes = [axes]
+    
+    # Confusion Matrix
+    cm = confusion_matrix(y_true, y_pred)
+    sns.heatmap(
+        cm,
+        annot=True,
+        fmt='d',
+        cmap='Blues',
+        ax=axes[0],
+        cbar_kws={'label': 'Count'}
+    )
+    axes[0].set_title(f'{model_name}: Confusion Matrix', fontsize=12, fontweight='bold')
+    axes[0].set_xlabel('Predicted Label', fontsize=10)
+    axes[0].set_ylabel('True Label', fontsize=10)
+    axes[0].set_xticklabels(['No Disease', 'Disease'])
+    axes[0].set_yticklabels(['No Disease', 'Disease'])
+    
+    # ROC Curve (if probabilities provided)
+    if y_proba is not None:
+        fpr, tpr, _ = roc_curve(y_true, y_proba)
+        roc_auc = auc(fpr, tpr)
+        
+        axes[1].plot(fpr, tpr, color='darkorange', lw=2, 
+                    label=f'ROC curve (AUC = {roc_auc:.3f})')
+        axes[1].plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', 
+                    label='Random Classifier')
+        axes[1].set_xlim([0.0, 1.0])
+        axes[1].set_ylim([0.0, 1.05])
+        axes[1].set_xlabel('False Positive Rate', fontsize=10)
+        axes[1].set_ylabel('True Positive Rate', fontsize=10)
+        axes[1].set_title(f'{model_name}: ROC Curve', fontsize=12, fontweight='bold')
+        axes[1].legend(loc='lower right')
+        axes[1].grid(alpha=0.3)
+    
+    plt.tight_layout()
+    return fig
+

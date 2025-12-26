@@ -3,18 +3,26 @@
 import pandas as pd
 from typing import Dict, List
 
+from .schemas import available_sensitive, preferred_sensitive
+
 
 class DataProfiler:
     """Profile datasets for fairness assessment before modeling."""
     
-    def __init__(self, sensitive_attrs: List[str] = ['age_group', 'sex']):
+    def __init__(self, sensitive_attrs: List[str] = None):
         """
         Initialize profiler.
         
         Args:
             sensitive_attrs: List of sensitive attribute column names
         """
-        self.sensitive_attrs = sensitive_attrs
+        self.sensitive_attrs = preferred_sensitive(sensitive_attrs)
+
+    @staticmethod
+    def _stringify(obj) -> Dict:
+        """Return a dict with stringified keys for JSON safety."""
+        items = obj.items() if isinstance(obj, dict) else obj.to_dict().items()
+        return {str(k): v for k, v in items}
         
     def profile_dataset(
         self, 
@@ -63,8 +71,8 @@ class DataProfiler:
             if attr in df.columns:
                 counts = df[attr].value_counts()
                 distributions[attr] = {
-                    'counts': counts.to_dict(),
-                    'proportions': (counts / len(df)).to_dict()
+                    'counts': self._stringify(counts),
+                    'proportions': self._stringify(counts / len(df))
                 }
         
         return distributions
@@ -76,8 +84,8 @@ class DataProfiler:
         
         counts = df[target].value_counts()
         return {
-            'counts': counts.to_dict(),
-            'proportions': (counts / len(df)).to_dict(),
+            'counts': self._stringify(counts),
+            'proportions': self._stringify(counts / len(df)),
             'imbalance_ratio': float(counts.max() / counts.min()) if len(counts) > 1 else 1.0
         }
     
@@ -125,7 +133,8 @@ class DataProfiler:
                 'coefficient_of_variation': float(std_count / mean_count) if mean_count > 0 else None,
                 'min_group_size': int(counts.min()),
                 'max_group_size': int(counts.max()),
-                'size_ratio': float(counts.max() / counts.min()) if counts.min() > 0 else None
+                'size_ratio': float(counts.max() / counts.min()) if counts.min() > 0 else None,
+                'counts': self._stringify(counts)
             }
         
         return balance
@@ -146,10 +155,10 @@ class DataProfiler:
                 continue
             
             # Calculate positive rate for each group
-            group_rates = df.groupby(attr)[target].mean()
+            group_rates = df.groupby(attr, observed=True)[target].mean()
             
             imbalances[attr] = {
-                'positive_rates': group_rates.to_dict(),
+                'positive_rates': self._stringify(group_rates),
                 'statistical_parity_difference': {
                     'max_difference': float(group_rates.max() - group_rates.min()),
                     'max_ratio': float(group_rates.max() / group_rates.min()) if group_rates.min() > 0 else None
@@ -178,7 +187,7 @@ class DataProfiler:
             for col in df.columns:
                 if df[col].isnull().sum() > 0:
                     missing_by_group = df.groupby(attr)[col].apply(lambda x: x.isnull().sum())
-                    group_missing[col] = missing_by_group.to_dict()
+                    group_missing[col] = self._stringify(missing_by_group)
             
             if group_missing:
                 analysis['missing_by_group'][attr] = group_missing
