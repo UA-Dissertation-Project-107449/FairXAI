@@ -9,13 +9,18 @@ data/external/
 models/
 !models/README.md
 
-# Logs
-logs/
+# Experiment/result artifacts
+results/
+experiments/latest_run/
+experiments/archived_runs/
+experiments/**/manifests/
+experiments/**/reports/
+experiments/**/plots/
 
-# TODO see if we want to keep any of experiments/
-
-# Notebook outputs
+# Local analysis outputs
+notebooks/**/.ipynb_checkpoints/
 notebooks/runs/
+logs/
 
 # ===================================================================
 

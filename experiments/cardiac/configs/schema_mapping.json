@@ -77,64 +77,11 @@
         "Oldpeak": "st_depression",
         "ST_Slope": "st_slope"
       }
-    },
-    "healthcare_general": {
-      "filename": "healthcare_dataset.csv",
-      "source": "Kaggle - General Healthcare",
-      "note": "Not cardiac-specific, may be excluded from cardiac pipeline",
-      "target": "Medical Condition",
-      "sensitive_attributes": {
-        "Age": {
-          "type": "continuous",
-          "bins": [0, 40, 50, 60, 70, 100],
-          "labels": ["<40", "40-49", "50-59", "60-69", "70+"]
-        },
-        "Gender": {
-          "type": "categorical",
-          "mapping": {
-            "Male": "Male",
-            "Female": "Female"
-          }
-        }
-      },
-      "clinical_features": [
-        "Blood Type", "Date of Admission", "Doctor", "Hospital",
-        "Insurance Provider", "Billing Amount", "Room Number",
-        "Admission Type", "Discharge Date", "Medication", "Test Results"
-      ]
-    },
-    "dirty_synthetic": {
-      "filename": "dirty_v3_path.csv",
-      "source": "Synthetic/Dirty Dataset",
-      "note": "Contains noise columns and may need significant cleaning",
-      "target": "Medical Condition",
-      "target_values_to_filter": ["Diabetes", "Healthy"],
-      "sensitive_attributes": {
-        "Age": {
-          "type": "continuous",
-          "bins": [0, 40, 50, 60, 70, 100],
-          "labels": ["<40", "40-49", "50-59", "60-69", "70+"]
-        },
-        "Gender": {
-          "type": "categorical",
-          "mapping": {
-            "Male": "Male",
-            "Female": "Female"
-          }
-        }
-      },
-      "clinical_features": [
-        "Glucose", "Blood Pressure", "BMI", "Oxygen Saturation",
-        "LengthOfStay", "Cholesterol", "Triglycerides", "HbA1c",
-        "Smoking", "Alcohol", "Physical Activity", "Diet Score",
-        "Family History", "Stress Level", "Sleep Hours"
-      ],
-      "noise_columns": ["random_notes", "noise_col"]
     }
   },
   "unified_schema": {
     "target": "heart_disease",
-    "sensitive_attributes": ["age_group", "sex"],
+    "sensitive_attributes": ["age_group", "sex", "ethnicity", "group_cluster"],
     "clinical_features_standardized": {
       "chest_pain_type": ["cp", "ChestPainType"],
       "resting_blood_pressure": ["trestbps", "RestingBP", "Blood Pressure"],
