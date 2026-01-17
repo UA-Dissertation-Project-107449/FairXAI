@@ -293,12 +293,6 @@ def main():
     results_dir = project_root / pipeline_cfg['paths']['results_fairness_dir']
     log_dir = project_root / 'logs/cardiac'
     
-    # Paths
-    project_root = Path(__file__).parent.parent.parent
-    predictions_dir = project_root / 'experiments/cardiac/baseline'
-    results_dir = project_root / 'results/cardiac/fairness'
-    log_dir = project_root / 'logs/cardiac'
-    
     # Setup
     setup_logging(log_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -309,10 +303,10 @@ def main():
     )
     
     # Find all prediction files
-    train_files = sorted(predictions_dir.glob('*_train_predictions.csv'))
+    train_files = sorted(experiments_dir.glob('*_train_predictions.csv'))
     
     if not train_files:
-        logging.error(f"No prediction files found in {predictions_dir}")
+        logging.error(f"No prediction files found in {experiments_dir}")
         logging.error("Please run baseline training first (Phase 3)")
         return
     
@@ -323,7 +317,7 @@ def main():
     
     for train_file in train_files:
         dataset_name = train_file.stem.replace('_train_predictions', '')
-        test_file = predictions_dir / f'{dataset_name}_test_predictions.csv'
+        test_file = experiments_dir / f'{dataset_name}_test_predictions.csv'
         
         if not test_file.exists():
             logging.warning(f"Test file not found for {dataset_name}, skipping")

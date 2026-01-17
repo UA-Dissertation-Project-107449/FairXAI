@@ -20,6 +20,8 @@ Usage:
 import sys
 import logging
 import argparse
+import os
+import shutil
 from pathlib import Path
 from datetime import datetime
 import json
@@ -54,7 +56,26 @@ def setup_logging(log_dir: Path, timestamp: str):
     logging.info("="*80)
 
 
-def load_dataset(dataset_name: str, data_dir: Path):
+def archive_latest_run(base_dir: Path, enabled: bool, logger: logging.Logger):
+    if not enabled:
+        return
+    latest_dir = base_dir / 'latest_run'
+    archives_dir = base_dir / 'archived_runs'
+    archives_dir.mkdir(parents=True, exist_ok=True)
+
+    has_files = latest_dir.exists() and any(p.is_file() for p in latest_dir.rglob('*'))
+    if not has_files:
+        return
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    archive_path = archives_dir / f'run_{timestamp}'
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    archive_path.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(latest_dir, archive_path / 'latest_run', dirs_exist_ok=True)
+    logger.info(f"Archived previous latest_run to: {archive_path}")
+
+
+def load_dataset(dataset_name: str, data_dir: Path, schema_cfg: dict):
     """
     Load train/test splits for a dataset.
     
@@ -88,11 +109,20 @@ def load_dataset(dataset_name: str, data_dir: Path):
     
     # Separate features, target, and sensitive attributes
     # Exclude target, sensitive attrs, metadata, and original categorical columns
+    dataset_cfg = schema_cfg.get('datasets', {}).get(dataset_name, {})
+    unified_cfg = schema_cfg.get('unified_schema', {})
+    schema_exclude = list(dataset_cfg.get('exclude_features') or [])
+    schema_exclude += list(unified_cfg.get('exclude_features') or [])
+    label_col = dataset_cfg.get('label') or dataset_cfg.get('target')
+    if label_col:
+        schema_exclude.append(label_col)
+
     exclude = [
         'heart_disease', 'age_group', 'sex', 'sex_extended', 'sex_bin',
         'Sex', 'ChestPainType', 'RestingECG', 'ExerciseAngina', 'ST_Slope',
         '_dataset_source', '_dataset_file', 'age_raw', 'HeartDisease'
     ]
+    exclude.extend(schema_exclude)
     # Only exclude columns that actually exist
     exclude = [col for col in exclude if col in train_df.columns]
     
@@ -263,6 +293,7 @@ def create_comparison_table(all_results):
         # Extract key fairness metrics
         fairness = result.get('fairness', {})
         demographic_parity = fairness.get('demographic_parity', {})
+        equalized_odds = fairness.get('equalized_odds', {})
         
         row = {
             'dataset': result['dataset'],
@@ -276,14 +307,45 @@ def create_comparison_table(all_results):
         }
         
         # Add fairness metrics if available
+        dp_diffs = []
         if demographic_parity:
             for attr, dp_metrics in demographic_parity.items():
                 if isinstance(dp_metrics, dict) and 'max_difference' in dp_metrics:
-                    row[f'dp_{attr}'] = dp_metrics['max_difference']
+                    diff = dp_metrics['max_difference']
+                    row[f'dp_{attr}_max_diff'] = diff
+                    if pd.notna(diff):
+                        dp_diffs.append(diff)
+
+        eo_diffs = []
+        if equalized_odds:
+            for attr, eo_metrics in equalized_odds.items():
+                if isinstance(eo_metrics, dict):
+                    tpr_diff = eo_metrics.get('tpr_difference', np.nan)
+                    fpr_diff = eo_metrics.get('fpr_difference', np.nan)
+                    row[f'eq_odds_{attr}_tpr_diff'] = tpr_diff
+                    row[f'eq_odds_{attr}_fpr_diff'] = fpr_diff
+                    if pd.notna(tpr_diff):
+                        eo_diffs.append(tpr_diff)
+                    if pd.notna(fpr_diff):
+                        eo_diffs.append(fpr_diff)
+
+        if dp_diffs:
+            row['dp_max_diff'] = float(np.nanmax(dp_diffs))
+        if eo_diffs:
+            row['eq_odds_max_diff'] = float(np.nanmax(eo_diffs))
         
         comparison_data.append(row)
     
-    return pd.DataFrame(comparison_data)
+    df = pd.DataFrame(comparison_data)
+
+    # Compute fairness gain vs baseline per dataset
+    baseline_rows = df[df['technique'] == 'baseline'].set_index('dataset')
+    df['fairness_gap'] = df[['dp_max_diff', 'eq_odds_max_diff']].max(axis=1, skipna=True)
+    df['baseline_fairness_gap'] = df['dataset'].map(baseline_rows['fairness_gap'])
+    df['fairness_gain'] = df['baseline_fairness_gap'] - df['fairness_gap']
+    df['fairness_gain_pct'] = df['fairness_gain'] / df['baseline_fairness_gap']
+
+    return df
 
 
 def main():
@@ -294,7 +356,13 @@ def main():
     parser.add_argument('--datasets', type=str, nargs='+',
                        help='Datasets to process (default: from config)')
     parser.add_argument('--output-dir', type=str,
-                       help='Output directory (default: results/experiments/mitigation)')
+                       help='Output directory (default: results/cardiac/experiments/latest_run/mitigation)')
+    parser.add_argument('--run-mode', type=str, choices=['full', 'partial'],
+                       default=os.getenv('EXPERIMENT_RUN_MODE', 'partial'),
+                       help='Run mode (full or partial)')
+    parser.add_argument('--archive-previous', action='store_true',
+                       default=os.getenv('ARCHIVE_PREVIOUS', 'true').lower() == 'true',
+                       help='Archive previous latest_run (full runs only)')
     args = parser.parse_args()
     
     # Paths
@@ -308,6 +376,10 @@ def main():
         return
     
     experiment_cfg = load_yaml_config(str(config_path))
+    pipeline_cfg = load_yaml_config(str(project_root / 'configs/pipelines/cardiac.yaml'))
+    schema_path = project_root / pipeline_cfg['runtime']['schema_mapping_json']
+    with open(schema_path, 'r') as f:
+        schema_cfg = json.load(f)
     
     # Validate config
     REQUIRED_KEYS = ['data', 'mitigation_strategies']
@@ -320,20 +392,30 @@ def main():
     datasets = args.datasets if args.datasets else experiment_cfg['data']['datasets']
     
     # Determine output directory
+    base_results = project_root / 'results/cardiac/experiments/full'
+    latest_dir = base_results / 'latest_run'
     if args.output_dir:
         output_dir = Path(args.output_dir)
     else:
-        output_dir = project_root / 'results/experiments/mitigation'
+        if args.run_mode == 'partial':
+            output_dir = project_root / 'results/cardiac/experiments/partial' / 'mitigation' / timestamp
+        else:
+            output_dir = latest_dir / 'mitigation'
     
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Setup logging
     log_dir = project_root / 'logs/experiments'
     setup_logging(log_dir, timestamp)
+    logger = logging.getLogger(__name__)
+
+    if args.run_mode == 'full':
+        archive_latest_run(base_results, enabled=args.archive_previous, logger=logger)
     
     logging.info(f"Configuration:")
     logging.info(f"  Datasets: {datasets}")
     logging.info(f"  Output: {output_dir}")
+    logging.info(f"  Run mode: {args.run_mode}")
     logging.info(f"  Timestamp: {timestamp}")
     
     # Data directory
@@ -367,8 +449,9 @@ def main():
         
         try:
             # Load data
-            X_train, y_train, sensitive_train, X_test, y_test, sensitive_test = \
-                load_dataset(dataset_name, data_dir)
+            X_train, y_train, sensitive_train, X_test, y_test, sensitive_test = load_dataset(
+                dataset_name, data_dir, schema_cfg
+            )
             
             # Train baseline
             baseline = train_baseline(

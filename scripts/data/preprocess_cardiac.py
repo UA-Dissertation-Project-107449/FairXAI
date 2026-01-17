@@ -40,6 +40,40 @@ def _stringify(obj):
     return obj
 
 
+def _load_schema_config(path: Path) -> dict:
+    with open(path, 'r') as f:
+        return json.load(f)
+
+
+def _apply_schema_rules(df: pd.DataFrame, schema_cfg: dict, dataset_name: str) -> pd.DataFrame:
+    cfg = schema_cfg.get('datasets', {}).get(dataset_name, {})
+    unified = schema_cfg.get('unified_schema', {})
+
+    include = cfg.get('include_features') or []
+    exclude = cfg.get('exclude_features') or []
+    unified_exclude = unified.get('exclude_features') or []
+    label_col = cfg.get('label') or cfg.get('target')
+
+    required_cols = set([
+        'heart_disease', 'age_raw', 'age_group', 'sex', 'sex_extended', 'sex_bin',
+        'ethnicity', 'group_cluster', '_dataset_source', '_dataset_file'
+    ])
+
+    if include:
+        keep_cols = set(include) | required_cols
+        df = df[[col for col in df.columns if col in keep_cols]].copy()
+
+    drop_cols = set(exclude) | set(unified_exclude)
+    if label_col and label_col != 'heart_disease':
+        drop_cols.add(label_col)
+
+    drop_cols = [col for col in drop_cols if col in df.columns]
+    if drop_cols:
+        df = df.drop(columns=drop_cols)
+
+    return df
+
+
 def setup_logging(log_dir: Path):
     """Configure logging to file and console."""
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -82,10 +116,11 @@ def main():
     data_raw_cardiac = project_root / pipeline_cfg['paths']['raw_dir']
     data_processed_cardiac_base = project_root / pipeline_cfg['paths']['processed_dir']
     log_dir = project_root / 'logs/cardiac'
-    results_fairness = project_root / 'results/cardiac/fairness'
+    results_fairness = project_root / 'results/cardiac/profiling/fairness'
     
     # Setup
     setup_logging(log_dir)
+    results_fairness.mkdir(parents=True, exist_ok=True)
     
     # Configuration
     test_size = 0.3  # 70/30 split
@@ -109,6 +144,8 @@ def main():
     sensitive_attrs = preferred_sensitive(
         pipeline_cfg.get('fairness', {}).get('sensitive_attributes')
     )
+
+    schema_cfg = _load_schema_config(project_root / pipeline_cfg['runtime']['schema_mapping_json'])
 
     # Initialize preprocessor and profiler
     preprocessor = CardiacPreprocessor(sensitive_attrs=sensitive_attrs)
@@ -147,6 +184,7 @@ def main():
             
             # Load dataset
             df = pd.read_csv(filepath)
+            df = _apply_schema_rules(df, schema_cfg, dataset_name)
             logging.info(f"Loaded: {len(df)} samples, {len(df.columns)} features")
             
             # Apply age binning if specified

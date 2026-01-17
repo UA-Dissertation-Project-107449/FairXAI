@@ -50,12 +50,11 @@ def main():
     project_root = Path(__file__).parent.parent.parent
     data_raw_cardiac = project_root / 'data/raw/cardiac'
     log_dir = project_root / 'logs/cardiac'
-    results_profiling = project_root / 'results/cardiac/data_profiling'
-    results_fairness = project_root / 'results/cardiac/fairness'
+    results_profiling = project_root / 'results/cardiac/profiling'
     
     # Setup
     setup_logging(log_dir)
-    results_fairness.mkdir(parents=True, exist_ok=True)
+    results_profiling.mkdir(parents=True, exist_ok=True)
     
     # Initialize profiler
     profiler = DataProfiler(sensitive_attrs=['age_group', 'sex'])
@@ -127,7 +126,7 @@ def main():
             logging.info(f"  ✓ No missing values")
         
         # Save individual profile
-        profile_file = results_fairness / f'{dataset_name}_data_profile.json'
+        profile_file = results_profiling / f'{dataset_name}_data_profile.json'
         with open(profile_file, 'w') as f:
             # Convert numpy types to native Python for JSON serialization
             json.dump(profile, f, indent=2, default=str)
@@ -149,7 +148,7 @@ def main():
         logging.info(f"  {name}: {prev:.2%}")
     
     # Save comparison
-    comparison_file = results_fairness / 'dataset_comparison.json'
+    comparison_file = results_profiling / 'dataset_comparison.json'
     with open(comparison_file, 'w') as f:
         json.dump(comparison, f, indent=2)
     logging.info(f"\n✓ Comparison saved to: {comparison_file}")
@@ -187,7 +186,7 @@ def main():
     logging.info(f"\n{'='*60}")
     logging.info("DATA PROFILING COMPLETE")
     logging.info(f"{'='*60}")
-    logging.info(f"Profiles saved to: {results_fairness}")
+    logging.info(f"Profiles saved to: {results_profiling}")
     
 
 if __name__ == "__main__":

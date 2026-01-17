@@ -4,14 +4,14 @@ paths:
   external_dir: data/external
   raw_dir: data/raw/cardiac
   processed_dir: data/processed/cardiac
-  experiments_dir: experiments/cardiac/baseline
-  models_dir: models/cardiac
-  results_fairness_dir: results/cardiac/fairness
-  results_binning_dir: results/experiments/binning
+  experiments_dir: results/cardiac/baseline/latest_run/results
+  models_dir: results/cardiac/baseline/latest_run/models
+  results_fairness_dir: results/cardiac/baseline/latest_run/fairness
+  results_binning_dir: results/cardiac/experiments/full/latest_run/binning
 
 runtime:
   datasets: [cleveland, kaggle_heart]
-  schema_mapping_json: experiments/cardiac/configs/schema_mapping.json
+  schema_mapping_json: configs/schema/cardiac.json
 
 split:
   test_size: 0.3

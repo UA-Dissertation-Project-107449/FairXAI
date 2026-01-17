@@ -314,7 +314,7 @@ def generate_summary_report(
 def main():
     """Main execution for standalone script."""
     root = Path(__file__).parent.parent.parent
-    results_dir = root / 'results/experiments/binning'
+    results_dir = root / 'results/cardiac/experiments/binning'
     logs_dir = root / 'logs/cardiac'
 
     setup_logging(logs_dir)

@@ -3,11 +3,14 @@
     "cleveland": {
       "filename": "heart_cleveland_upload.csv",
       "source": "UCI Machine Learning Repository",
+      "label": "condition",
       "target": "condition",
       "target_mapping": {
         "0": "no_disease",
         "1": "disease"
       },
+      "include_features": [],
+      "exclude_features": ["condition"],
       "sensitive_attributes": {
         "age": {
           "type": "continuous",
@@ -23,7 +26,7 @@
         }
       },
       "clinical_features": [
-        "cp", "trestbps", "chol", "fbs", "restecg", 
+        "cp", "trestbps", "chol", "fbs", "restecg",
         "thalach", "exang", "oldpeak", "slope", "ca", "thal"
       ],
       "feature_descriptions": {
@@ -43,11 +46,14 @@
     "kaggle_heart": {
       "filename": "heart.csv",
       "source": "Kaggle",
+      "label": "HeartDisease",
       "target": "HeartDisease",
       "target_mapping": {
         "0": "no_disease",
         "1": "disease"
       },
+      "include_features": [],
+      "exclude_features": ["HeartDisease"],
       "sensitive_attributes": {
         "Age": {
           "type": "continuous",
@@ -82,6 +88,7 @@
   "unified_schema": {
     "target": "heart_disease",
     "sensitive_attributes": ["age_group", "sex", "ethnicity", "group_cluster"],
+    "exclude_features": ["_dataset_source", "_dataset_file"],
     "clinical_features_standardized": {
       "chest_pain_type": ["cp", "ChestPainType"],
       "resting_blood_pressure": ["trestbps", "RestingBP", "Blood Pressure"],

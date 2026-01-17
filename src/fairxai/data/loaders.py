@@ -41,6 +41,7 @@ class CardiacDataLoader:
         df = harmonize_cardiac_schema(df, dataset_name)
         df = self._apply_sensitive_standardization(df, dataset_name)
         df = self._apply_target_standardization(df, dataset_name)
+        df = self._apply_feature_rules(df, dataset_name)
         return df
 
     def load_all_cardiac_datasets(self, data_dir: str) -> Dict[str, pd.DataFrame]:
@@ -82,7 +83,7 @@ class CardiacDataLoader:
 
     def _apply_target_standardization(self, df: pd.DataFrame, dataset_name: str) -> pd.DataFrame:
         cfg = self.datasets.get(dataset_name, {})
-        tgt_col = cfg.get('target')
+        tgt_col = cfg.get('label') or cfg.get('target')
         mapping = cfg.get('target_mapping')
         if tgt_col and tgt_col in df.columns:
             if mapping:
@@ -90,6 +91,35 @@ class CardiacDataLoader:
                 df['heart_disease'] = mapped.map({'no_disease': 0, 'disease': 1})
             else:
                 df['heart_disease'] = pd.to_numeric(df[tgt_col], errors='coerce')
+        return df
+
+    def _apply_feature_rules(self, df: pd.DataFrame, dataset_name: str) -> pd.DataFrame:
+        cfg = self.datasets.get(dataset_name, {})
+        unified = self.config.get('unified_schema', {})
+
+        include = cfg.get('include_features') or []
+        exclude = cfg.get('exclude_features') or []
+        unified_exclude = unified.get('exclude_features') or []
+        label_col = cfg.get('label') or cfg.get('target')
+
+        required_cols = set(
+            ['heart_disease', 'age_raw', 'age_group', 'sex', 'sex_extended', 'sex_bin',
+             'ethnicity', 'group_cluster', '_dataset_source', '_dataset_file']
+        )
+
+        if include:
+            keep_cols = set(include) | required_cols
+            keep_cols = [col for col in df.columns if col in keep_cols]
+            df = df[keep_cols].copy()
+
+        drop_cols = set(exclude) | set(unified_exclude)
+        if label_col and label_col != 'heart_disease':
+            drop_cols.add(label_col)
+
+        drop_cols = [col for col in drop_cols if col in df.columns]
+        if drop_cols:
+            df = df.drop(columns=drop_cols)
+
         return df
 
 

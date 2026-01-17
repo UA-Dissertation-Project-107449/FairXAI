@@ -92,13 +92,26 @@ class PreProcessingMitigation:
         logger.info(f"Applying SMOTE (k={k_neighbors})")
         logger.info(f"  Before: {len(X_train)} samples, class dist: {y_train.value_counts().to_dict()}")
         
+        counts = y_train.value_counts()
+        min_count = int(counts.min()) if not counts.empty else 0
+
+        if min_count < 2:
+            logger.warning("SMOTE skipped: minority class has < 2 samples")
+            return X_train.copy(), y_train.copy()
+
+        k_neighbors = min(k_neighbors, max(min_count - 1, 1))
+
         sampler = SMOTE(
             sampling_strategy='auto',
             k_neighbors=k_neighbors,
             random_state=random_state
         )
-        
-        X_resampled, y_resampled = sampler.fit_resample(X_train, y_train)
+
+        try:
+            X_resampled, y_resampled = sampler.fit_resample(X_train, y_train)
+        except ValueError as e:
+            logger.warning(f"SMOTE failed ({e}); falling back to no resampling")
+            return X_train.copy(), y_train.copy()
         
         logger.info(f"  After: {len(X_resampled)} samples, class dist: {pd.Series(y_resampled).value_counts().to_dict()}")
         
@@ -190,13 +203,26 @@ class PreProcessingMitigation:
         logger.info(f"Applying ADASYN (n_neighbors={n_neighbors})")
         logger.info(f"  Before: {len(X_train)} samples")
         
+        counts = y_train.value_counts()
+        min_count = int(counts.min()) if not counts.empty else 0
+
+        if min_count < 2:
+            logger.warning("ADASYN skipped: minority class has < 2 samples")
+            return X_train.copy(), y_train.copy()
+
+        n_neighbors = min(n_neighbors, max(min_count - 1, 1))
+
         sampler = ADASYN(
             sampling_strategy='auto',
             n_neighbors=n_neighbors,
             random_state=random_state
         )
-        
-        X_resampled, y_resampled = sampler.fit_resample(X_train, y_train)
+
+        try:
+            X_resampled, y_resampled = sampler.fit_resample(X_train, y_train)
+        except ValueError as e:
+            logger.warning(f"ADASYN failed ({e}); falling back to no resampling")
+            return X_train.copy(), y_train.copy()
         
         logger.info(f"  After: {len(X_resampled)} samples")
         

@@ -19,6 +19,8 @@ Usage:
 import sys
 import logging
 import argparse
+import os
+import shutil
 from pathlib import Path
 from datetime import datetime
 import json
@@ -53,6 +55,26 @@ def setup_logging(log_dir: Path, timestamp: str):
     logging.info("="*80)
     logging.info("AGE BINNING STRATEGIES ANALYSIS EXPERIMENT")
     logging.info("="*80)
+
+
+def archive_latest_run(base_dir: Path, enabled: bool, logger: logging.Logger):
+    if not enabled:
+        return
+    latest_dir = base_dir / 'latest_run'
+    archives_dir = base_dir / 'archived_runs'
+    archives_dir.mkdir(parents=True, exist_ok=True)
+
+    has_files = latest_dir.exists() and any(p.is_file() for p in latest_dir.rglob('*'))
+    if not has_files:
+        return
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    archive_path = archives_dir / f'run_{timestamp}'
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    archive_path.mkdir(parents=True, exist_ok=True)
+    # copytree into archive/run_.../latest_run
+    shutil.copytree(latest_dir, archive_path / 'latest_run', dirs_exist_ok=True)
+    logger.info(f"Archived previous latest_run to: {archive_path}")
 
 
 def load_dataset_for_binning(dataset_name: str, data_dir: Path):
@@ -136,7 +158,13 @@ def main():
     parser.add_argument('--strategies', type=str, nargs='+',
                        help='Strategies to test (default: from config)')
     parser.add_argument('--output-dir', type=str,
-                       help='Output directory (default: results/experiments/age_binning)')
+                       help='Output directory (default: results/cardiac/experiments/latest_run/age_binning)')
+    parser.add_argument('--run-mode', type=str, choices=['full', 'partial'],
+                       default=os.getenv('EXPERIMENT_RUN_MODE', 'partial'),
+                       help='Run mode (full or partial)')
+    parser.add_argument('--archive-previous', action='store_true',
+                       default=os.getenv('ARCHIVE_PREVIOUS', 'true').lower() == 'true',
+                       help='Archive previous latest_run (full runs only)')
     args = parser.parse_args()
     
     # Paths
@@ -167,21 +195,31 @@ def main():
         strategies = list(experiment_cfg['binning_strategies'].keys())
     
     # Determine output directory
+    base_results = project_root / 'results/cardiac/experiments/full'
+    latest_dir = base_results / 'latest_run'
     if args.output_dir:
         output_dir = Path(args.output_dir)
     else:
-        output_dir = project_root / 'results/experiments/age_binning'
+        if args.run_mode == 'partial':
+            output_dir = project_root / 'results/cardiac/experiments/partial' / 'age_binning' / timestamp
+        else:
+            output_dir = latest_dir / 'age_binning'
     
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Setup logging
     log_dir = project_root / 'logs/experiments'
     setup_logging(log_dir, timestamp)
+    logger = logging.getLogger(__name__)
+
+    if args.run_mode == 'full':
+        archive_latest_run(base_results, enabled=args.archive_previous, logger=logger)
     
     logging.info(f"Configuration:")
     logging.info(f"  Datasets: {datasets}")
     logging.info(f"  Strategies: {strategies}")
     logging.info(f"  Output: {output_dir}")
+    logging.info(f"  Run mode: {args.run_mode}")
     logging.info(f"  Timestamp: {timestamp}")
     
     # Data directory (use raw standardized data)

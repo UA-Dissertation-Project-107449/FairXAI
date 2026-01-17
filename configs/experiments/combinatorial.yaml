@@ -58,7 +58,7 @@ fairness_thresholds:
 # Paths
 paths:
   processed_dir: data/processed/cardiac
-  results_dir: results/experiments
+  results_dir: results/cardiac/experiments/full
 
 # Parallel execution
 enable_parallelization: true

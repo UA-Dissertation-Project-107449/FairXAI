@@ -145,7 +145,7 @@ validation:
     - known_risk_factors_alignment: true
 
 output:
-  results_dir: "results/experiments/clustering"
+  results_dir: "results/cardiac/experiments/clustering"
   artifacts:
     - cluster_assignments_csv
     - composition_heatmap_png

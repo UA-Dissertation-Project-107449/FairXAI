@@ -3,6 +3,7 @@
 import argparse
 import logging
 import sys
+import json
 import yaml
 from pathlib import Path
 from datetime import datetime
@@ -12,7 +13,7 @@ import numpy as np
 from joblib import Parallel, delayed
 
 # Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 
 from fairxai.models.baseline import BaselineLogisticRegression
 from fairxai.models.cv_trainer import CVTrainer
@@ -20,6 +21,7 @@ from fairxai.fairness.metrics import FairnessMetrics
 from fairxai.fairness.mitigation import MitigationEngine
 from fairxai.experiments.versioning import ExperimentVersioning
 from fairxai.data.schemas import available_sensitive, preferred_sensitive
+from fairxai.utils.config import load_yaml_config
 
 
 STAGE_MAP = {
@@ -78,6 +80,24 @@ def load_processed_data(
     }
 
 
+def load_schema_config(project_root: Path) -> Dict[str, Any]:
+    pipeline_cfg = load_yaml_config(str(project_root / 'configs/pipelines/cardiac.yaml'))
+    schema_path = project_root / pipeline_cfg['runtime']['schema_mapping_json']
+    with open(schema_path, 'r') as f:
+        return json.load(f)
+
+
+def schema_excludes(schema_cfg: Dict[str, Any], dataset_name: str) -> List[str]:
+    dataset_cfg = schema_cfg.get('datasets', {}).get(dataset_name, {})
+    unified = schema_cfg.get('unified_schema', {})
+    exclude = list(dataset_cfg.get('exclude_features') or [])
+    unified_exclude = list(unified.get('exclude_features') or [])
+    label_col = dataset_cfg.get('label') or dataset_cfg.get('target')
+    if label_col:
+        exclude.append(label_col)
+    return list(dict.fromkeys(exclude + unified_exclude))
+
+
 def prepare_data_splits(
     train_df: pd.DataFrame,
     test_df: pd.DataFrame,
@@ -126,6 +146,7 @@ def run_single_experiment(
     config: Dict[str, Any],
     versioning: ExperimentVersioning,
     processed_dir: Path,
+    schema_cfg: Dict[str, Any],
     logger: logging.Logger
 ) -> Dict[str, Any]:
     """
@@ -165,6 +186,7 @@ def run_single_experiment(
             'Sex', 'ChestPainType', 'RestingECG', 'ExerciseAngina', 'ST_Slope',
             '_dataset_source', '_dataset_file', 'age_raw', 'HeartDisease'
         ]
+        exclude_cols.extend(schema_excludes(schema_cfg, config['dataset']))
         exclude_cols.extend(config.get('sensitive_attributes', []))
         splits = prepare_data_splits(
             data['train_df'],
@@ -335,19 +357,118 @@ def run_cv_experiment(
     
     # Initialize CV trainer
     cv_trainer = CVTrainer(n_folds=n_folds, random_state=config.get('random_seed', 42))
-    
-    # Run CV experiment
-    cv_results = cv_trainer.run_cv_experiment(
-        model_class=BaselineLogisticRegression,
-        X=X_full,
-        y=y_full,
-        sensitive_attrs=sensitive_full,
-        model_params=config.get('model_params', {})
-    )
-    
-    # Get fold predictions for fairness calculation
-    model = BaselineLogisticRegression(**config.get('model_params', {}))
-    fold_predictions = cv_trainer.get_fold_predictions(model, X_full, y_full, sensitive_full)
+
+    mitigation = config.get('mitigation_technique', 'baseline')
+    stage = STAGE_MAP.get(mitigation)
+
+    def _aggregate_fold_metrics(fold_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+        metrics_names = ['accuracy', 'precision', 'recall', 'f1_score', 'auc_roc']
+        aggregated = {}
+        for metric_name in metrics_names:
+            values = [fold['val_metrics'][metric_name] for fold in fold_results]
+            aggregated[metric_name] = {
+                'mean': float(np.mean(values)),
+                'std': float(np.std(values)),
+                'min': float(np.min(values)),
+                'max': float(np.max(values)),
+                'folds': values
+            }
+        return aggregated
+
+    if mitigation == 'baseline':
+        # Run CV experiment (baseline only)
+        cv_results = cv_trainer.run_cv_experiment(
+            model_class=BaselineLogisticRegression,
+            X=X_full,
+            y=y_full,
+            sensitive_attrs=sensitive_full,
+            model_params=config.get('model_params', {})
+        )
+
+        # Get fold predictions for fairness calculation
+        model = BaselineLogisticRegression(**config.get('model_params', {}))
+        fold_predictions = cv_trainer.get_fold_predictions(model, X_full, y_full, sensitive_full)
+    else:
+        if stage is None:
+            raise ValueError(f"Unknown mitigation technique for CV: {mitigation}")
+
+        engine = MitigationEngine()
+        folds = cv_trainer.create_stratified_folds(X_full, y_full, sensitive_full)
+        fold_results = []
+        all_predictions = []
+
+        sensitive_attr = next(
+            (c for c in config['sensitive_attributes'] if c in sensitive_full.columns and c != 'age_group'),
+            next((c for c in sensitive_full.columns), None)
+        )
+
+        if sensitive_attr is None:
+            raise ValueError("Mitigation requires at least one sensitive/group column; none found in CV splits")
+
+        for fold_idx, (train_idx, val_idx) in enumerate(folds):
+            logger.info(f"\nMitigation CV fold {fold_idx + 1}/{n_folds}...")
+
+            X_train = X_full.iloc[train_idx]
+            y_train = y_full.iloc[train_idx]
+            X_val = X_full.iloc[val_idx]
+            y_val = y_full.iloc[val_idx]
+            sensitive_train = sensitive_full.iloc[train_idx]
+            sensitive_val = sensitive_full.iloc[val_idx]
+
+            base_model = None
+            if stage == 'post-processing':
+                base_model = BaselineLogisticRegression(**config.get('model_params', {}))
+                base_model.train(X_train, y_train)
+
+            result = engine.apply_technique(
+                technique_name=mitigation,
+                stage=stage,
+                X_train=X_train,
+                y_train=y_train,
+                X_test=X_val,
+                y_test=y_val,
+                sensitive_train=sensitive_train,
+                sensitive_test=sensitive_val,
+                sensitive_attr=sensitive_attr,
+                base_model=base_model
+            )
+
+            fold_results.append({
+                'fold_idx': fold_idx,
+                'train_indices': train_idx,
+                'val_indices': val_idx,
+                'train_metrics': result.get('train_metrics', None),
+                'val_metrics': result['test_metrics']
+            })
+
+            y_pred = result['predictions']['y_pred']
+            y_proba = result['predictions']['y_proba']
+            if y_proba is None:
+                y_proba = y_pred
+
+            fold_preds = pd.DataFrame({
+                'fold': fold_idx,
+                'sample_idx': val_idx,
+                'y_true': y_val.values,
+                'y_pred': y_pred,
+                'y_proba': y_proba
+            })
+
+            for col in ['age_group', 'sex', 'ethnicity', 'group_cluster']:
+                if col in sensitive_full.columns:
+                    fold_preds[col] = sensitive_full.iloc[val_idx][col].values
+
+            all_predictions.append(fold_preds)
+
+        fold_predictions = pd.concat(all_predictions, ignore_index=True)
+        fold_predictions = fold_predictions.sort_values('sample_idx').reset_index(drop=True)
+
+        cv_results = {
+            'fold_results': fold_results,
+            'aggregated_metrics': _aggregate_fold_metrics(fold_results),
+            'n_folds': n_folds,
+            'random_state': config.get('random_seed', 42)
+        }
     
     # Save fold predictions
     versioning.save_predictions(exp_id, fold_predictions, f"cv_predictions_{exp_id}.csv")
@@ -474,20 +595,21 @@ def main():
     # Run experiments
     logger.info("\nStarting experiments...")
     processed_dir = Path(config['paths']['processed_dir'])
+    schema_cfg = load_schema_config(Path(__file__).parent.parent.parent)
     
     if args.n_jobs == 1:
         # Sequential execution
         results = []
         for i, (exp_id, exp_config) in enumerate(experiments, 1):
             logger.info(f"\n[{i}/{total_experiments}] Running experiment {exp_id}...")
-            result = run_single_experiment(exp_id, exp_config, versioning, processed_dir, logger)
+            result = run_single_experiment(exp_id, exp_config, versioning, processed_dir, schema_cfg, logger)
             results.append(result)
             versioning.save_results(exp_id, result)
     else:
         # Parallel execution
         logger.info(f"Running experiments in parallel with {args.n_jobs} jobs...")
         results = Parallel(n_jobs=args.n_jobs, verbose=10)(
-            delayed(run_single_experiment)(exp_id, exp_config, versioning, processed_dir, logger)
+            delayed(run_single_experiment)(exp_id, exp_config, versioning, processed_dir, schema_cfg, logger)
             for exp_id, exp_config in experiments
         )
         
@@ -511,9 +633,6 @@ def main():
     logger.info(f"  Successful: {n_success}")
     logger.info(f"  Failed: {n_failed}")
     logger.info(f"\nResults saved to: {versioning.latest_dir}")
-    logger.info(f"\nNext steps:")
-    logger.info(f"  1. Compare experiments: python scripts/analysis/compare_experiments.py")
-    logger.info(f"  2. Visualize results: python scripts/analysis/visualize_results.py")
 
 
 if __name__ == '__main__':

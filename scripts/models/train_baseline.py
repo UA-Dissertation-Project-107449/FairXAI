@@ -16,8 +16,11 @@ Usage:
 
 import sys
 import logging
+import os
 from pathlib import Path
 import json
+import shutil
+from datetime import datetime
 import pandas as pd
 import numpy as np
 
@@ -46,19 +49,49 @@ def setup_logging(log_dir: Path):
     logging.info("="*60)
 
 
+def archive_latest_run(base_dir: Path, enabled: bool) -> None:
+    if not enabled:
+        return
+
+    latest_dir = base_dir / 'latest_run'
+    archives_dir = base_dir / 'archived_runs'
+    archives_dir.mkdir(parents=True, exist_ok=True)
+
+    has_files = latest_dir.exists() and any(latest_dir.rglob('*'))
+    if not has_files:
+        return
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    archive_path = archives_dir / f'run_{timestamp}'
+    shutil.copytree(latest_dir, archive_path)
+
+    # Clean latest_run
+    for item in latest_dir.glob('*'):
+        if item.is_dir():
+            shutil.rmtree(item)
+        else:
+            item.unlink()
+
+
 def main():
     # Paths
     project_root = Path(__file__).parent.parent.parent
     from fairxai.utils.config import load_yaml_config
     
     pipeline_cfg = load_yaml_config(str(project_root / 'configs/pipelines/cardiac.yaml'))
+    schema_path = project_root / pipeline_cfg['runtime']['schema_mapping_json']
+    with open(schema_path, 'r') as f:
+        schema_cfg = json.load(f)
     data_processed = project_root / pipeline_cfg['paths']['processed_dir']
     experiments_dir = project_root / pipeline_cfg['paths']['experiments_dir']
     models_dir = project_root / pipeline_cfg['paths']['models_dir']
     log_dir = project_root / 'logs/cardiac'
+    baseline_root = project_root / 'results/cardiac/baseline'
     
     # Setup
     setup_logging(log_dir)
+    archive_latest_run(baseline_root, enabled=(os.getenv('ARCHIVE_BASELINE', 'true').lower() == 'true'))
+
     models_dir.mkdir(parents=True, exist_ok=True)
     experiments_dir.mkdir(parents=True, exist_ok=True)
     
@@ -109,11 +142,23 @@ def main():
         # We keep the encoded numerical versions for modeling
         sensitive_cols = ['age_group', 'sex']
         target_col = 'heart_disease'
-        exclude_cols = [target_col] + sensitive_cols
+
+        base_dataset = next(
+            (ds for ds in schema_cfg.get('cardiac_relevant_datasets', []) if dataset_name.startswith(ds)),
+            dataset_name
+        )
+        dataset_cfg = schema_cfg.get('datasets', {}).get(base_dataset, {})
+        unified_cfg = schema_cfg.get('unified_schema', {})
+        schema_exclude = list(dataset_cfg.get('exclude_features') or [])
+        schema_exclude += list(unified_cfg.get('exclude_features') or [])
+        label_col = dataset_cfg.get('label') or dataset_cfg.get('target')
+        if label_col:
+            schema_exclude.append(label_col)
+
+        exclude_cols = [target_col] + sensitive_cols + schema_exclude
         
         # Get feature columns (all except target and categorical sensitive attrs)
-        feature_cols = [col for col in train_df.columns 
-                       if col not in exclude_cols]
+        feature_cols = [col for col in train_df.columns if col not in exclude_cols]
         
         X_train = train_df[feature_cols].select_dtypes(include=[np.number])
         y_train = train_df[target_col]

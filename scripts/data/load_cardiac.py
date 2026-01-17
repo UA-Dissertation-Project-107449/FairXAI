@@ -53,7 +53,7 @@ def main():
     data_external = project_root / pipeline_cfg['paths']['external_dir']
     data_raw_cardiac = project_root / pipeline_cfg['paths']['raw_dir']
     log_dir = project_root / 'logs/cardiac'
-    results_profiling = project_root / 'results/cardiac/data_profiling'
+    results_profiling = project_root / 'results/cardiac/profiling'
     
     # Setup
     setup_logging(log_dir)
