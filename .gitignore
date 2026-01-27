@@ -1,3 +1,34 @@
+# ===================================================================
+# FairXAI Project-Specific
+# ===================================================================
+
+# Data & Models (ignored for size)
+data/raw/
+data/processed/
+data/external/
+*.pkl
+
+# Experiment/result artifacts
+results/*
+!results/cardiac/
+results/cardiac/*
+!results/cardiac/experiments/
+results/cardiac/experiments/*
+!results/cardiac/experiments/latest_run/
+results/cardiac/experiments/latest_run/**
+experiments/latest_run/
+experiments/archived_runs/
+experiments/**/manifests/
+experiments/**/reports/
+experiments/**/plots/
+
+# Local analysis outputs
+notebooks/**/.ipynb_checkpoints/
+notebooks/runs/
+logs/
+
+# ===================================================================
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

@@ -1,0 +1,47 @@
+# Logistic Regression Model Configuration
+
+model_name: "logistic_regression"
+model_type: "sklearn.linear_model.LogisticRegression"
+
+description: |
+  Baseline logistic regression classifier.
+  Interpretable linear model suitable for healthcare applications.
+  Provides feature importance via coefficients.
+
+hyperparameters:
+  # Regularization
+  penalty: "l2"
+  C: 1.0
+  
+  # Optimization
+  solver: "lbfgs"
+  max_iter: 1000
+  tol: 0.0001
+  
+  # Class imbalance
+  class_weight: "balanced"  # or null, or dict
+  
+  # Reproducibility
+  random_state: 42
+  
+  # Multi-class (not used for binary)
+  multi_class: "auto"
+
+training:
+  validation_strategy: "holdout"  # or "cross_validation"
+  cv_folds: 5  # if cross_validation
+  
+features:
+  selection: "all"  # or "top_k", "rfe"
+  scaling: "standard"  # Required for logistic regression
+  
+explainability:
+  native_interpretability: true
+  coefficient_analysis: true
+  supports_shap: true
+  supports_lime: true
+
+fairness:
+  supports_sample_weights: true
+  supports_class_weights: true
+  supports_fairness_constraints: false  # Needs fairlearn wrapper

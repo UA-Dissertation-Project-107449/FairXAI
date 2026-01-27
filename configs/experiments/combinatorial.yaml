@@ -1,0 +1,67 @@
+# Combinatorial Experiment Configuration
+# Tests all combinations of: dataset × binning × mitigation × training_method
+
+# Datasets to test
+datasets:
+  - cleveland
+  - kaggle_heart
+
+# Age binning strategies
+binning_strategies:
+  - fixed_10yr
+  - fixed_5yr
+  - clinical
+  - quantile_3
+  - quantile_5
+
+# Mitigation techniques
+mitigation_techniques:
+  - baseline
+  - reweighting
+  - smote
+  - ros
+  - rus
+  - adasyn
+  - exponentiated_gradient
+  - grid_search
+  - threshold_optimizer
+
+# Training methods
+training_methods:
+  - single_split
+  - kfold_cv
+
+# Cross-validation settings
+cv_folds: 5
+random_seed: 42
+
+# Model parameters
+model_params:
+  C: 1.0
+  max_iter: 1000
+  class_weight: balanced
+  random_state: 42
+
+# Sensitive / group attributes (evaluated if present in the dataset)
+sensitive_attributes:
+  - age_group
+  - sex
+  - ethnicity
+  - group_cluster
+
+# Fairness evaluation thresholds (for filtering results)
+fairness_thresholds:
+  min_improvement_pct: 10  # Minimum fairness improvement (%)
+  max_performance_drop_pct: 15  # Maximum allowed performance drop (%)
+  min_recall: 0.70  # Minimum clinical safety threshold
+
+# Paths
+paths:
+  processed_dir: data/processed/cardiac
+  results_dir: results/cardiac/experiments/full
+
+# Parallel execution
+enable_parallelization: true
+n_jobs: -1  # -1 for all cores
+
+# Total combinations: 2 datasets × 5 binning × 9 mitigation × 2 training = 180 experiments

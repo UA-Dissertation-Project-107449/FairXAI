@@ -1,0 +1,106 @@
+{
+  "datasets": {
+    "cleveland": {
+      "filename": "heart_cleveland_upload.csv",
+      "source": "UCI Machine Learning Repository",
+      "label": "condition",
+      "target": "condition",
+      "target_mapping": {
+        "0": "no_disease",
+        "1": "disease"
+      },
+      "include_features": [],
+      "exclude_features": ["condition"],
+      "sensitive_attributes": {
+        "age": {
+          "type": "continuous",
+          "bins": [0, 40, 50, 60, 70, 100],
+          "labels": ["<40", "40-49", "50-59", "60-69", "70+"]
+        },
+        "sex": {
+          "type": "categorical",
+          "mapping": {
+            "0": "Female",
+            "1": "Male"
+          }
+        }
+      },
+      "clinical_features": [
+        "cp", "trestbps", "chol", "fbs", "restecg",
+        "thalach", "exang", "oldpeak", "slope", "ca", "thal"
+      ],
+      "feature_descriptions": {
+        "cp": "chest_pain_type",
+        "trestbps": "resting_blood_pressure",
+        "chol": "serum_cholesterol",
+        "fbs": "fasting_blood_sugar",
+        "restecg": "resting_ecg",
+        "thalach": "max_heart_rate",
+        "exang": "exercise_induced_angina",
+        "oldpeak": "st_depression",
+        "slope": "st_slope",
+        "ca": "num_major_vessels",
+        "thal": "thalassemia"
+      }
+    },
+    "kaggle_heart": {
+      "filename": "heart.csv",
+      "source": "Kaggle",
+      "label": "HeartDisease",
+      "target": "HeartDisease",
+      "target_mapping": {
+        "0": "no_disease",
+        "1": "disease"
+      },
+      "include_features": [],
+      "exclude_features": ["HeartDisease"],
+      "sensitive_attributes": {
+        "Age": {
+          "type": "continuous",
+          "bins": [0, 40, 50, 60, 70, 100],
+          "labels": ["<40", "40-49", "50-59", "60-69", "70+"]
+        },
+        "Sex": {
+          "type": "categorical",
+          "mapping": {
+            "M": "Male",
+            "F": "Female"
+          }
+        }
+      },
+      "clinical_features": [
+        "ChestPainType", "RestingBP", "Cholesterol", "FastingBS",
+        "RestingECG", "MaxHR", "ExerciseAngina", "Oldpeak", "ST_Slope"
+      ],
+      "feature_descriptions": {
+        "ChestPainType": "chest_pain_type",
+        "RestingBP": "resting_blood_pressure",
+        "Cholesterol": "serum_cholesterol",
+        "FastingBS": "fasting_blood_sugar",
+        "RestingECG": "resting_ecg",
+        "MaxHR": "max_heart_rate",
+        "ExerciseAngina": "exercise_induced_angina",
+        "Oldpeak": "st_depression",
+        "ST_Slope": "st_slope"
+      }
+    }
+  },
+  "unified_schema": {
+    "target": "heart_disease",
+    "sensitive_attributes": ["age_group", "sex", "ethnicity", "group_cluster"],
+    "exclude_features": ["_dataset_source", "_dataset_file"],
+    "clinical_features_standardized": {
+      "chest_pain_type": ["cp", "ChestPainType"],
+      "resting_blood_pressure": ["trestbps", "RestingBP", "Blood Pressure"],
+      "serum_cholesterol": ["chol", "Cholesterol"],
+      "fasting_blood_sugar": ["fbs", "FastingBS", "Glucose"],
+      "resting_ecg": ["restecg", "RestingECG"],
+      "max_heart_rate": ["thalach", "MaxHR"],
+      "exercise_induced_angina": ["exang", "ExerciseAngina"],
+      "st_depression": ["oldpeak", "Oldpeak"],
+      "st_slope": ["slope", "ST_Slope"],
+      "bmi": ["BMI"]
+    }
+  },
+  "cardiac_relevant_datasets": ["cleveland", "kaggle_heart"]
+}
