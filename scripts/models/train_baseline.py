@@ -28,6 +28,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 
 from fairxai.models.baseline import BaselineLogisticRegression, generate_predictions_with_metadata
+from fairxai.explainability.tabular import shap_explain_tabular, lime_explain_instance
 
 
 def setup_logging(log_dir: Path):
@@ -47,6 +48,68 @@ def setup_logging(log_dir: Path):
     logging.info("="*60)
     logging.info("BASELINE MODEL TRAINING - LOGISTIC REGRESSION")
     logging.info("="*60)
+
+
+def save_xai_outputs(
+    model: BaselineLogisticRegression,
+    X_ref: pd.DataFrame,
+    X_lime: pd.DataFrame,
+    output_dir: Path,
+    dataset_name: str
+) -> None:
+    xai_enabled = os.getenv('XAI_ENABLED', 'true').lower() == 'true'
+    if not xai_enabled:
+        logging.info("XAI disabled via XAI_ENABLED=false")
+        return
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    max_samples = int(os.getenv('XAI_MAX_SAMPLES', '200'))
+    lime_instances = int(os.getenv('XAI_LIME_INSTANCES', '3'))
+
+    # SHAP summary (mean absolute SHAP per feature)
+    try:
+        shap_exp = shap_explain_tabular(model.model, X_ref, max_samples=max_samples)
+        shap_vals = np.abs(shap_exp.shap_values)
+        mean_abs = np.mean(shap_vals, axis=0)
+        shap_summary = pd.DataFrame({
+            'feature': shap_exp.feature_names,
+            'mean_abs_shap': mean_abs
+        }).sort_values('mean_abs_shap', ascending=False)
+        shap_file = output_dir / f"{dataset_name}_shap_summary.csv"
+        shap_summary.to_csv(shap_file, index=False)
+        logging.info(f"✓ SHAP summary saved: {shap_file}")
+    except Exception as exc:
+        logging.warning(f"SHAP failed for {dataset_name}: {exc}")
+
+    # LIME examples
+    try:
+        if lime_instances > 0:
+            lime_rows = X_lime.sample(n=min(lime_instances, len(X_lime)), random_state=42)
+            lime_results = []
+            for idx, row in lime_rows.iterrows():
+                exp = lime_explain_instance(
+                    model=model,
+                    data_row=row,
+                    training_data=X_ref,
+                    feature_names=list(X_ref.columns),
+                    class_names=["no_disease", "disease"],
+                    num_features=10
+                )
+                for feat, weight in exp.weights:
+                    lime_results.append({
+                        'instance_id': int(idx),
+                        'feature': feat,
+                        'weight': weight,
+                        'intercept': exp.intercept,
+                        'score': exp.score,
+                        'local_pred': exp.local_pred
+                    })
+            lime_df = pd.DataFrame(lime_results)
+            lime_file = output_dir / f"{dataset_name}_lime_examples.csv"
+            lime_df.to_csv(lime_file, index=False)
+            logging.info(f"✓ LIME examples saved: {lime_file}")
+    except Exception as exc:
+        logging.warning(f"LIME failed for {dataset_name}: {exc}")
 
 
 def archive_latest_run(base_dir: Path, enabled: bool) -> None:
@@ -257,6 +320,10 @@ def main():
         importance_file = experiments_dir / f'{dataset_name}_feature_importance.csv'
         feature_importance.to_csv(importance_file, index=False)
         logging.info(f"  Feature importance: {importance_file}")
+
+        # XAI outputs
+        xai_dir = experiments_dir / 'xai'
+        save_xai_outputs(model, X_train, X_test, xai_dir, dataset_name)
         
         # Save metrics
         results_summary[dataset_name] = {

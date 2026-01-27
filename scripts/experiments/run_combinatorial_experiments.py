@@ -3,6 +3,7 @@
 import argparse
 import logging
 import sys
+import os
 import json
 import yaml
 from pathlib import Path
@@ -22,6 +23,7 @@ from fairxai.fairness.mitigation import MitigationEngine
 from fairxai.experiments.versioning import ExperimentVersioning
 from fairxai.data.schemas import available_sensitive, preferred_sensitive
 from fairxai.utils.config import load_yaml_config
+from fairxai.explainability.tabular import shap_explain_tabular, lime_explain_instance
 
 
 STAGE_MAP = {
@@ -139,6 +141,68 @@ def prepare_data_splits(
         'sensitive_test': sensitive_test,
         'sensitive_cols': list(dict.fromkeys(sens_cols_train + sens_cols_test))
     }
+
+
+def save_experiment_xai(
+    exp_id: str,
+    model: Any,
+    X_ref: pd.DataFrame,
+    X_lime: pd.DataFrame,
+    versioning: ExperimentVersioning
+) -> None:
+    xai_enabled = os.getenv('XAI_ENABLED', 'true').lower() == 'true'
+    if not xai_enabled:
+        return
+
+    xai_dir = versioning.latest_dir / 'xai'
+    xai_dir.mkdir(parents=True, exist_ok=True)
+    max_samples = int(os.getenv('XAI_MAX_SAMPLES', '200'))
+    lime_instances = int(os.getenv('XAI_LIME_INSTANCES', '2'))
+
+    # Resolve model for SHAP
+    shap_model = model.model if hasattr(model, 'model') else model
+
+    try:
+        shap_exp = shap_explain_tabular(shap_model, X_ref, max_samples=max_samples)
+        shap_vals = np.abs(shap_exp.shap_values)
+        mean_abs = np.mean(shap_vals, axis=0)
+        shap_summary = pd.DataFrame({
+            'feature': shap_exp.feature_names,
+            'mean_abs_shap': mean_abs
+        }).sort_values('mean_abs_shap', ascending=False)
+        shap_file = xai_dir / f"{exp_id}_shap_summary.csv"
+        shap_summary.to_csv(shap_file, index=False)
+    except Exception as exc:
+        logging.getLogger(__name__).warning(f"SHAP failed for {exp_id}: {exc}")
+
+    # LIME examples (requires predict_proba)
+    try:
+        if lime_instances > 0 and hasattr(model, 'predict_proba'):
+            lime_rows = X_lime.sample(n=min(lime_instances, len(X_lime)), random_state=42)
+            lime_results = []
+            for idx, row in lime_rows.iterrows():
+                exp = lime_explain_instance(
+                    model=model,
+                    data_row=row,
+                    training_data=X_ref,
+                    feature_names=list(X_ref.columns),
+                    class_names=["no_disease", "disease"],
+                    num_features=10
+                )
+                for feat, weight in exp.weights:
+                    lime_results.append({
+                        'instance_id': int(idx),
+                        'feature': feat,
+                        'weight': weight,
+                        'intercept': exp.intercept,
+                        'score': exp.score,
+                        'local_pred': exp.local_pred
+                    })
+            lime_df = pd.DataFrame(lime_results)
+            lime_file = xai_dir / f"{exp_id}_lime_examples.csv"
+            lime_df.to_csv(lime_file, index=False)
+    except Exception as exc:
+        logging.getLogger(__name__).warning(f"LIME failed for {exp_id}: {exc}")
 
 
 def run_single_experiment(
@@ -322,6 +386,13 @@ def run_single_split_experiment(
     
     # Save predictions
     versioning.save_predictions(exp_id, predictions_df)
+
+    # XAI outputs (single-split only)
+    model_for_xai = result.get('model') if isinstance(result, dict) else None
+    if mitigation == 'baseline':
+        model_for_xai = model
+    if model_for_xai is not None:
+        save_experiment_xai(exp_id, model_for_xai, splits['X_train'], splits['X_test'], versioning)
     
     logger.info(f"  Accuracy: {result['test_metrics']['accuracy']:.3f}")
     logger.info(f"  Recall: {result['test_metrics']['recall']:.3f}")
