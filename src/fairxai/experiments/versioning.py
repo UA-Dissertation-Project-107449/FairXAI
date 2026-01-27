@@ -36,6 +36,7 @@ class ExperimentVersioning:
         (self.latest_dir / "results").mkdir(exist_ok=True)
         (self.latest_dir / "predictions").mkdir(exist_ok=True)
         (self.latest_dir / "models").mkdir(exist_ok=True)
+        (self.latest_dir / "xai").mkdir(exist_ok=True)
     
     def generate_experiment_id(self) -> str:
         """
@@ -131,7 +132,10 @@ class ExperimentVersioning:
         if execution_metadata:
             manifest['execution'] = execution_metadata
         
-        manifest_path = self.latest_dir / "manifests" / f"experiment_{exp_id}.yaml"
+        dataset = config.get('dataset', 'unknown')
+        manifest_dir = self.latest_dir / "manifests" / dataset
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        manifest_path = manifest_dir / f"experiment_{exp_id}.yaml"
         with open(manifest_path, 'w') as f:
             yaml.dump(manifest, f, default_flow_style=False, sort_keys=False)
         
@@ -155,7 +159,10 @@ class ExperimentVersioning:
         Returns:
             Path to saved results file
         """
-        results_path = self.latest_dir / "results" / f"results_{exp_id}.{format}"
+        dataset = results.get('configuration', {}).get('dataset', 'unknown')
+        results_dir = self.latest_dir / "results" / dataset
+        results_dir.mkdir(parents=True, exist_ok=True)
+        results_path = results_dir / f"results_{exp_id}.{format}"
         
         if format == 'json':
             with open(results_path, 'w') as f:
@@ -173,7 +180,8 @@ class ExperimentVersioning:
         self,
         exp_id: str,
         predictions: Any,
-        filename: Optional[str] = None
+        filename: Optional[str] = None,
+        dataset: Optional[str] = None
     ) -> Path:
         """
         Save model predictions.
@@ -189,7 +197,10 @@ class ExperimentVersioning:
         if filename is None:
             filename = f"predictions_{exp_id}.csv"
         
-        pred_path = self.latest_dir / "predictions" / filename
+        dataset_name = dataset or 'unknown'
+        pred_dir = self.latest_dir / "predictions" / dataset_name
+        pred_dir.mkdir(parents=True, exist_ok=True)
+        pred_path = pred_dir / filename
         
         if hasattr(predictions, 'to_csv'):
             predictions.to_csv(pred_path, index=False)
@@ -221,11 +232,14 @@ class ExperimentVersioning:
         shutil.copytree(self.latest_dir, archive_path)
         
         # Clean latest_run (keep directory structure)
-        for subdir in ['manifests', 'results', 'predictions', 'models']:
+        for subdir in ['manifests', 'results', 'predictions', 'models', 'xai']:
             subdir_path = self.latest_dir / subdir
             if subdir_path.exists():
-                for file in subdir_path.glob('*'):
-                    file.unlink()
+                for child in subdir_path.iterdir():
+                    if child.is_dir():
+                        shutil.rmtree(child)
+                    else:
+                        child.unlink()
         
         self.logger.info(f"✓ Archived previous run to: {archive_path}")
         return archive_path
@@ -243,12 +257,12 @@ class ExperimentVersioning:
         """
         if from_archive:
             # Search in archives
-            manifest_files = list(self.archives_dir.glob(f"*/manifests/experiment_{exp_id}.yaml"))
-            result_files = list(self.archives_dir.glob(f"*/results/results_{exp_id}.json"))
+            manifest_files = list(self.archives_dir.glob(f"*/manifests/**/experiment_{exp_id}.yaml"))
+            result_files = list(self.archives_dir.glob(f"*/results/**/results_{exp_id}.json"))
         else:
             # Load from latest_run
-            manifest_files = [self.latest_dir / "manifests" / f"experiment_{exp_id}.yaml"]
-            result_files = [self.latest_dir / "results" / f"results_{exp_id}.json"]
+            manifest_files = list(self.latest_dir.glob(f"manifests/**/experiment_{exp_id}.yaml"))
+            result_files = list(self.latest_dir.glob(f"results/**/results_{exp_id}.json"))
         
         if not manifest_files:
             raise FileNotFoundError(f"Manifest not found for experiment: {exp_id}")
@@ -279,9 +293,9 @@ class ExperimentVersioning:
             List of experiment summaries
         """
         if from_archive:
-            manifest_files = list(self.archives_dir.glob("*/manifests/experiment_*.yaml"))
+            manifest_files = list(self.archives_dir.glob("*/manifests/**/experiment_*.yaml"))
         else:
-            manifest_files = list((self.latest_dir / "manifests").glob("experiment_*.yaml"))
+            manifest_files = list((self.latest_dir / "manifests").glob("**/experiment_*.yaml"))
         
         experiments = []
         for manifest_file in manifest_files:

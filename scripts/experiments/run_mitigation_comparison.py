@@ -339,9 +339,15 @@ def create_comparison_table(all_results):
     df = pd.DataFrame(comparison_data)
 
     # Compute fairness gain vs baseline per dataset
-    baseline_rows = df[df['technique'] == 'baseline'].set_index('dataset')
+    for col in ['dp_max_diff', 'eq_odds_max_diff']:
+        if col not in df.columns:
+            df[col] = np.nan
     df['fairness_gap'] = df[['dp_max_diff', 'eq_odds_max_diff']].max(axis=1, skipna=True)
-    df['baseline_fairness_gap'] = df['dataset'].map(baseline_rows['fairness_gap'])
+    baseline_rows = df[df['technique'] == 'baseline'].set_index('dataset')
+    if baseline_rows.empty:
+        df['baseline_fairness_gap'] = np.nan
+    else:
+        df['baseline_fairness_gap'] = df['dataset'].map(baseline_rows['fairness_gap'])
     df['fairness_gain'] = df['baseline_fairness_gap'] - df['fairness_gap']
     df['fairness_gain_pct'] = df['fairness_gain'] / df['baseline_fairness_gap']
 

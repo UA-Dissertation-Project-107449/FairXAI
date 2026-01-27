@@ -21,6 +21,7 @@ from pathlib import Path
 import json
 import shutil
 from datetime import datetime
+from typing import Optional
 import pandas as pd
 import numpy as np
 
@@ -55,7 +56,8 @@ def save_xai_outputs(
     X_ref: pd.DataFrame,
     X_lime: pd.DataFrame,
     output_dir: Path,
-    dataset_name: str
+    dataset_name: str,
+    X_global: Optional[pd.DataFrame] = None
 ) -> None:
     xai_enabled = os.getenv('XAI_ENABLED', 'true').lower() == 'true'
     if not xai_enabled:
@@ -63,23 +65,27 @@ def save_xai_outputs(
         return
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    max_samples = int(os.getenv('XAI_MAX_SAMPLES', '200'))
     lime_instances = int(os.getenv('XAI_LIME_INSTANCES', '3'))
+    global_max = int(os.getenv('XAI_GLOBAL_MAX_SAMPLES', '1000'))
 
-    # SHAP summary (mean absolute SHAP per feature)
-    try:
-        shap_exp = shap_explain_tabular(model.model, X_ref, max_samples=max_samples)
-        shap_vals = np.abs(shap_exp.shap_values)
-        mean_abs = np.mean(shap_vals, axis=0)
-        shap_summary = pd.DataFrame({
-            'feature': shap_exp.feature_names,
-            'mean_abs_shap': mean_abs
-        }).sort_values('mean_abs_shap', ascending=False)
-        shap_file = output_dir / f"{dataset_name}_shap_summary.csv"
-        shap_summary.to_csv(shap_file, index=False)
-        logging.info(f"✓ SHAP summary saved: {shap_file}")
-    except Exception as exc:
-        logging.warning(f"SHAP failed for {dataset_name}: {exc}")
+    # Global SHAP summary (dataset-level)
+    if X_global is not None:
+        try:
+            df_global = X_global.copy()
+            if len(df_global) > global_max:
+                df_global = df_global.sample(n=global_max, random_state=42)
+            shap_global = shap_explain_tabular(model.model, df_global, max_samples=global_max)
+            shap_vals_global = np.abs(shap_global.shap_values)
+            mean_abs_global = np.mean(shap_vals_global, axis=0)
+            shap_global_summary = pd.DataFrame({
+                'feature': shap_global.feature_names,
+                'mean_abs_shap': mean_abs_global
+            }).sort_values('mean_abs_shap', ascending=False)
+            shap_global_file = output_dir / f"{dataset_name}_shap_global.csv"
+            shap_global_summary.to_csv(shap_global_file, index=False)
+            logging.info(f"✓ SHAP global summary saved: {shap_global_file}")
+        except Exception as exc:
+            logging.warning(f"Global SHAP failed for {dataset_name}: {exc}")
 
     # LIME examples
     try:
@@ -323,7 +329,7 @@ def main():
 
         # XAI outputs
         xai_dir = experiments_dir / 'xai'
-        save_xai_outputs(model, X_train, X_test, xai_dir, dataset_name)
+        save_xai_outputs(model, X_train, X_test, xai_dir, dataset_name, X_global=X_train)
         
         # Save metrics
         results_summary[dataset_name] = {

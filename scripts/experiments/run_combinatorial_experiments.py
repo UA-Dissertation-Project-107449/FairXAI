@@ -148,13 +148,14 @@ def save_experiment_xai(
     model: Any,
     X_ref: pd.DataFrame,
     X_lime: pd.DataFrame,
-    versioning: ExperimentVersioning
+    versioning: ExperimentVersioning,
+    dataset_name: str
 ) -> None:
     xai_enabled = os.getenv('XAI_ENABLED', 'true').lower() == 'true'
     if not xai_enabled:
         return
 
-    xai_dir = versioning.latest_dir / 'xai'
+    xai_dir = versioning.latest_dir / 'xai' / dataset_name
     xai_dir.mkdir(parents=True, exist_ok=True)
     max_samples = int(os.getenv('XAI_MAX_SAMPLES', '200'))
     lime_instances = int(os.getenv('XAI_LIME_INSTANCES', '2'))
@@ -385,14 +386,14 @@ def run_single_split_experiment(
     )
     
     # Save predictions
-    versioning.save_predictions(exp_id, predictions_df)
+    versioning.save_predictions(exp_id, predictions_df, dataset=config['dataset'])
 
     # XAI outputs (single-split only)
     model_for_xai = result.get('model') if isinstance(result, dict) else None
     if mitigation == 'baseline':
         model_for_xai = model
     if model_for_xai is not None:
-        save_experiment_xai(exp_id, model_for_xai, splits['X_train'], splits['X_test'], versioning)
+        save_experiment_xai(exp_id, model_for_xai, splits['X_train'], splits['X_test'], versioning, config['dataset'])
     
     logger.info(f"  Accuracy: {result['test_metrics']['accuracy']:.3f}")
     logger.info(f"  Recall: {result['test_metrics']['recall']:.3f}")
@@ -542,7 +543,12 @@ def run_cv_experiment(
         }
     
     # Save fold predictions
-    versioning.save_predictions(exp_id, fold_predictions, f"cv_predictions_{exp_id}.csv")
+        versioning.save_predictions(
+            exp_id,
+            fold_predictions,
+            f"cv_predictions_{exp_id}.csv",
+            dataset=config['dataset']
+        )
     
     # Calculate fairness metrics on full CV predictions
     predictions_df = fold_predictions.copy()
