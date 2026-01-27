@@ -89,12 +89,40 @@ def save_xai_outputs(
 
     # LIME examples
     try:
-        if lime_instances > 0:
+        def _wrap_decision_function(df_model):
+            class _DecisionFunctionWrapper:
+                def __init__(self, base_model):
+                    self.base_model = base_model
+
+                def predict_proba(self, X):
+                    scores = self.base_model.decision_function(X)
+                    scores = np.asarray(scores)
+                    if scores.ndim == 1:
+                        prob_pos = 1.0 / (1.0 + np.exp(-scores))
+                        return np.vstack([1 - prob_pos, prob_pos]).T
+                    exp_scores = np.exp(scores - np.max(scores, axis=1, keepdims=True))
+                    return exp_scores / np.sum(exp_scores, axis=1, keepdims=True)
+
+            return _DecisionFunctionWrapper(df_model)
+
+        def _resolve_lime_model(raw_model):
+            if hasattr(raw_model, 'predict_proba'):
+                return raw_model
+            if hasattr(raw_model, 'model') and hasattr(raw_model.model, 'predict_proba'):
+                return raw_model.model
+            if hasattr(raw_model, 'decision_function'):
+                return _wrap_decision_function(raw_model)
+            if hasattr(raw_model, 'model') and hasattr(raw_model.model, 'decision_function'):
+                return _wrap_decision_function(raw_model.model)
+            return None
+
+        lime_model = _resolve_lime_model(model)
+        if lime_instances > 0 and lime_model is not None:
             lime_rows = X_lime.sample(n=min(lime_instances, len(X_lime)), random_state=42)
             lime_results = []
             for idx, row in lime_rows.iterrows():
                 exp = lime_explain_instance(
-                    model=model,
+                    model=lime_model,
                     data_row=row,
                     training_data=X_ref,
                     feature_names=list(X_ref.columns),
@@ -114,6 +142,8 @@ def save_xai_outputs(
             lime_file = output_dir / f"{dataset_name}_lime_examples.csv"
             lime_df.to_csv(lime_file, index=False)
             logging.info(f"✓ LIME examples saved: {lime_file}")
+        elif lime_instances > 0:
+            logging.warning(f"LIME skipped for {dataset_name}: no predict_proba/decision_function")
     except Exception as exc:
         logging.warning(f"LIME failed for {dataset_name}: {exc}")
 

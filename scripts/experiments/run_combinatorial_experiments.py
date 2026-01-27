@@ -8,7 +8,7 @@ import json
 import yaml
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import pandas as pd
 import numpy as np
 from joblib import Parallel, delayed
@@ -163,27 +163,67 @@ def save_experiment_xai(
     # Resolve model for SHAP
     shap_model = model.model if hasattr(model, 'model') else model
 
+    def _wrap_decision_function(df_model: Any):
+        class _DecisionFunctionWrapper:
+            def __init__(self, base_model: Any):
+                self.base_model = base_model
+
+            def predict_proba(self, X):
+                scores = self.base_model.decision_function(X)
+                scores = np.asarray(scores)
+                if scores.ndim == 1:
+                    prob_pos = 1.0 / (1.0 + np.exp(-scores))
+                    return np.vstack([1 - prob_pos, prob_pos]).T
+                exp_scores = np.exp(scores - np.max(scores, axis=1, keepdims=True))
+                return exp_scores / np.sum(exp_scores, axis=1, keepdims=True)
+
+        return _DecisionFunctionWrapper(df_model)
+
+    def _resolve_lime_model(raw_model: Any) -> Optional[Any]:
+        if hasattr(raw_model, 'predict_proba'):
+            return raw_model
+        if hasattr(raw_model, 'model') and hasattr(raw_model.model, 'predict_proba'):
+            return raw_model.model
+        if hasattr(raw_model, 'decision_function'):
+            return _wrap_decision_function(raw_model)
+        if hasattr(raw_model, 'model') and hasattr(raw_model.model, 'decision_function'):
+            return _wrap_decision_function(raw_model.model)
+        return None
+
     try:
-        shap_exp = shap_explain_tabular(shap_model, X_ref, max_samples=max_samples)
-        shap_vals = np.abs(shap_exp.shap_values)
-        mean_abs = np.mean(shap_vals, axis=0)
-        shap_summary = pd.DataFrame({
-            'feature': shap_exp.feature_names,
-            'mean_abs_shap': mean_abs
+        # Global SHAP (train reference)
+        shap_global = shap_explain_tabular(shap_model, X_ref, max_samples=max_samples)
+        shap_vals_global = np.abs(shap_global.shap_values)
+        mean_abs_global = np.mean(shap_vals_global, axis=0)
+        shap_global_df = pd.DataFrame({
+            'feature': shap_global.feature_names,
+            'mean_abs_shap': mean_abs_global
         }).sort_values('mean_abs_shap', ascending=False)
-        shap_file = xai_dir / f"{exp_id}_shap_summary.csv"
-        shap_summary.to_csv(shap_file, index=False)
+        shap_global_file = xai_dir / f"{exp_id}_shap_global.csv"
+        shap_global_df.to_csv(shap_global_file, index=False)
+
+        # Local SHAP (test/reference for local context)
+        shap_local = shap_explain_tabular(shap_model, X_lime, max_samples=max_samples)
+        shap_vals_local = np.abs(shap_local.shap_values)
+        mean_abs_local = np.mean(shap_vals_local, axis=0)
+        shap_local_df = pd.DataFrame({
+            'feature': shap_local.feature_names,
+            'mean_abs_shap': mean_abs_local
+        }).sort_values('mean_abs_shap', ascending=False)
+        shap_local_file = xai_dir / f"{exp_id}_shap_local.csv"
+        shap_local_df.to_csv(shap_local_file, index=False)
     except Exception as exc:
         logging.getLogger(__name__).warning(f"SHAP failed for {exp_id}: {exc}")
 
     # LIME examples (requires predict_proba)
     try:
-        if lime_instances > 0 and hasattr(model, 'predict_proba'):
+        lime_model = _resolve_lime_model(model)
+        if lime_instances > 0 and lime_model is not None:
             lime_rows = X_lime.sample(n=min(lime_instances, len(X_lime)), random_state=42)
             lime_results = []
             for idx, row in lime_rows.iterrows():
                 exp = lime_explain_instance(
-                    model=model,
+                    model=lime_model,
                     data_row=row,
                     training_data=X_ref,
                     feature_names=list(X_ref.columns),
@@ -202,8 +242,48 @@ def save_experiment_xai(
             lime_df = pd.DataFrame(lime_results)
             lime_file = xai_dir / f"{exp_id}_lime_examples.csv"
             lime_df.to_csv(lime_file, index=False)
+        elif lime_instances > 0:
+            logging.getLogger(__name__).warning(f"LIME skipped for {exp_id}: no predict_proba/decision_function")
     except Exception as exc:
         logging.getLogger(__name__).warning(f"LIME failed for {exp_id}: {exc}")
+
+
+def aggregate_dataset_shap(xai_dir: Path, suffix: str) -> None:
+    files = [
+        p for p in xai_dir.glob(f"*_shap_{suffix}.csv")
+        if not p.name.endswith(f"shap_{suffix}_summary.csv")
+    ]
+    if not files:
+        return
+
+    rows = []
+    for file_path in files:
+        df = pd.read_csv(file_path)
+        if 'feature' not in df.columns or 'mean_abs_shap' not in df.columns:
+            continue
+        df = df[['feature', 'mean_abs_shap']].copy()
+        df['source_file'] = file_path.name
+        rows.append(df)
+
+    if not rows:
+        return
+
+    combined = pd.concat(rows, ignore_index=True)
+    grouped = combined.groupby('feature')['mean_abs_shap']
+    summary = grouped.agg(
+        count='count',
+        mean='mean',
+        std='std',
+        min='min',
+        max='max',
+    ).reset_index()
+    summary['p25'] = grouped.quantile(0.25).values
+    summary['p50'] = grouped.quantile(0.50).values
+    summary['p75'] = grouped.quantile(0.75).values
+    summary = summary.sort_values('mean', ascending=False)
+
+    out_file = xai_dir / f"shap_{suffix}_summary.csv"
+    summary.to_csv(out_file, index=False)
 
 
 def run_single_experiment(
@@ -710,6 +790,14 @@ def main():
     logger.info(f"  Successful: {n_success}")
     logger.info(f"  Failed: {n_failed}")
     logger.info(f"\nResults saved to: {versioning.latest_dir}")
+
+    # Aggregate dataset-level SHAP summaries (global/local)
+    xai_root = versioning.latest_dir / 'xai'
+    for dataset in config['datasets']:
+        dataset_xai_dir = xai_root / dataset
+        if dataset_xai_dir.exists():
+            aggregate_dataset_shap(dataset_xai_dir, 'global')
+            aggregate_dataset_shap(dataset_xai_dir, 'local')
 
 
 if __name__ == '__main__':
