@@ -13,6 +13,7 @@ import logging
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 
 from fairxai.experiments.versioning import ExperimentVersioning
+from fairxai.utils.logging_utils import setup_logging
 from fairxai.visualization.plots import (
     save_comparison_heatmap,
     save_tradeoff_scatter,
@@ -26,14 +27,6 @@ SCORE_WEIGHTS = {
     'accuracy_value': 0.20,
     'auc_value': 0.10
 }
-
-
-def setup_logging():
-    """Configure logging."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(levelname)s - %(message)s'
-    )
 
 
 def load_all_results(versioning: ExperimentVersioning) -> pd.DataFrame:
@@ -220,7 +213,7 @@ def compare_binning_strategies(df: pd.DataFrame, output_dir: Path):
     # Save
     output_file = output_dir / 'binning_comparison.csv'
     pivot.to_csv(output_file)
-    logging.info(f"✓ Saved binning comparison: {output_file}")
+    logging.info(f"[SUCCESS] Saved binning comparison: {output_file}")
 
     # Heatmap
     heatmap_file = output_dir / 'binning_comparison_heatmap.png'
@@ -229,7 +222,7 @@ def compare_binning_strategies(df: pd.DataFrame, output_dir: Path):
         title='Binning Strategy Comparison (Composite Score)',
         output_file=heatmap_file
     )
-    logging.info(f"✓ Saved binning heatmap: {heatmap_file}")
+    logging.info(f"[SUCCESS] Saved binning heatmap: {heatmap_file}")
     
     return pivot
 
@@ -257,7 +250,7 @@ def compare_mitigation_techniques(df: pd.DataFrame, output_dir: Path):
     # Save
     output_file = output_dir / 'mitigation_comparison.csv'
     pivot.to_csv(output_file)
-    logging.info(f"✓ Saved mitigation comparison: {output_file}")
+    logging.info(f"[SUCCESS] Saved mitigation comparison: {output_file}")
 
     # Heatmap
     heatmap_file = output_dir / 'mitigation_comparison_heatmap.png'
@@ -266,7 +259,7 @@ def compare_mitigation_techniques(df: pd.DataFrame, output_dir: Path):
         title='Mitigation Technique Comparison (Composite Score)',
         output_file=heatmap_file
     )
-    logging.info(f"✓ Saved mitigation heatmap: {heatmap_file}")
+    logging.info(f"[SUCCESS] Saved mitigation heatmap: {heatmap_file}")
     
     return pivot
 
@@ -352,7 +345,7 @@ def filter_best_configurations(
         
         output_file = output_dir / 'best_configurations.csv'
         best_df.to_csv(output_file, index=False)
-        logging.info(f"✓ Saved best configurations: {output_file}")
+        logging.info(f"[SUCCESS] Saved best configurations: {output_file}")
         logging.info(f"  Found {len(best_df)} configurations meeting criteria")
     else:
         logging.warning("No configurations met the criteria")
@@ -388,13 +381,20 @@ def main():
         action='store_true',
         help='Disable plot generation'
     )
+    parser.add_argument(
+        '-v', '--verbose',
+        action='store_true',
+        help='Verbose console output'
+    )
     
     args = parser.parse_args()
-    setup_logging()
+    log_dir = Path(__file__).parent.parent.parent / 'logs/experiments/latest_run'
+    setup_logging(log_dir / 'compare_experiments.log', verbose=args.verbose)
     
     logging.info("="*80)
     logging.info("EXPERIMENT COMPARISON")
     logging.info("="*80)
+    logging.info("[PHASE] Comparison started")
     
     # Initialize versioning
     versioning = ExperimentVersioning(Path(args.results_dir))
@@ -494,7 +494,7 @@ def main():
     # Save full results table
     full_results_file = output_dir / 'full_comparison.csv'
     df_success.to_csv(full_results_file, index=False)
-    logging.info(f"\n✓ Saved full results: {full_results_file}")
+    logging.info(f"\n[SUCCESS] Saved full results: {full_results_file}")
     
     # Create comparison tables
     logging.info("\nGenerating comparison tables...")
@@ -527,14 +527,14 @@ def main():
     dup_groups = dup_groups[dup_groups['count'] > 1]
     dup_file = output_dir / 'diagnostics_duplicate_metrics.csv'
     dup_groups.to_csv(dup_file, index=False)
-    logging.info(f"✓ Saved duplicate metrics diagnostics: {dup_file}")
+    logging.info(f"[SUCCESS] Saved duplicate metrics diagnostics: {dup_file}")
 
     # Diagnostics: failures (e.g., non-convergence)
     failures = df[df['status'] == 'failed'].copy()
     if not failures.empty:
         failure_file = output_dir / 'diagnostics_failures.csv'
         failures.to_csv(failure_file, index=False)
-        logging.info(f"✓ Saved failure diagnostics: {failure_file}")
+        logging.info(f"[SUCCESS] Saved failure diagnostics: {failure_file}")
 
     # Diagnostics: experiment duplication counts
     combo_counts = (
@@ -544,7 +544,7 @@ def main():
     )
     combo_file = output_dir / 'diagnostics_experiment_counts.csv'
     combo_counts.to_csv(combo_file, index=False)
-    logging.info(f"✓ Saved experiment counts: {combo_file}")
+    logging.info(f"[SUCCESS] Saved experiment counts: {combo_file}")
 
     # Trade-off visuals (per dataset)
     if not args.no_plots:
@@ -568,7 +568,7 @@ def main():
                 output_file=tradeoff_png
             )
             if tradeoff_result:
-                logging.info(f"✓ Saved tradeoff plot: {tradeoff_png}")
+                logging.info(f"[SUCCESS] Saved tradeoff plot: {tradeoff_png}")
             else:
                 logging.warning(f"Tradeoff plot skipped (no data): {tradeoff_png}")
 
@@ -585,7 +585,7 @@ def main():
                 output_file=pareto_png
             )
             if pareto_result:
-                logging.info(f"✓ Saved pareto plot: {pareto_png}")
+                logging.info(f"[SUCCESS] Saved pareto plot: {pareto_png}")
             else:
                 logging.warning(f"Pareto plot skipped (no data): {pareto_png}")
 
@@ -610,12 +610,13 @@ def main():
     summary_df = pd.DataFrame(summary_rows)
     summary_csv = output_dir / 'summary_top_configs.csv'
     summary_df.to_csv(summary_csv, index=False)
-    logging.info(f"✓ Saved summary: {summary_csv}")
+    logging.info(f"[SUCCESS] Saved summary: {summary_csv}")
     
     # Print summary
     logging.info("\n" + "="*80)
     logging.info("COMPARISON COMPLETE")
     logging.info("="*80)
+    logging.info("[PHASE] Comparison complete")
     logging.info(f"Results saved to: {output_dir}")
     logging.info(f"\nFiles created:")
     logging.info(f"  - full_comparison.csv ({len(df_success)} experiments)")

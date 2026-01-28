@@ -36,25 +36,7 @@ from fairxai.experiments.age_binning import (
     generate_summary_report
 )
 from fairxai.utils.config import load_yaml_config
-
-
-def setup_logging(log_dir: Path, timestamp: str):
-    """Configure logging to file and console."""
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / f'age_binning_analysis_{timestamp}.log'
-    
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file, mode='w'),
-            logging.StreamHandler()
-        ]
-    )
-    
-    logging.info("="*80)
-    logging.info("AGE BINNING STRATEGIES ANALYSIS EXPERIMENT")
-    logging.info("="*80)
+from fairxai.utils.logging_utils import setup_logging
 
 
 def archive_latest_run(base_dir: Path, enabled: bool, logger: logging.Logger):
@@ -166,6 +148,7 @@ def main():
     parser.add_argument('--archive-previous', action='store_true',
                        default=os.getenv('ARCHIVE_PREVIOUS', 'true').lower() == 'true',
                        help='Archive previous latest_run (full runs only)')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose console output')
     args = parser.parse_args()
     
     # Paths
@@ -196,9 +179,10 @@ def main():
         strategies = list(experiment_cfg['binning_strategies'].keys())
     
     # Setup logging
-    log_dir = project_root / 'logs/experiments'
-    setup_logging(log_dir, timestamp)
+    log_dir = project_root / 'logs/experiments/latest_run'
+    setup_logging(log_dir / 'age_binning_analysis.log', verbose=args.verbose)
     logger = logging.getLogger(__name__)
+    logging.info("[PHASE] Age binning analysis started")
 
     # Determine output directory
     if args.run_mode == 'partial':
@@ -291,15 +275,15 @@ def main():
     report_file = output_dir / f'age_binning_report_{timestamp}.md'
     
     comparison_df.to_csv(csv_file, index=False)
-    logging.info(f"\n✓ Saved CSV: {csv_file}")
+    logging.info(f"\n[SUCCESS] Saved CSV: {csv_file}")
     
     with open(json_file, 'w') as f:
         json.dump(all_results, f, indent=2, default=str)
-    logging.info(f"✓ Saved JSON: {json_file}")
+    logging.info(f"[SUCCESS] Saved JSON: {json_file}")
     
     # Generate markdown report
     generate_summary_report(all_results, report_file, scoring_weights)
-    logging.info(f"✓ Saved Report: {report_file}")
+    logging.info(f"[SUCCESS] Saved Report: {report_file}")
     
     # Print summary
     logging.info(f"\n{'='*80}")
@@ -337,6 +321,7 @@ def main():
     logging.info(f"  - Comparison CSV: {csv_file.name}")
     logging.info(f"  - Detailed JSON: {json_file.name}")
     logging.info(f"  - Summary Report: {report_file.name}")
+    logging.info("[PHASE] Age binning analysis complete")
 
 
 if __name__ == '__main__':

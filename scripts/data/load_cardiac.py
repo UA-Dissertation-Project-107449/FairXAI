@@ -15,6 +15,7 @@ Usage:
 
 import sys
 import logging
+import argparse
 from pathlib import Path
 import json
 import pandas as pd
@@ -24,28 +25,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 
 from fairxai.data.loaders import CardiacDataLoader, get_dataset_summary
 from fairxai.utils.config import load_yaml_config
-
-
-def setup_logging(log_dir: Path):
-    """Configure logging to file and console."""
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / 'data_loading.log'
-    
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler()
-        ]
-    )
-    
-    logging.info("="*60)
-    logging.info("Cardiac data loading")
-    logging.info("="*60)
+from fairxai.utils.logging_utils import setup_logging
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Load cardiac datasets")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose console output")
+    args = parser.parse_args()
+
     # Paths
     project_root = Path(__file__).parent.parent.parent
     pipeline_cfg = load_yaml_config(str(project_root / 'configs/pipelines/cardiac.yaml'))
@@ -56,7 +43,8 @@ def main():
     results_profiling = project_root / 'results/cardiac/profiling'
     
     # Setup
-    setup_logging(log_dir)
+    setup_logging(log_dir / 'data_loading.log', verbose=args.verbose)
+    logging.info("[PHASE] Cardiac data loading started")
     data_raw_cardiac.mkdir(parents=True, exist_ok=True)
     results_profiling.mkdir(parents=True, exist_ok=True)
     
@@ -68,7 +56,7 @@ def main():
     datasets = loader.load_all_cardiac_datasets(str(data_external))
     
     if not datasets:
-        logging.error("No datasets loaded. Exiting.")
+        logging.error("[ERROR] No datasets loaded. Exiting.")
         return
     
     # Process each dataset
@@ -97,7 +85,7 @@ def main():
             # Save to raw/cardiac
             output_file = data_raw_cardiac / f"{dataset_name}_standardized.csv"
             df_raw.to_csv(output_file, index=False)
-            logging.info(f"✓ Saved standardized dataset to: {output_file}")
+            logging.info(f"[SUCCESS] Saved standardized dataset to: {output_file}")
 
             # Quick stats
             logging.info(f"  Age groups: {df_raw['age_group'].value_counts().to_dict()}")
@@ -105,14 +93,14 @@ def main():
             logging.info(f"  Heart disease: {df_raw['heart_disease'].value_counts().to_dict()}")
 
         except Exception as e:
-            logging.error(f"✗ Failed to verify/save {dataset_name}: {e}")
+            logging.error(f"[ERROR] Failed to verify/save {dataset_name}: {e}")
             continue
     
     # Save summaries
     summary_file = results_profiling / 'dataset_summaries.json'
     with open(summary_file, 'w') as f:
         json.dump(summaries, f, indent=2)
-    logging.info(f"\n✓ Dataset summaries saved to: {summary_file}")
+    logging.info(f"\n[SUCCESS] Dataset summaries saved to: {summary_file}")
     
     # Generate combined report
     report = {
@@ -134,11 +122,9 @@ def main():
     report_file = results_profiling / 'loading_report.json'
     with open(report_file, 'w') as f:
         json.dump(report, f, indent=2)
-    logging.info(f"✓ Loading report saved to: {report_file}")
+    logging.info(f"[SUCCESS] Loading report saved to: {report_file}")
     
-    logging.info("\n" + "="*60)
-    logging.info("DATA LOADING COMPLETE")
-    logging.info("="*60)
+    logging.info("[PHASE] Data loading complete")
     logging.info(f"Standardized datasets saved to: {data_raw_cardiac}")
     logging.info(f"Profiling results saved to: {results_profiling}")
     

@@ -24,6 +24,7 @@ from fairxai.experiments.versioning import ExperimentVersioning
 from fairxai.data.schemas import available_sensitive, preferred_sensitive
 from fairxai.utils.config import load_yaml_config
 from fairxai.explainability.tabular import shap_explain_tabular, lime_explain_instance
+from fairxai.utils.logging_utils import setup_logging
 
 
 STAGE_MAP = {
@@ -36,16 +37,6 @@ STAGE_MAP = {
     'grid_search': 'in-processing',
     'threshold_optimizer': 'post-processing',
 }
-
-
-def setup_logging(verbose: bool = False):
-    """Configure logging."""
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
 
 
 def load_processed_data(
@@ -149,7 +140,8 @@ def save_experiment_xai(
     X_ref: pd.DataFrame,
     X_lime: pd.DataFrame,
     versioning: ExperimentVersioning,
-    dataset_name: str
+    dataset_name: str,
+    base_model: Optional[Any] = None
 ) -> None:
     xai_enabled = os.getenv('XAI_ENABLED', 'true').lower() == 'true'
     if not xai_enabled:
@@ -163,8 +155,36 @@ def save_experiment_xai(
     max_samples = int(os.getenv('XAI_MAX_SAMPLES', '200'))
     lime_instances = int(os.getenv('XAI_LIME_INSTANCES', '2'))
 
-    # Resolve model for SHAP
-    shap_model = model.model if hasattr(model, 'model') else model
+    def _mean_abs_shap_values(shap_values: Any) -> np.ndarray:
+        def _reduce(arr: np.ndarray) -> np.ndarray:
+            if arr.ndim == 3:
+                return np.mean(np.abs(arr), axis=(0, 2))
+            if arr.ndim == 2:
+                return np.mean(np.abs(arr), axis=0)
+            if arr.ndim == 1:
+                return np.abs(arr)
+            return np.mean(np.abs(arr), axis=0)
+
+        if isinstance(shap_values, list):
+            values = [_reduce(np.asarray(v)) for v in shap_values]
+            return np.mean(values, axis=0)
+
+        return _reduce(np.asarray(shap_values))
+
+    def _resolve_shap_model(raw_model: Any) -> Any:
+        candidate = raw_model
+        if hasattr(raw_model, 'predictors_'):
+            predictor = next((p for p in raw_model.predictors_ if hasattr(p, 'predict_proba') or hasattr(p, 'predict')), None)
+            if predictor is not None:
+                candidate = predictor
+        if hasattr(raw_model, 'model'):
+            candidate = raw_model.model
+
+        if hasattr(candidate, 'predict_proba'):
+            return lambda X: candidate.predict_proba(X)
+        if hasattr(candidate, 'predict'):
+            return lambda X: candidate.predict(X)
+        return candidate
 
     def _wrap_decision_function(df_model: Any):
         class _DecisionFunctionWrapper:
@@ -185,6 +205,10 @@ def save_experiment_xai(
     def _resolve_lime_model(raw_model: Any) -> Optional[Any]:
         if hasattr(raw_model, 'predict_proba'):
             return raw_model
+        if hasattr(raw_model, 'predictors_'):
+            predictor = next((p for p in raw_model.predictors_ if hasattr(p, 'predict_proba') or hasattr(p, 'decision_function')), None)
+            if predictor is not None:
+                return predictor
         if hasattr(raw_model, 'model') and hasattr(raw_model.model, 'predict_proba'):
             return raw_model.model
         if hasattr(raw_model, 'decision_function'):
@@ -194,10 +218,11 @@ def save_experiment_xai(
         return None
 
     try:
+        xai_model = base_model if base_model is not None else model
+        shap_model = _resolve_shap_model(xai_model)
         # Global SHAP (train reference)
         shap_global = shap_explain_tabular(shap_model, X_ref, max_samples=max_samples)
-        shap_vals_global = np.abs(shap_global.shap_values)
-        mean_abs_global = np.mean(shap_vals_global, axis=0)
+        mean_abs_global = _mean_abs_shap_values(shap_global.shap_values)
         shap_global_df = pd.DataFrame({
             'feature': shap_global.feature_names,
             'mean_abs_shap': mean_abs_global
@@ -207,8 +232,7 @@ def save_experiment_xai(
 
         # Local SHAP (test/reference for local context)
         shap_local = shap_explain_tabular(shap_model, X_lime, max_samples=max_samples)
-        shap_vals_local = np.abs(shap_local.shap_values)
-        mean_abs_local = np.mean(shap_vals_local, axis=0)
+        mean_abs_local = _mean_abs_shap_values(shap_local.shap_values)
         shap_local_df = pd.DataFrame({
             'feature': shap_local.feature_names,
             'mean_abs_shap': mean_abs_local
@@ -220,7 +244,7 @@ def save_experiment_xai(
 
     # LIME examples (requires predict_proba)
     try:
-        lime_model = _resolve_lime_model(model)
+        lime_model = _resolve_lime_model(xai_model)
         if lime_instances > 0 and lime_model is not None:
             lime_rows = X_lime.sample(n=min(lime_instances, len(X_lime)), random_state=42)
             lime_results = []
@@ -363,11 +387,11 @@ def run_single_experiment(
             'status': 'success'
         }
         
-        logger.info(f"✓ Experiment {exp_id} completed in {duration:.1f}s")
+        logger.info(f"[SUCCESS] Experiment {exp_id} completed in {duration:.1f}s")
         return results
         
     except Exception as e:
-        logger.error(f"✗ Experiment {exp_id} failed: {str(e)}")
+        logger.error(f"[ERROR] Experiment {exp_id} failed: {str(e)}")
         duration = (datetime.now() - start_time).total_seconds()
         
         return {
@@ -400,6 +424,10 @@ def run_single_split_experiment(
     
     # Apply mitigation technique
     mitigation = config['mitigation_technique']
+    stage = STAGE_MAP.get(mitigation)
+    if mitigation == 'baseline':
+        stage = 'baseline'
+    base_model = None
     sensitive_attr = next(
         (c for c in config['sensitive_attributes'] if c in splits['sensitive_train'].columns and c != 'age_group'),
         next((c for c in splits['sensitive_train'].columns), None)
@@ -423,11 +451,9 @@ def run_single_split_experiment(
             'predictions': {'y_pred': y_pred, 'y_proba': y_proba}
         }
     else:
-        stage = STAGE_MAP.get(mitigation)
         if stage is None:
             raise ValueError(f"Unknown mitigation technique: {mitigation}")
 
-        base_model = None
         if stage == 'post-processing':
             base_model = BaselineLogisticRegression(**config.get('model_params', {}))
             base_model.train(splits['X_train'], splits['y_train'])
@@ -475,8 +501,18 @@ def run_single_split_experiment(
     model_for_xai = result.get('model') if isinstance(result, dict) else None
     if mitigation == 'baseline':
         model_for_xai = model
+    if stage == 'post-processing' and base_model is not None:
+        model_for_xai = base_model
     if model_for_xai is not None:
-        save_experiment_xai(exp_id, model_for_xai, splits['X_train'], splits['X_test'], versioning, config['dataset'])
+        save_experiment_xai(
+            exp_id,
+            model_for_xai,
+            splits['X_train'],
+            splits['X_test'],
+            versioning,
+            config['dataset'],
+            base_model=base_model
+        )
     
     logger.info(f"  Accuracy: {result['test_metrics']['accuracy']:.3f}")
     logger.info(f"  Recall: {result['test_metrics']['recall']:.3f}")
@@ -676,7 +712,7 @@ def main():
     parser.add_argument(
         '--n-jobs',
         type=int,
-        default=1,
+        default=None,
         help='Number of parallel jobs (-1 for all cores)'
     )
     parser.add_argument(
@@ -692,12 +728,14 @@ def main():
     )
     
     args = parser.parse_args()
-    setup_logging(args.verbose)
+    log_dir = Path(__file__).parent.parent.parent / 'logs/experiments/latest_run'
+    setup_logging(log_dir / 'combinatorial_experiments.log', verbose=args.verbose)
     logger = logging.getLogger(__name__)
     
     logger.info("="*80)
     logger.info("COMBINATORIAL FAIRNESS EXPERIMENTS")
     logger.info("="*80)
+    logger.info("[PHASE] Combinatorial experiments started")
     
     # Load configuration
     config_path = Path(args.config)
@@ -707,6 +745,9 @@ def main():
     
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
+
+    if args.n_jobs is None:
+        args.n_jobs = int(config.get('n_jobs', 1))
     
     logger.info(f"Loaded configuration from: {config_path}")
 
@@ -794,6 +835,7 @@ def main():
     logger.info(f"  Successful: {n_success}")
     logger.info(f"  Failed: {n_failed}")
     logger.info(f"\nResults saved to: {versioning.latest_dir}")
+    logger.info("[PHASE] Combinatorial experiments complete")
 
     # Aggregate dataset-level SHAP summaries (global/local)
     xai_root = versioning.latest_dir / 'xai'

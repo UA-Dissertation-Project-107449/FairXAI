@@ -14,6 +14,7 @@ for quick summary statistics.
 
 import sys
 import logging
+import argparse
 from pathlib import Path
 import json
 import pandas as pd
@@ -24,21 +25,7 @@ from typing import Dict, List, Tuple, Optional
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 
 from fairxai.data.loaders import load_standardized_raw
-
-
-def setup_logging(log_dir: Path):
-    """Setup logging configuration."""
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / 'age_binning_analysis.log'
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file, mode='w'),
-            logging.StreamHandler()
-        ]
-    )
-    logging.info("Age binning analysis")
+from fairxai.utils.logging_utils import setup_logging
 
 
 def create_binning_strategy(
@@ -125,7 +112,6 @@ def sensitive_attribute_distribution(
         df: DataFrame with binned data
         bin_col: Column with age bins
         sensitive_col: Sensitive attribute column (e.g., 'sex')
-    
     Returns:
         DataFrame with percentages per bin
     """
@@ -161,10 +147,10 @@ def compute_fairness_metrics(
     """
     # Group size statistics
     group_counts = df[bin_col].value_counts()
-    
+
     # Positive rate per group (statistical parity)
     positive_rates = df.groupby(bin_col, observed=True)[target_col].mean()
-    
+
     metrics = {
         'n_groups': len(group_counts),
         'min_group_size': int(group_counts.min()),
@@ -176,7 +162,7 @@ def compute_fairness_metrics(
         'group_sizes': group_counts.to_dict(),
         'positive_rates_by_group': positive_rates.to_dict()
     }
-    
+
     return metrics
 
 
@@ -263,7 +249,6 @@ def compare_strategies(
         })
     
     df = pd.DataFrame(comparison_data)
-    
     if by_dataset:
         df = df.sort_values(['dataset', 'strategy'])
     else:
@@ -313,11 +298,16 @@ def generate_summary_report(
 
 def main():
     """Main execution for standalone script."""
+    parser = argparse.ArgumentParser(description='Age binning analysis (legacy)')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose console output')
+    args = parser.parse_args()
+
     root = Path(__file__).parent.parent.parent
     results_dir = root / 'results/cardiac/experiments/binning'
-    logs_dir = root / 'logs/cardiac'
+    logs_dir = root / 'logs/experiments/latest_run'
 
-    setup_logging(logs_dir)
+    setup_logging(logs_dir / 'age_binning_analysis.log', verbose=args.verbose)
+    logging.info("[PHASE] Age binning analysis started")
     results_dir.mkdir(parents=True, exist_ok=True)
 
     datasets = ['cleveland', 'kaggle_heart']
@@ -367,10 +357,11 @@ def main():
     report_file = results_dir / 'age_binning_report.md'
     generate_summary_report(all_results, report_file)
     
-    logging.info(f"\n✓ Analysis complete. Results saved to: {results_dir}")
+    logging.info(f"\n[SUCCESS] Analysis complete. Results saved to: {results_dir}")
     logging.info(f"  - Comparison: quick_comparison.csv")
     logging.info(f"  - Full results: age_binning_summary.json")
     logging.info(f"  - Report: age_binning_report.md")
+    logging.info("[PHASE] Age binning analysis complete")
 
 
 if __name__ == '__main__':

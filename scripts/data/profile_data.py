@@ -15,6 +15,7 @@ Usage:
 
 import sys
 import logging
+import argparse
 from pathlib import Path
 import json
 import pandas as pd
@@ -23,29 +24,14 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 
 from fairxai.data.profilers import DataProfiler, compare_datasets
-
-
-def setup_logging(log_dir: Path):
-    """Configure logging to file and console."""
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / 'data_profiling.log'
-    
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file, mode='w'),
-            logging.StreamHandler()
-        ]
-    )
-    
-    logging.info("="*60)
-    logging.info("CARDIAC DATA PROFILING & FAIRNESS ASSESSMENT")
-    logging.info("Stage: PRE-PROCESSING (Raw Data Analysis)")
-    logging.info("="*60)
+from fairxai.utils.logging_utils import setup_logging
 
 
 def main():
+    parser = argparse.ArgumentParser(description='Profile cardiac datasets')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose console output')
+    args = parser.parse_args()
+
     # Paths
     project_root = Path(__file__).parent.parent.parent
     data_raw_cardiac = project_root / 'data/raw/cardiac'
@@ -53,7 +39,8 @@ def main():
     results_profiling = project_root / 'results/cardiac/profiling'
     
     # Setup
-    setup_logging(log_dir)
+    setup_logging(log_dir / 'data_profiling.log', verbose=args.verbose)
+    logging.info("[PHASE] Data profiling started")
     results_profiling.mkdir(parents=True, exist_ok=True)
     
     # Initialize profiler
@@ -123,14 +110,14 @@ def main():
             for col, count in profile['missing_value_analysis']['columns_with_missing'].items():
                 logging.warning(f"    {col}: {count} missing")
         else:
-            logging.info(f"  ✓ No missing values")
+            logging.info(f"  [SUCCESS] No missing values")
         
         # Save individual profile
         profile_file = results_profiling / f'{dataset_name}_data_profile.json'
         with open(profile_file, 'w') as f:
             # Convert numpy types to native Python for JSON serialization
             json.dump(profile, f, indent=2, default=str)
-        logging.info(f"\n✓ Profile saved to: {profile_file}")
+        logging.info(f"\n[SUCCESS] Profile saved to: {profile_file}")
     
     # Compare datasets
     logging.info(f"\n{'='*60}")
@@ -151,7 +138,7 @@ def main():
     comparison_file = results_profiling / 'dataset_comparison.json'
     with open(comparison_file, 'w') as f:
         json.dump(comparison, f, indent=2)
-    logging.info(f"\n✓ Comparison saved to: {comparison_file}")
+    logging.info(f"\n[SUCCESS] Comparison saved to: {comparison_file}")
     
     # Generate summary report
     logging.info(f"\n{'='*60}")
@@ -168,23 +155,23 @@ def main():
         # Check representation balance
         for attr, balance in profile['representation_balance'].items():
             if balance['size_ratio'] and balance['size_ratio'] > 3.0:
-                issues.append(f"❌ High representation imbalance in {attr} (ratio: {balance['size_ratio']:.1f}x)")
+                issues.append(f"[ERROR] High representation imbalance in {attr} (ratio: {balance['size_ratio']:.1f}x)")
         
         # Check label imbalance
         for attr, imbalance in profile['label_imbalance_by_group'].items():
             spd = imbalance['statistical_parity_difference']
             if spd['max_difference'] > 0.15:  # >15% difference
-                issues.append(f"❌ Significant statistical parity violation in {attr} (diff: {spd['max_difference']:.1%})")
+                issues.append(f"[ERROR] Significant statistical parity violation in {attr} (diff: {spd['max_difference']:.1%})")
         
         if issues:
             logging.warning(f"  Potential fairness issues detected:")
             for issue in issues:
                 logging.warning(f"    {issue}")
         else:
-            logging.info(f"  ✓ No major fairness issues detected in raw data")
+            logging.info(f"  [SUCCESS] No major fairness issues detected in raw data")
     
     logging.info(f"\n{'='*60}")
-    logging.info("DATA PROFILING COMPLETE")
+    logging.info("[PHASE] Data profiling complete")
     logging.info(f"{'='*60}")
     logging.info(f"Profiles saved to: {results_profiling}")
     

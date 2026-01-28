@@ -10,6 +10,7 @@ RUN_AGE_BINNING=${RUN_AGE_BINNING:-true}
 RUN_MITIGATION=${RUN_MITIGATION:-true}
 RUN_COMBINATORIAL=${RUN_COMBINATORIAL:-true}
 RUN_COMPARISON=${RUN_COMPARISON:-true}
+VERBOSE=${VERBOSE:-false}
 AGE_BINNING_CONFIG="$ROOT_DIR/configs/experiments/age_binning.yaml"
 MITIGATION_CONFIG="$ROOT_DIR/configs/experiments/mitigation.yaml"
 COMBINATORIAL_CONFIG="$ROOT_DIR/configs/experiments/combinatorial.yaml"
@@ -24,28 +25,33 @@ echo "Combinatorial: $RUN_COMBINATORIAL"
 echo "Comparison: $RUN_COMPARISON"
 echo ""
 
-echo "[1/8] Loading cardiac datasets (standardization + profiling)"
-python3 "$ROOT_DIR/scripts/data/load_cardiac.py"
+VERBOSE_FLAG=""
+if [[ "$VERBOSE" == "true" ]]; then
+    VERBOSE_FLAG="-v"
+fi
+
+echo "[PHASE 1/8] Loading cardiac datasets (standardization + profiling)"
+python3 "$ROOT_DIR/scripts/data/load_cardiac.py" $VERBOSE_FLAG
 echo ""
 
-echo "[2/8] Preprocessing datasets (split + scale + fairness profiles)"
-python3 "$ROOT_DIR/scripts/data/preprocess_cardiac.py"
+echo "[PHASE 2/8] Preprocessing datasets (split + scale + fairness profiles)"
+python3 "$ROOT_DIR/scripts/data/preprocess_cardiac.py" $VERBOSE_FLAG
 echo ""
 
-echo "[3/8] Training baseline model(s)"
-python3 "$ROOT_DIR/scripts/models/train_baseline.py"
+echo "[PHASE 3/8] Training baseline model(s)"
+python3 "$ROOT_DIR/scripts/models/train_baseline.py" $VERBOSE_FLAG
 echo ""
 
-echo "[4/8] Assessing post-prediction fairness"
-python3 "$ROOT_DIR/scripts/fairness/assess_predictions.py"
+echo "[PHASE 4/8] Assessing post-prediction fairness"
+python3 "$ROOT_DIR/scripts/fairness/assess_predictions.py" $VERBOSE_FLAG
 echo ""
 
 # Experiment stage
 ARCHIVE_EXPERIMENTS=true
 if [[ "$RUN_AGE_BINNING" == "true" ]]; then
-    echo "[5/8] Age binning strategies analysis"
+    echo "[PHASE 5/8] Age binning strategies analysis"
     EXPERIMENT_RUN_MODE=full ARCHIVE_PREVIOUS=$ARCHIVE_EXPERIMENTS python3 "$ROOT_DIR/scripts/experiments/run_age_binning_analysis.py" \
-        --config "$AGE_BINNING_CONFIG"
+        --config "$AGE_BINNING_CONFIG" $VERBOSE_FLAG
     ARCHIVE_EXPERIMENTS=false
     echo ""
 else
@@ -53,9 +59,9 @@ else
 fi
 
 if [[ "$RUN_MITIGATION" == "true" ]]; then
-    echo "[6/8] Mitigation techniques comparison"
+    echo "[PHASE 6/8] Mitigation techniques comparison"
     EXPERIMENT_RUN_MODE=full ARCHIVE_PREVIOUS=$ARCHIVE_EXPERIMENTS python3 "$ROOT_DIR/scripts/experiments/run_mitigation_comparison.py" \
-        --config "$MITIGATION_CONFIG"
+        --config "$MITIGATION_CONFIG" $VERBOSE_FLAG
     ARCHIVE_EXPERIMENTS=false
     echo ""
 else
@@ -63,17 +69,17 @@ else
 fi
 
 if [[ "$RUN_COMBINATORIAL" == "true" ]]; then
-    echo "[7/8] Combinatorial experiments"
+    echo "[PHASE 7/8] Combinatorial experiments"
     python3 "$ROOT_DIR/scripts/experiments/run_combinatorial_experiments.py" \
-        --config "$COMBINATORIAL_CONFIG" --archive-previous
+        --config "$COMBINATORIAL_CONFIG" --archive-previous $VERBOSE_FLAG
     echo ""
 else
     echo "[7/8] Combinatorial experiments SKIPPED"
 fi
 
 if [[ "$RUN_COMPARISON" == "true" ]]; then
-    echo "[8/8] Experiment comparison"
-    python3 "$ROOT_DIR/scripts/analysis/compare_experiments.py"
+    echo "[PHASE 8/8] Experiment comparison"
+    python3 "$ROOT_DIR/scripts/analysis/compare_experiments.py" $VERBOSE_FLAG
     echo ""
 else
     echo "[8/8] Experiment comparison SKIPPED"

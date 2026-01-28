@@ -5,7 +5,7 @@ inputs/output formats consistent so pipeline callers can swap explainers.
 """
 
 from dataclasses import dataclass
-from typing import Any, Iterable, List, Optional
+from typing import Any, Iterable, List, Optional, Union
 import numpy as np
 import pandas as pd
 
@@ -90,11 +90,20 @@ def lime_explain_instance(
         exp_scores = np.exp(scores - np.max(scores, axis=1, keepdims=True))
         return exp_scores / np.sum(exp_scores, axis=1, keepdims=True)
 
+    def _to_frame(X: Union[np.ndarray, pd.DataFrame]) -> pd.DataFrame:
+        if isinstance(X, pd.DataFrame):
+            return X
+        try:
+            return pd.DataFrame(X, columns=list(feature_names))
+        except Exception:
+            return pd.DataFrame(X)
+
     def _predict_proba(X: np.ndarray) -> np.ndarray:
+        X_df = _to_frame(X)
         if hasattr(model, 'predict_proba'):
-            return _to_proba_matrix(model.predict_proba(X))
+            return _to_proba_matrix(model.predict_proba(X_df))
         if hasattr(model, 'decision_function'):
-            raw = model.decision_function(X)
+            raw = model.decision_function(X_df)
             raw = np.asarray(raw)
             if raw.ndim == 1:
                 prob_pos = 1.0 / (1.0 + np.exp(-raw))

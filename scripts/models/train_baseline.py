@@ -24,31 +24,14 @@ from datetime import datetime
 from typing import Optional
 import pandas as pd
 import numpy as np
+import argparse
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 
 from fairxai.models.baseline import BaselineLogisticRegression, generate_predictions_with_metadata
 from fairxai.explainability.tabular import shap_explain_tabular, lime_explain_instance
-
-
-def setup_logging(log_dir: Path):
-    """Configure logging to file and console."""
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / 'training_baseline.log'
-    
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file, mode='w'),
-            logging.StreamHandler()
-        ]
-    )
-    
-    logging.info("="*60)
-    logging.info("BASELINE MODEL TRAINING - LOGISTIC REGRESSION")
-    logging.info("="*60)
+from fairxai.utils.logging_utils import setup_logging
 
 
 def save_xai_outputs(
@@ -83,7 +66,7 @@ def save_xai_outputs(
             }).sort_values('mean_abs_shap', ascending=False)
             shap_global_file = output_dir / f"{dataset_name}_shap_global.csv"
             shap_global_summary.to_csv(shap_global_file, index=False)
-            logging.info(f"✓ SHAP global summary saved: {shap_global_file}")
+            logging.info(f"[SUCCESS] SHAP global summary saved: {shap_global_file}")
         except Exception as exc:
             logging.warning(f"Global SHAP failed for {dataset_name}: {exc}")
 
@@ -141,7 +124,7 @@ def save_xai_outputs(
             lime_df = pd.DataFrame(lime_results)
             lime_file = output_dir / f"{dataset_name}_lime_examples.csv"
             lime_df.to_csv(lime_file, index=False)
-            logging.info(f"✓ LIME examples saved: {lime_file}")
+            logging.info(f"[SUCCESS] LIME examples saved: {lime_file}")
         elif lime_instances > 0:
             logging.warning(f"LIME skipped for {dataset_name}: no predict_proba/decision_function")
     except Exception as exc:
@@ -173,6 +156,10 @@ def archive_latest_run(base_dir: Path, enabled: bool) -> None:
 
 
 def main():
+    parser = argparse.ArgumentParser(description='Train baseline models')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose console output')
+    args = parser.parse_args()
+
     # Paths
     project_root = Path(__file__).parent.parent.parent
     from fairxai.utils.config import load_yaml_config
@@ -188,7 +175,8 @@ def main():
     baseline_root = project_root / 'results/cardiac/baseline'
     
     # Setup
-    setup_logging(log_dir)
+    setup_logging(log_dir / 'training_baseline.log', verbose=args.verbose)
+    logging.info("[PHASE] Baseline training started")
     archive_latest_run(baseline_root, enabled=(os.getenv('ARCHIVE_BASELINE', 'true').lower() == 'true'))
 
     models_dir.mkdir(parents=True, exist_ok=True)
@@ -348,7 +336,7 @@ def main():
         train_predictions.to_csv(train_pred_file, index=False)
         test_predictions.to_csv(test_pred_file, index=False)
         
-        logging.info(f"\n✓ Predictions saved:")
+        logging.info(f"\n[SUCCESS] Predictions saved:")
         logging.info(f"  Train: {train_pred_file}")
         logging.info(f"  Test: {test_pred_file}")
         
@@ -378,7 +366,7 @@ def main():
         json.dump(results_summary, f, indent=2, default=str)
     
     logging.info(f"\n{'='*60}")
-    logging.info("TRAINING COMPLETE")
+    logging.info("[PHASE] Baseline training complete")
     logging.info(f"{'='*60}")
     logging.info(f"Models saved to: {models_dir}")
     logging.info(f"Results saved to: {experiments_dir}")

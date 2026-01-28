@@ -11,6 +11,7 @@ import pandas as pd
 import numpy as np
 import json
 import logging
+import argparse
 from typing import Dict, List
 
 # Add src to path
@@ -19,25 +20,7 @@ sys.path.insert(0, str(project_root / 'src'))
 
 from fairxai.fairness.metrics import FairnessMetrics, summarize_fairness_results
 from fairxai.utils.config import load_yaml_config
-
-
-def setup_logging(log_dir: Path):
-    """Setup logging configuration."""
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / 'fairness_assessment.log'
-    
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler()
-        ]
-    )
-    
-    logging.info("="*60)
-    logging.info("Post-prediction fairness assessment")
-    logging.info("="*60)
+from fairxai.utils.logging_utils import setup_logging
 
 
 def decode_sensitive_attributes(df: pd.DataFrame) -> pd.DataFrame:
@@ -186,7 +169,7 @@ def assess_dataset_fairness(
         # Convert numpy types for JSON serialization
         json.dump(results, f, indent=2, default=lambda o: float(o) if isinstance(o, (np.integer, np.floating)) else str(o))
     
-    logging.info(f"\n✓ Fairness assessment saved to: {output_file}")
+    logging.info(f"\n[SUCCESS] Fairness assessment saved to: {output_file}")
     
     # Create summary table
     summary_train = summarize_fairness_results(train_metrics)
@@ -199,7 +182,7 @@ def assess_dataset_fairness(
     summary_file = output_dir / f'{dataset_name}_fairness_summary.csv'
     summary.to_csv(summary_file, index=False)
     
-    logging.info(f"✓ Summary table saved to: {summary_file}")
+    logging.info(f"[SUCCESS] Summary table saved to: {summary_file}")
     
     return results
 
@@ -212,7 +195,7 @@ def log_fairness_metrics(metrics: Dict, split_name: str):
         logging.info(f"\n  {attr.upper()} - Group Fairness:")
         
         for metric_name, metric_data in attr_metrics.items():
-            is_fair = "✓" if metric_data.get('is_fair', False) else "✗"
+            is_fair = "[SUCCESS]" if metric_data.get('is_fair', False) else "[ERROR]"
             
             if metric_name == 'demographic_parity':
                 diff = metric_data['max_difference']
@@ -234,7 +217,7 @@ def log_fairness_metrics(metrics: Dict, split_name: str):
     # Calibration
     for attr, calib_data in metrics.get('calibration', {}).items():
         logging.info(f"\n  {attr.upper()} - Calibration:")
-        is_fair = "✓" if calib_data.get('is_fair', False) else "✗"
+        is_fair = "[SUCCESS]" if calib_data.get('is_fair', False) else "[ERROR]"
         max_ece_diff = calib_data['max_ece_difference']
         logging.info(f"    {is_fair} Max ECE difference: {max_ece_diff:.4f}")
         
@@ -287,6 +270,10 @@ def compare_fairness(train_metrics: Dict, test_metrics: Dict) -> Dict:
 
 def main():
     """Main execution function."""
+    parser = argparse.ArgumentParser(description='Assess post-prediction fairness')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose console output')
+    args = parser.parse_args()
+
     project_root = Path(__file__).parent.parent.parent
     pipeline_cfg = load_yaml_config(str(project_root / 'configs/pipelines/cardiac.yaml'))
     experiments_dir = project_root / pipeline_cfg['paths']['experiments_dir']
@@ -294,7 +281,8 @@ def main():
     log_dir = project_root / 'logs/cardiac'
     
     # Setup
-    setup_logging(log_dir)
+    setup_logging(log_dir / 'fairness_assessment.log', verbose=args.verbose)
+    logging.info("[PHASE] Fairness assessment started")
     results_dir.mkdir(parents=True, exist_ok=True)
     
     # Initialize fairness calculator
@@ -333,9 +321,7 @@ def main():
             )
             all_results[dataset_name] = results
         except Exception as e:
-            logging.error(f"Failed to assess {dataset_name}: {e}")
-            import traceback
-            traceback.print_exc()
+            logging.exception(f"[ERROR] Failed to assess {dataset_name}: {e}")
             continue
     
     # Save combined results
@@ -344,7 +330,7 @@ def main():
         json.dump(all_results, f, indent=2, default=lambda o: float(o) if isinstance(o, (np.integer, np.floating)) else str(o))
     
     logging.info(f"\n{'='*60}")
-    logging.info("Fairness assessment complete")
+    logging.info("[PHASE] Fairness assessment complete")
     logging.info(f"{'='*60}")
     logging.info(f"Results saved to: {results_dir}")
     logging.info(f"Combined report: {combined_file}")

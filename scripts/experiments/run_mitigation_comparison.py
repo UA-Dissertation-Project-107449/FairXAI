@@ -35,25 +35,7 @@ from fairxai.models.baseline import BaselineLogisticRegression, generate_predict
 from fairxai.fairness.metrics import FairnessMetrics
 from fairxai.fairness.mitigation import MitigationEngine
 from fairxai.utils.config import load_yaml_config
-
-
-def setup_logging(log_dir: Path, timestamp: str):
-    """Configure logging to file and console."""
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / f'mitigation_comparison_{timestamp}.log'
-    
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file, mode='w'),
-            logging.StreamHandler()
-        ]
-    )
-    
-    logging.info("="*80)
-    logging.info("FAIRNESS MITIGATION COMPARISON EXPERIMENT")
-    logging.info("="*80)
+from fairxai.utils.logging_utils import setup_logging
 
 
 def archive_latest_run(base_dir: Path, enabled: bool, logger: logging.Logger):
@@ -274,12 +256,12 @@ def apply_mitigation_techniques(
                 'metadata': result['metadata']
             })
             
-            logging.info(f"✓ {technique_name} complete")
+            logging.info(f"[SUCCESS] {technique_name} complete")
             logging.info(f"  Accuracy: {result['test_metrics']['accuracy']:.3f}")
             logging.info(f"  Recall: {result['test_metrics']['recall']:.3f}")
             
         except Exception as e:
-            logging.error(f"✗ Failed to apply {technique_name}: {e}")
+            logging.error(f"[ERROR] Failed to apply {technique_name}: {e}")
             logging.exception(e)
     
     return results
@@ -371,6 +353,7 @@ def main():
     parser.add_argument('--archive-previous', action='store_true',
                        default=os.getenv('ARCHIVE_PREVIOUS', 'true').lower() == 'true',
                        help='Archive previous latest_run (full runs only)')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose console output')
     args = parser.parse_args()
     
     # Paths
@@ -413,9 +396,10 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Setup logging
-    log_dir = project_root / 'logs/experiments'
-    setup_logging(log_dir, timestamp)
+    log_dir = project_root / 'logs/experiments/latest_run'
+    setup_logging(log_dir / 'mitigation_comparison.log', verbose=args.verbose)
     logger = logging.getLogger(__name__)
+    logging.info("[PHASE] Mitigation comparison started")
 
     if args.run_mode == 'partial':
         archive_latest_run(base_results, enabled=True, logger=logger)
@@ -513,11 +497,11 @@ def main():
     json_file = output_dir / f'mitigation_comparison_{timestamp}.json'
     
     comparison_df.to_csv(csv_file, index=False)
-    logging.info(f"\n✓ Saved CSV: {csv_file}")
+    logging.info(f"\n[SUCCESS] Saved CSV: {csv_file}")
     
     with open(json_file, 'w') as f:
         json.dump(all_results, f, indent=2, default=str)
-    logging.info(f"✓ Saved JSON: {json_file}")
+    logging.info(f"[SUCCESS] Saved JSON: {json_file}")
     
     # Print summary
     logging.info(f"\n{'='*80}")
@@ -534,6 +518,7 @@ def main():
     logging.info(f"\n{'='*80}")
     logging.info("EXPERIMENT COMPLETE")
     logging.info(f"{'='*80}")
+    logging.info("[PHASE] Mitigation comparison complete")
 
 
 if __name__ == '__main__':

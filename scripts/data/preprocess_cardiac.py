@@ -29,6 +29,7 @@ from fairxai.data.profilers import DataProfiler
 from fairxai.data.schemas import available_sensitive, preferred_sensitive
 from fairxai.utils.config import load_yaml_config
 from fairxai.experiments.age_binning import create_binning_strategy, apply_binning
+from fairxai.utils.logging_utils import setup_logging
 
 
 def _stringify(obj):
@@ -74,25 +75,6 @@ def _apply_schema_rules(df: pd.DataFrame, schema_cfg: dict, dataset_name: str) -
     return df
 
 
-def setup_logging(log_dir: Path):
-    """Configure logging to file and console."""
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / 'preprocessing.log'
-    
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file, mode='w'),
-            logging.StreamHandler()
-        ]
-    )
-    
-    logging.info("="*60)
-    logging.info("Cardiac data preprocessing")
-    logging.info("="*60)
-
-
 def main():
     # Parse arguments
     parser = argparse.ArgumentParser(description='Preprocess cardiac datasets')
@@ -108,6 +90,7 @@ def main():
         action='store_true',
         help='Process with all binning strategies'
     )
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose console output')
     args = parser.parse_args()
     
     # Paths
@@ -119,7 +102,8 @@ def main():
     results_fairness = project_root / 'results/cardiac/profiling/fairness'
     
     # Setup
-    setup_logging(log_dir)
+    setup_logging(log_dir / 'preprocessing.log', verbose=args.verbose)
+    logging.info("[PHASE] Preprocessing started")
     results_fairness.mkdir(parents=True, exist_ok=True)
     
     # Configuration
@@ -212,7 +196,7 @@ def main():
             missing_analysis = preprocessor.analyze_missing_values(df)
             
             if missing_analysis['total_missing'] == 0:
-                logging.info("✓ No missing values detected")
+                logging.info("[SUCCESS] No missing values detected")
             else:
                 logging.warning(f"⚠️  Found {missing_analysis['total_missing']} missing values")
                 for col, info in missing_analysis['missing_by_column'].items():
@@ -272,8 +256,8 @@ def main():
             train_processed.to_csv(train_file, index=False)
             test_processed.to_csv(test_file, index=False)
             
-            logging.info(f"✓ Train set: {train_file}")
-            logging.info(f"✓ Test set: {test_file}")
+            logging.info(f"[SUCCESS] Train set: {train_file}")
+            logging.info(f"[SUCCESS] Test set: {test_file}")
             
             # Save scaled feature matrices (for modeling) and persist sensitive columns
             train_scaled_file = data_processed_cardiac / f'{dataset_name}_train_scaled.csv'
@@ -298,8 +282,8 @@ def main():
             train_scaled.to_csv(train_scaled_file, index=False)
             test_scaled.to_csv(test_scaled_file, index=False)
             
-            logging.info(f"✓ Train scaled: {train_scaled_file}")
-            logging.info(f"✓ Test scaled: {test_scaled_file}")
+            logging.info(f"[SUCCESS] Train scaled: {train_scaled_file}")
+            logging.info(f"[SUCCESS] Test scaled: {test_scaled_file}")
             
             # Step 5: Post-preprocessing fairness check
             logging.info(f"\n--- Post-Preprocessing Fairness Assessment ---")
@@ -334,7 +318,7 @@ def main():
             with open(test_fairness_file, 'w') as f:
                 json.dump(test_profile, f, indent=2, default=str)
             
-            logging.info("\n✓ Fairness profiles saved")
+            logging.info("\n[SUCCESS] Fairness profiles saved")
             
             # Save preprocessing summary (stringify to avoid Interval keys)
             preprocessing_summary[dataset_name] = _stringify({
@@ -358,11 +342,13 @@ def main():
             with open(summary_file, 'w') as f:
                 json.dump(preprocessing_summary, f, indent=2, default=str)
             
-            logging.info(f"\n{'='*60}")
-            logging.info(f"Preprocessing complete for {dataset_name} ({binning_strategy or 'default'})")
-            logging.info(f"{'='*60}")
+                logging.info(f"\n{'='*60}")
+                logging.info(f"[SUCCESS] Preprocessing complete for {dataset_name} ({binning_strategy or 'default'})")
+                logging.info(f"{'='*60}")
             logging.info(f"Processed datasets saved to: {data_processed_cardiac}")
             logging.info(f"Fairness assessments saved to: {results_fairness}")
+
+            logging.info("[PHASE] Preprocessing complete")
     
 
 if __name__ == "__main__":
