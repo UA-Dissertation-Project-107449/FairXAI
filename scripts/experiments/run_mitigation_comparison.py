@@ -70,8 +70,10 @@ def archive_latest_run(base_dir: Path, enabled: bool, logger: logging.Logger):
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     archive_path = archives_dir / f'run_{timestamp}'
     archive_path.parent.mkdir(parents=True, exist_ok=True)
-    archive_path.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(latest_dir, archive_path / 'latest_run', dirs_exist_ok=True)
+    if archive_path.exists():
+        shutil.rmtree(archive_path)
+    shutil.move(str(latest_dir), str(archive_path))
+    latest_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"Archived previous latest_run to: {archive_path}")
 
 
@@ -398,15 +400,15 @@ def main():
     datasets = args.datasets if args.datasets else experiment_cfg['data']['datasets']
     
     # Determine output directory
-    base_results = project_root / 'results/cardiac/experiments/full'
+    if args.run_mode == 'partial':
+        base_results = project_root / 'results/cardiac/experiments/partial'
+    else:
+        base_results = project_root / 'results/cardiac/experiments/full'
     latest_dir = base_results / 'latest_run'
     if args.output_dir:
         output_dir = Path(args.output_dir)
     else:
-        if args.run_mode == 'partial':
-            output_dir = project_root / 'results/cardiac/experiments/partial' / 'mitigation' / timestamp
-        else:
-            output_dir = latest_dir / 'mitigation'
+        output_dir = latest_dir / 'mitigation'
     
     output_dir.mkdir(parents=True, exist_ok=True)
     
@@ -415,7 +417,9 @@ def main():
     setup_logging(log_dir, timestamp)
     logger = logging.getLogger(__name__)
 
-    if args.run_mode == 'full':
+    if args.run_mode == 'partial':
+        archive_latest_run(base_results, enabled=True, logger=logger)
+    else:
         archive_latest_run(base_results, enabled=args.archive_previous, logger=logger)
     
     logging.info(f"Configuration:")

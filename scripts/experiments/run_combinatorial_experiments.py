@@ -155,8 +155,11 @@ def save_experiment_xai(
     if not xai_enabled:
         return
 
-    xai_dir = versioning.latest_dir / 'xai' / dataset_name
-    xai_dir.mkdir(parents=True, exist_ok=True)
+    dataset_xai_dir = versioning.latest_dir / 'xai' / dataset_name
+    shap_dir = dataset_xai_dir / 'shap'
+    lime_dir = dataset_xai_dir / 'lime'
+    shap_dir.mkdir(parents=True, exist_ok=True)
+    lime_dir.mkdir(parents=True, exist_ok=True)
     max_samples = int(os.getenv('XAI_MAX_SAMPLES', '200'))
     lime_instances = int(os.getenv('XAI_LIME_INSTANCES', '2'))
 
@@ -199,7 +202,7 @@ def save_experiment_xai(
             'feature': shap_global.feature_names,
             'mean_abs_shap': mean_abs_global
         }).sort_values('mean_abs_shap', ascending=False)
-        shap_global_file = xai_dir / f"{exp_id}_shap_global.csv"
+        shap_global_file = shap_dir / f"{exp_id}_shap_global.csv"
         shap_global_df.to_csv(shap_global_file, index=False)
 
         # Local SHAP (test/reference for local context)
@@ -210,7 +213,7 @@ def save_experiment_xai(
             'feature': shap_local.feature_names,
             'mean_abs_shap': mean_abs_local
         }).sort_values('mean_abs_shap', ascending=False)
-        shap_local_file = xai_dir / f"{exp_id}_shap_local.csv"
+        shap_local_file = shap_dir / f"{exp_id}_shap_local.csv"
         shap_local_df.to_csv(shap_local_file, index=False)
     except Exception as exc:
         logging.getLogger(__name__).warning(f"SHAP failed for {exp_id}: {exc}")
@@ -240,7 +243,7 @@ def save_experiment_xai(
                         'local_pred': exp.local_pred
                     })
             lime_df = pd.DataFrame(lime_results)
-            lime_file = xai_dir / f"{exp_id}_lime_examples.csv"
+            lime_file = lime_dir / f"{exp_id}_lime_examples.csv"
             lime_df.to_csv(lime_file, index=False)
         elif lime_instances > 0:
             logging.getLogger(__name__).warning(f"LIME skipped for {exp_id}: no predict_proba/decision_function")
@@ -684,6 +687,7 @@ def main():
     parser.add_argument(
         '--archive-previous',
         action='store_true',
+        default=os.getenv('ARCHIVE_PREVIOUS', 'true').lower() == 'true',
         help='Archive previous run before starting'
     )
     
@@ -794,10 +798,10 @@ def main():
     # Aggregate dataset-level SHAP summaries (global/local)
     xai_root = versioning.latest_dir / 'xai'
     for dataset in config['datasets']:
-        dataset_xai_dir = xai_root / dataset
-        if dataset_xai_dir.exists():
-            aggregate_dataset_shap(dataset_xai_dir, 'global')
-            aggregate_dataset_shap(dataset_xai_dir, 'local')
+        shap_dir = xai_root / dataset / 'shap'
+        if shap_dir.exists():
+            aggregate_dataset_shap(shap_dir, 'global')
+            aggregate_dataset_shap(shap_dir, 'local')
 
 
 if __name__ == '__main__':

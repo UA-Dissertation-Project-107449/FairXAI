@@ -220,7 +220,8 @@ class ExperimentVersioning:
         """
         # Check if latest_run has any results
         results_dir = self.latest_dir / "results"
-        if not results_dir.exists() or not list(results_dir.glob("*.json")):
+        has_results = results_dir.exists() and any(results_dir.rglob("*.json"))
+        if not has_results:
             self.logger.info("No previous run to archive")
             return None
         
@@ -228,18 +229,18 @@ class ExperimentVersioning:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         archive_path = self.archives_dir / f"run_{timestamp}"
         
-        # Move latest_run to archive
-        shutil.copytree(self.latest_dir, archive_path)
-        
-        # Clean latest_run (keep directory structure)
-        for subdir in ['manifests', 'results', 'predictions', 'models', 'xai']:
-            subdir_path = self.latest_dir / subdir
-            if subdir_path.exists():
-                for child in subdir_path.iterdir():
-                    if child.is_dir():
-                        shutil.rmtree(child)
-                    else:
-                        child.unlink()
+        # Move latest_run to archive (no nested latest_run)
+        if archive_path.exists():
+            shutil.rmtree(archive_path)
+        shutil.move(str(self.latest_dir), str(archive_path))
+
+        # Recreate clean latest_run directory structure
+        self.latest_dir.mkdir(parents=True, exist_ok=True)
+        (self.latest_dir / "manifests").mkdir(exist_ok=True)
+        (self.latest_dir / "results").mkdir(exist_ok=True)
+        (self.latest_dir / "predictions").mkdir(exist_ok=True)
+        (self.latest_dir / "models").mkdir(exist_ok=True)
+        (self.latest_dir / "xai").mkdir(exist_ok=True)
         
         self.logger.info(f"✓ Archived previous run to: {archive_path}")
         return archive_path
