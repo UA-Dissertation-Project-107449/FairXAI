@@ -41,6 +41,7 @@ class CardiacDataLoader:
         df = harmonize_cardiac_schema(df, dataset_name)
         df = self._apply_sensitive_standardization(df, dataset_name)
         df = self._apply_target_standardization(df, dataset_name)
+        df = self._apply_feature_mapping(df, dataset_name)
         df = self._apply_feature_rules(df, dataset_name)
         return df
 
@@ -119,6 +120,28 @@ class CardiacDataLoader:
         drop_cols = [col for col in drop_cols if col in df.columns]
         if drop_cols:
             df = df.drop(columns=drop_cols)
+
+        return df
+
+    def _apply_feature_mapping(self, df: pd.DataFrame, dataset_name: str) -> pd.DataFrame:
+        cfg = self.datasets.get(dataset_name, {})
+        feature_map = cfg.get('feature_descriptions', {})
+
+        rename_map = {src: dst for src, dst in feature_map.items() if src in df.columns}
+        if 'Age' in df.columns and 'age' not in df.columns:
+            rename_map['Age'] = 'age'
+        if 'Sex' in df.columns and 'sex' not in df.columns:
+            rename_map['Sex'] = 'sex'
+
+        if rename_map:
+            df = df.rename(columns=rename_map)
+
+        duplicated = df.columns[df.columns.duplicated()].unique()
+        for col in duplicated:
+            dup = df.loc[:, df.columns == col]
+            combined = dup.bfill(axis=1).iloc[:, 0]
+            df = df.drop(columns=list(dup.columns))
+            df[col] = combined
 
         return df
 

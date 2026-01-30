@@ -242,7 +242,11 @@ def main():
         if label_col:
             schema_exclude.append(label_col)
 
-        exclude_cols = [target_col] + sensitive_cols + schema_exclude
+        extra_excludes = [
+            col for col in train_df.columns
+            if col.startswith('sex_bin') or col.startswith('sex_extended')
+        ]
+        exclude_cols = [target_col] + sensitive_cols + schema_exclude + extra_excludes
         
         # Get feature columns (all except target and categorical sensitive attrs)
         feature_cols = [col for col in train_df.columns if col not in exclude_cols]
