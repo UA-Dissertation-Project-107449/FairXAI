@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 from typing import Dict, Tuple, Optional
 import pandas as pd
+import yaml
 
 from .schemas import harmonize_cardiac_schema
 
@@ -13,11 +14,18 @@ from .schemas import harmonize_cardiac_schema
 class CardiacDataLoader:
     """Loader for cardiac disease datasets with schema mapping."""
 
-    def __init__(self, config_path: str):
+    def __init__(self, config_path: str, feature_map_path: Optional[str] = None):
         with open(config_path, 'r') as f:
             self.config = json.load(f)
         self.datasets = self.config.get('datasets', {})
         self.cardiac_datasets = self.config.get('cardiac_relevant_datasets', ["cleveland", "kaggle_heart"])
+        self.feature_map = None
+        if feature_map_path:
+            try:
+                with open(feature_map_path, 'r') as f:
+                    self.feature_map = yaml.safe_load(f) or {}
+            except FileNotFoundError:
+                logging.warning(f"Feature map not found: {feature_map_path}")
 
     def load_dataset(self, dataset_name: str, data_dir: str) -> pd.DataFrame:
         if dataset_name not in self.datasets:
@@ -33,7 +41,10 @@ class CardiacDataLoader:
             raise FileNotFoundError(f"Dataset file not found: {filepath}")
 
         logging.info(f"Loading {dataset_name} from {filepath}")
-        df = pd.read_csv(filepath)
+        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+            header_line = f.readline()
+        sep = ';' if header_line.count(';') > header_line.count(',') else ','
+        df = pd.read_csv(filepath, sep=sep)
         df['_dataset_source'] = dataset_name
         df['_dataset_file'] = filename
 
@@ -42,6 +53,8 @@ class CardiacDataLoader:
         df = self._apply_sensitive_standardization(df, dataset_name)
         df = self._apply_target_standardization(df, dataset_name)
         df = self._apply_feature_mapping(df, dataset_name)
+        self._log_unmapped_columns(df, dataset_name)
+        self._log_missing_core_columns(df, dataset_name)
         df = self._apply_feature_rules(df, dataset_name)
         return df
 
@@ -65,20 +78,39 @@ class CardiacDataLoader:
             labels = sens[age_key].get('labels', ['<40', '40-49', '50-59', '60-69', '70+'])
             df['age_group'] = pd.cut(df['age_raw'], bins=bins, labels=labels, include_lowest=True)
 
-        # Sex mapping to "sex"
+        # Sex mapping (normalize to 0/1 in `sex`, keep labels in `sex_extended`)
         sex_key = 'sex' if 'sex' in sens else 'Sex' if 'Sex' in sens else 'Gender' if 'Gender' in sens else None
-        if sex_key:
-            mapping = sens[sex_key].get('mapping', {})
-            if sex_key in df.columns and 'sex' not in df.columns:
-                if pd.api.types.is_numeric_dtype(df[sex_key]):
-                    # Convert mapping keys to ints when source is numeric
-                    mapping = {int(k): v for k, v in mapping.items()}
-                df['sex'] = df[sex_key].map(mapping).fillna(df[sex_key])
+        if sex_key and sex_key in df.columns:
+            raw = df[sex_key]
+            mapping_cfg = sens.get(sex_key, {}).get('mapping', {})
+            if pd.api.types.is_numeric_dtype(raw):
+                raw_num = pd.to_numeric(raw, errors='coerce')
+                if mapping_cfg:
+                    mapping_num = {int(k): v for k, v in mapping_cfg.items()}
+                    sex_label = raw_num.map(mapping_num)
+                else:
+                    sex_label = raw_num.map({0: 'Female', 1: 'Male', 2: 'Male'})
+            else:
+                raw_str = raw.astype(str).str.strip()
+                if mapping_cfg:
+                    mapping_str = {str(k): v for k, v in mapping_cfg.items()}
+                    sex_label = raw_str.map(mapping_str)
+                else:
+                    sex_label = raw_str.map({
+                        'F': 'Female', 'Female': 'Female', '0': 'Female',
+                        'M': 'Male', 'Male': 'Male', '1': 'Male'
+                    })
 
-        # Extended and binary encodings
-        if 'sex' in df.columns:
-            df['sex_extended'] = df['sex'].astype('object')
-            df['sex_bin'] = df['sex'].map({'Female': 0, 'Male': 1})
+            if sex_label.isna().all():
+                raw_str = raw.astype(str).str.strip()
+                sex_label = raw_str.map({
+                    'F': 'Female', 'Female': 'Female', '0': 'Female',
+                    'M': 'Male', 'Male': 'Male', '1': 'Male', '2': 'Male'
+                })
+
+            df['sex_extended'] = sex_label
+            df['sex'] = sex_label.map({'Female': 0, 'Male': 1})
+            df['sex_bin'] = df['sex']
 
         return df
 
@@ -124,26 +156,90 @@ class CardiacDataLoader:
         return df
 
     def _apply_feature_mapping(self, df: pd.DataFrame, dataset_name: str) -> pd.DataFrame:
-        cfg = self.datasets.get(dataset_name, {})
-        feature_map = cfg.get('feature_descriptions', {})
+        if not self.feature_map:
+            return df
 
-        rename_map = {src: dst for src, dst in feature_map.items() if src in df.columns}
-        if 'Age' in df.columns and 'age' not in df.columns:
-            rename_map['Age'] = 'age'
-        if 'Sex' in df.columns and 'sex' not in df.columns:
-            rename_map['Sex'] = 'sex'
+        def _extract_mappings(section: dict) -> Dict[str, list]:
+            mappings: Dict[str, list] = {}
+            for entry in section.values():
+                canonical = entry.get('canonical')
+                aliases = entry.get('aliases') or []
+                if canonical:
+                    mappings[canonical] = list(dict.fromkeys([canonical] + aliases))
+            return mappings
 
-        if rename_map:
-            df = df.rename(columns=rename_map)
+        mappings = {}
+        mappings.update(_extract_mappings(self.feature_map.get('sensitive', {})))
+        mappings.update(_extract_mappings(self.feature_map.get('target', {})))
+        mappings.update(_extract_mappings(self.feature_map.get('common', {})))
 
-        duplicated = df.columns[df.columns.duplicated()].unique()
-        for col in duplicated:
-            dup = df.loc[:, df.columns == col]
-            combined = dup.bfill(axis=1).iloc[:, 0]
-            df = df.drop(columns=list(dup.columns))
-            df[col] = combined
+        dataset_specific = self.feature_map.get('dataset_specific', {})
+        for entry in dataset_specific.get(dataset_name, {}).values():
+            canonical = entry.get('canonical')
+            aliases = entry.get('aliases') or []
+            if canonical:
+                mappings[canonical] = list(dict.fromkeys([canonical] + aliases))
+
+        for canonical, aliases in mappings.items():
+            present = [col for col in aliases if col in df.columns]
+            if not present:
+                continue
+            if canonical in df.columns:
+                present = [canonical] + [col for col in present if col != canonical]
+            combined = df[present[0]].copy()
+            for col in present[1:]:
+                if df[col].isna().all():
+                    continue
+                combined = combined.fillna(df[col])
+            df[canonical] = combined
+            drop_cols = [col for col in present if col != canonical]
+            if drop_cols:
+                df = df.drop(columns=drop_cols)
 
         return df
+
+    def _log_unmapped_columns(self, df: pd.DataFrame, dataset_name: str) -> None:
+        if not self.feature_map:
+            return
+
+        def _collect_aliases(section: dict) -> set:
+            aliases = set()
+            for entry in section.values():
+                canonical = entry.get('canonical')
+                if canonical:
+                    aliases.add(canonical)
+                for alias in entry.get('aliases') or []:
+                    aliases.add(alias)
+            return aliases
+
+        known = set()
+        known |= _collect_aliases(self.feature_map.get('sensitive', {}))
+        known |= _collect_aliases(self.feature_map.get('target', {}))
+        known |= _collect_aliases(self.feature_map.get('common', {}))
+
+        dataset_specific = self.feature_map.get('dataset_specific', {})
+        if dataset_name in dataset_specific:
+            known |= _collect_aliases(dataset_specific.get(dataset_name, {}))
+
+        cfg = self.datasets.get(dataset_name, {})
+        label_col = cfg.get('label') or cfg.get('target')
+        if label_col:
+            known.add(label_col)
+
+        known |= {
+            'heart_disease', 'age_raw', 'age_group', 'sex', 'sex_extended', 'sex_bin',
+            '_dataset_source', '_dataset_file'
+        }
+
+        unmapped = [col for col in df.columns if col not in known and not col.startswith('_')]
+        if unmapped:
+            logging.info(f"Unmapped columns for {dataset_name}: {sorted(unmapped)}")
+
+    def _log_missing_core_columns(self, df: pd.DataFrame, dataset_name: str) -> None:
+        core_cols = ["heart_disease", "age_raw", "age_group", "sex"]
+        missing = [col for col in core_cols if col not in df.columns]
+        if missing:
+            logging.warning(f"{dataset_name}: missing core columns after mapping: {missing}")
 
 
 def get_dataset_summary(df: pd.DataFrame, dataset_name: str) -> Dict:

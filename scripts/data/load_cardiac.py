@@ -37,6 +37,7 @@ def main():
     project_root = Path(__file__).parent.parent.parent
     pipeline_cfg = load_yaml_config(str(project_root / 'configs/pipelines/cardiac.yaml'))
     config_path = project_root / pipeline_cfg['runtime']['schema_mapping_json']
+    feature_map_path = project_root / 'configs/domain/cardiac_feature_map.yaml'
     data_external = project_root / pipeline_cfg['paths']['external_dir']
     data_raw_cardiac = project_root / pipeline_cfg['paths']['raw_dir']
     log_dir = project_root / 'logs/cardiac'
@@ -50,7 +51,7 @@ def main():
     
     # Load datasets
     logging.info("Initializing cardiac loader...")
-    loader = CardiacDataLoader(str(config_path))
+    loader = CardiacDataLoader(str(config_path), feature_map_path=str(feature_map_path))
     
     logging.info(f"Loading cardiac datasets from: {data_external}")
     datasets = loader.load_all_cardiac_datasets(str(data_external))
