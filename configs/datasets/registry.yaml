@@ -1,0 +1,15 @@
+# Dataset registry (mandatory `type`)
+# type: tabular | image
+
+datasets:
+  - name: cardiac
+    type: tabular
+    schema: configs/schema/cardiac.json
+    feature_map: configs/domain/cardiac_feature_map.yaml
+    external_dir: data/external/cardiac
+
+  - name: dermatology
+    type: image
+    schema: null
+    feature_map: null
+    external_dir: data/external/dermatology

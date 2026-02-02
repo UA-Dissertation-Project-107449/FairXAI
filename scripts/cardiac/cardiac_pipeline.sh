@@ -2,8 +2,7 @@
 set -euo pipefail
 
 # Cardiac end-to-end pipeline: load -> preprocess -> train -> fairness -> experiments
-# Assumes repo root as the script's parent directory
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
 
 # Configuration
 RUN_AGE_BINNING=${RUN_AGE_BINNING:-true}
@@ -31,26 +30,25 @@ if [[ "$VERBOSE" == "true" ]]; then
 fi
 
 echo "[PHASE 1/8] Loading cardiac datasets (standardization + profiling)"
-python3 "$ROOT_DIR/scripts/data/load_cardiac.py" $VERBOSE_FLAG
+python3 "$ROOT_DIR/scripts/cardiac/load_data.py" $VERBOSE_FLAG
 echo ""
 
 echo "[PHASE 2/8] Preprocessing datasets (split + scale + fairness profiles)"
-python3 "$ROOT_DIR/scripts/data/preprocess_cardiac.py" $VERBOSE_FLAG
+python3 "$ROOT_DIR/scripts/cardiac/preprocess.py" $VERBOSE_FLAG
 echo ""
 
 echo "[PHASE 3/8] Training baseline model(s)"
-python3 "$ROOT_DIR/scripts/models/train_baseline.py" $VERBOSE_FLAG
+python3 "$ROOT_DIR/scripts/cardiac/train_baseline.py" $VERBOSE_FLAG
 echo ""
 
 echo "[PHASE 4/8] Assessing post-prediction fairness"
-python3 "$ROOT_DIR/scripts/fairness/assess_predictions.py" $VERBOSE_FLAG
+python3 "$ROOT_DIR/scripts/cardiac/assess_predictions.py" $VERBOSE_FLAG
 echo ""
 
-# Experiment stage
 ARCHIVE_EXPERIMENTS=true
 if [[ "$RUN_AGE_BINNING" == "true" ]]; then
     echo "[PHASE 5/8] Age binning strategies analysis"
-    EXPERIMENT_RUN_MODE=full ARCHIVE_PREVIOUS=$ARCHIVE_EXPERIMENTS python3 "$ROOT_DIR/scripts/experiments/run_age_binning_analysis.py" \
+    EXPERIMENT_RUN_MODE=full ARCHIVE_PREVIOUS=$ARCHIVE_EXPERIMENTS python3 "$ROOT_DIR/scripts/cardiac/age_binning.py" \
         --config "$AGE_BINNING_CONFIG" $VERBOSE_FLAG
     ARCHIVE_EXPERIMENTS=false
     echo ""
@@ -60,7 +58,7 @@ fi
 
 if [[ "$RUN_MITIGATION" == "true" ]]; then
     echo "[PHASE 6/8] Mitigation techniques comparison"
-    EXPERIMENT_RUN_MODE=full ARCHIVE_PREVIOUS=$ARCHIVE_EXPERIMENTS python3 "$ROOT_DIR/scripts/experiments/run_mitigation_comparison.py" \
+    EXPERIMENT_RUN_MODE=full ARCHIVE_PREVIOUS=$ARCHIVE_EXPERIMENTS python3 "$ROOT_DIR/scripts/cardiac/mitigation.py" \
         --config "$MITIGATION_CONFIG" $VERBOSE_FLAG
     ARCHIVE_EXPERIMENTS=false
     echo ""
@@ -70,7 +68,7 @@ fi
 
 if [[ "$RUN_COMBINATORIAL" == "true" ]]; then
     echo "[PHASE 7/8] Combinatorial experiments"
-    python3 "$ROOT_DIR/scripts/experiments/run_combinatorial_experiments.py" \
+    python3 "$ROOT_DIR/scripts/cardiac/combinatorial.py" \
         --config "$COMBINATORIAL_CONFIG" --archive-previous $VERBOSE_FLAG
     echo ""
 else
@@ -79,7 +77,7 @@ fi
 
 if [[ "$RUN_COMPARISON" == "true" ]]; then
     echo "[PHASE 8/8] Experiment comparison"
-    python3 "$ROOT_DIR/scripts/analysis/compare_experiments.py" $VERBOSE_FLAG
+    python3 "$ROOT_DIR/scripts/cardiac/compare.py" $VERBOSE_FLAG
     echo ""
 else
     echo "[8/8] Experiment comparison SKIPPED"
@@ -109,11 +107,11 @@ fi
 echo ""
 echo "Usage examples:"
 echo "  # Run everything (default):"
-echo "  bash scripts/cardiac_pipeline.sh"
+echo "  bash scripts/cardiac/cardiac_pipeline.sh"
 echo ""
 echo "  # Skip experiments:"
-echo "  RUN_AGE_BINNING=false RUN_MITIGATION=false RUN_COMBINATORIAL=false RUN_COMPARISON=false bash scripts/cardiac_pipeline.sh"
+echo "  RUN_AGE_BINNING=false RUN_MITIGATION=false RUN_COMBINATORIAL=false RUN_COMPARISON=false bash scripts/cardiac/cardiac_pipeline.sh"
 echo ""
 echo "  # Only run age binning:"
-echo "  RUN_MITIGATION=false bash scripts/cardiac_pipeline.sh"
+echo "  RUN_MITIGATION=false bash scripts/cardiac/cardiac_pipeline.sh"
 echo ""
