@@ -104,14 +104,3 @@ fi
 if [[ "$RUN_COMPARISON" == "true" ]]; then
     echo "  - Comparison:         $ROOT_DIR/results/cardiac/experiments/full/latest_run/comparisons"
 fi
-echo ""
-echo "Usage examples:"
-echo "  # Run everything (default):"
-echo "  bash scripts/cardiac/cardiac_pipeline.sh"
-echo ""
-echo "  # Skip experiments:"
-echo "  RUN_AGE_BINNING=false RUN_MITIGATION=false RUN_COMBINATORIAL=false RUN_COMPARISON=false bash scripts/cardiac/cardiac_pipeline.sh"
-echo ""
-echo "  # Only run age binning:"
-echo "  RUN_MITIGATION=false bash scripts/cardiac/cardiac_pipeline.sh"
-echo ""

@@ -18,9 +18,8 @@ from typing import Dict, List
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root / 'src'))
 
+from fairxai.cli.runner_base import get_project_root, load_pipeline_config, setup_phase_logging
 from fairxai.fairness.metrics import FairnessMetrics, summarize_fairness_results
-from fairxai.utils.config import load_yaml_config
-from fairxai.utils.logging_utils import setup_logging
 
 
 def decode_sensitive_attributes(df: pd.DataFrame) -> pd.DataFrame:
@@ -275,13 +274,13 @@ def main():
     args = parser.parse_args()
 
     project_root = Path(__file__).parent.parent.parent
-    pipeline_cfg = load_yaml_config(str(project_root / 'configs/pipelines/cardiac.yaml'))
+    pipeline_cfg = load_pipeline_config(project_root, "cardiac")
     experiments_dir = project_root / pipeline_cfg['paths']['experiments_dir']
     results_dir = project_root / pipeline_cfg['paths']['results_fairness_dir']
     log_dir = project_root / 'logs/cardiac'
     
     # Setup
-    setup_logging(log_dir / 'fairness_assessment.log', verbose=args.verbose)
+    log_dir = setup_phase_logging(project_root, 'fairness_assessment.log', verbose=args.verbose)
     logging.info("[PHASE] Fairness assessment started")
     results_dir.mkdir(parents=True, exist_ok=True)
     

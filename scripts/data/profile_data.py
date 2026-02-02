@@ -24,7 +24,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 
 from fairxai.data.profilers import DataProfiler, compare_datasets
-from fairxai.utils.logging_utils import setup_logging
+from fairxai.cli.runner_base import get_project_root, load_pipeline_config, setup_phase_logging
 
 
 def main():
@@ -33,13 +33,13 @@ def main():
     args = parser.parse_args()
 
     # Paths
-    project_root = Path(__file__).parent.parent.parent
-    data_raw_cardiac = project_root / 'data/raw/cardiac'
-    log_dir = project_root / 'logs/cardiac'
+    project_root = get_project_root(Path(__file__))
+    pipeline_cfg = load_pipeline_config(project_root, "cardiac")
+    data_raw_cardiac = project_root / pipeline_cfg['paths']['raw_dir']
+    log_dir = setup_phase_logging(project_root, 'data_profiling.log', verbose=args.verbose)
     results_profiling = project_root / 'results/cardiac/profiling'
     
     # Setup
-    setup_logging(log_dir / 'data_profiling.log', verbose=args.verbose)
     logging.info("[PHASE] Data profiling started")
     results_profiling.mkdir(parents=True, exist_ok=True)
     

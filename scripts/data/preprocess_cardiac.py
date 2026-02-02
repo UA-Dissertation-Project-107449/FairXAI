@@ -27,9 +27,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 from fairxai.data.preprocessors import CardiacPreprocessor
 from fairxai.data.profilers import DataProfiler
 from fairxai.data.schemas import available_sensitive, preferred_sensitive
-from fairxai.utils.config import load_yaml_config
 from fairxai.experiments.age_binning import create_binning_strategy, apply_binning
-from fairxai.utils.logging_utils import setup_logging
+from fairxai.cli.runner_base import get_project_root, load_pipeline_config, setup_phase_logging
 
 
 def _stringify(obj):
@@ -94,15 +93,14 @@ def main():
     args = parser.parse_args()
     
     # Paths
-    project_root = Path(__file__).parent.parent.parent
-    pipeline_cfg = load_yaml_config(str(project_root / 'configs/pipelines/cardiac.yaml'))
+    project_root = get_project_root(Path(__file__))
+    pipeline_cfg = load_pipeline_config(project_root, "cardiac")
     data_raw_cardiac = project_root / pipeline_cfg['paths']['raw_dir']
     data_processed_cardiac_base = project_root / pipeline_cfg['paths']['processed_dir']
-    log_dir = project_root / 'logs/cardiac'
+    log_dir = setup_phase_logging(project_root, 'preprocessing.log', verbose=args.verbose)
     results_fairness = project_root / 'results/cardiac/profiling/fairness'
     
     # Setup
-    setup_logging(log_dir / 'preprocessing.log', verbose=args.verbose)
     logging.info("[PHASE] Preprocessing started")
     results_fairness.mkdir(parents=True, exist_ok=True)
     

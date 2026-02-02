@@ -24,8 +24,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 
 from fairxai.data.loaders import CardiacDataLoader, get_dataset_summary
-from fairxai.utils.config import load_yaml_config
-from fairxai.utils.logging_utils import setup_logging
+from fairxai.cli.runner_base import get_project_root, load_pipeline_config, setup_phase_logging
 
 
 def main():
@@ -34,17 +33,16 @@ def main():
     args = parser.parse_args()
 
     # Paths
-    project_root = Path(__file__).parent.parent.parent
-    pipeline_cfg = load_yaml_config(str(project_root / 'configs/pipelines/cardiac.yaml'))
+    project_root = get_project_root(Path(__file__))
+    pipeline_cfg = load_pipeline_config(project_root, "cardiac")
     config_path = project_root / pipeline_cfg['runtime']['schema_mapping_json']
     feature_map_path = project_root / 'configs/domain/cardiac_feature_map.yaml'
     data_external = project_root / pipeline_cfg['paths']['external_dir']
     data_raw_cardiac = project_root / pipeline_cfg['paths']['raw_dir']
-    log_dir = project_root / 'logs/cardiac'
+    log_dir = setup_phase_logging(project_root, 'data_loading.log', verbose=args.verbose)
     results_profiling = project_root / 'results/cardiac/profiling'
     
     # Setup
-    setup_logging(log_dir / 'data_loading.log', verbose=args.verbose)
     logging.info("[PHASE] Cardiac data loading started")
     data_raw_cardiac.mkdir(parents=True, exist_ok=True)
     results_profiling.mkdir(parents=True, exist_ok=True)

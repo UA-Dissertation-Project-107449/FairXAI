@@ -19,7 +19,6 @@ import logging
 import os
 from pathlib import Path
 import json
-import shutil
 from datetime import datetime
 from typing import Optional
 import pandas as pd
@@ -31,7 +30,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 
 from fairxai.models.baseline import BaselineLogisticRegression, generate_predictions_with_metadata
 from fairxai.explainability.tabular import shap_explain_tabular, lime_explain_instance
-from fairxai.utils.logging_utils import setup_logging
+from fairxai.cli.runner_base import get_project_root, load_pipeline_config, setup_phase_logging
+from fairxai.experiments.data_io import build_schema_excludes, resolve_base_dataset
+from fairxai.cli.runner_utils import archive_latest_run
 
 
 def save_xai_outputs(
@@ -131,28 +132,6 @@ def save_xai_outputs(
         logging.warning(f"LIME failed for {dataset_name}: {exc}")
 
 
-def archive_latest_run(base_dir: Path, enabled: bool) -> None:
-    if not enabled:
-        return
-
-    latest_dir = base_dir / 'latest_run'
-    archives_dir = base_dir / 'archived_runs'
-    archives_dir.mkdir(parents=True, exist_ok=True)
-
-    has_files = latest_dir.exists() and any(latest_dir.rglob('*'))
-    if not has_files:
-        return
-
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    archive_path = archives_dir / f'run_{timestamp}'
-    shutil.copytree(latest_dir, archive_path)
-
-    # Clean latest_run
-    for item in latest_dir.glob('*'):
-        if item.is_dir():
-            shutil.rmtree(item)
-        else:
-            item.unlink()
 
 
 def main():
@@ -161,23 +140,24 @@ def main():
     args = parser.parse_args()
 
     # Paths
-    project_root = Path(__file__).parent.parent.parent
-    from fairxai.utils.config import load_yaml_config
-    
-    pipeline_cfg = load_yaml_config(str(project_root / 'configs/pipelines/cardiac.yaml'))
+    project_root = get_project_root(Path(__file__))
+    pipeline_cfg = load_pipeline_config(project_root, "cardiac")
     schema_path = project_root / pipeline_cfg['runtime']['schema_mapping_json']
     with open(schema_path, 'r') as f:
         schema_cfg = json.load(f)
     data_processed = project_root / pipeline_cfg['paths']['processed_dir']
     experiments_dir = project_root / pipeline_cfg['paths']['experiments_dir']
     models_dir = project_root / pipeline_cfg['paths']['models_dir']
-    log_dir = project_root / 'logs/cardiac'
+    log_dir = setup_phase_logging(project_root, 'training_baseline.log', verbose=args.verbose)
     baseline_root = project_root / 'results/cardiac/baseline'
     
     # Setup
-    setup_logging(log_dir / 'training_baseline.log', verbose=args.verbose)
     logging.info("[PHASE] Baseline training started")
-    archive_latest_run(baseline_root, enabled=(os.getenv('ARCHIVE_BASELINE', 'true').lower() == 'true'))
+    archive_latest_run(
+        baseline_root,
+        enabled=(os.getenv('ARCHIVE_BASELINE', 'true').lower() == 'true'),
+        logger=logging.getLogger(__name__)
+    )
 
     models_dir.mkdir(parents=True, exist_ok=True)
     experiments_dir.mkdir(parents=True, exist_ok=True)
@@ -230,17 +210,8 @@ def main():
         sensitive_cols = ['age_group', 'sex']
         target_col = 'heart_disease'
 
-        base_dataset = next(
-            (ds for ds in schema_cfg.get('cardiac_relevant_datasets', []) if dataset_name.startswith(ds)),
-            dataset_name
-        )
-        dataset_cfg = schema_cfg.get('datasets', {}).get(base_dataset, {})
-        unified_cfg = schema_cfg.get('unified_schema', {})
-        schema_exclude = list(dataset_cfg.get('exclude_features') or [])
-        schema_exclude += list(unified_cfg.get('exclude_features') or [])
-        label_col = dataset_cfg.get('label') or dataset_cfg.get('target')
-        if label_col:
-            schema_exclude.append(label_col)
+        base_dataset = resolve_base_dataset(schema_cfg, dataset_name)
+        schema_exclude = build_schema_excludes(schema_cfg, base_dataset)
 
         extra_excludes = [
             col for col in train_df.columns

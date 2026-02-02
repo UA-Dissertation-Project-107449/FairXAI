@@ -42,6 +42,11 @@ model_params:
   class_weight: balanced
   random_state: 42
 
+# Optional: override base estimator params for in-processing fairness methods
+# (e.g., set solver/penalty for fairlearn GridSearch/ExponentiatedGradient)
+# If empty or missing, defaults to model_params.
+fairness_base_model_params: {}
+
 # Sensitive / group attributes (evaluated if present in the dataset)
 sensitive_attributes:
   - age_group

@@ -21,7 +21,6 @@ import sys
 import logging
 import argparse
 import os
-import shutil
 from pathlib import Path
 from datetime import datetime
 import json
@@ -35,31 +34,25 @@ from fairxai.models.baseline import BaselineLogisticRegression, generate_predict
 from fairxai.fairness.metrics import FairnessMetrics
 from fairxai.fairness.mitigation import MitigationEngine
 from fairxai.utils.config import load_yaml_config
-from fairxai.utils.logging_utils import setup_logging
+from fairxai.experiments.data_io import default_exclude_columns
+from fairxai.cli.runner_base import get_project_root, setup_phase_logging, load_pipeline_config
+from fairxai.cli.runner_utils import archive_latest_run
 
 
-def archive_latest_run(base_dir: Path, enabled: bool, logger: logging.Logger):
-    if not enabled:
-        return
-    latest_dir = base_dir / 'latest_run'
-    archives_dir = base_dir / 'archived_runs'
-    archives_dir.mkdir(parents=True, exist_ok=True)
-
-    has_files = latest_dir.exists() and any(p.is_file() for p in latest_dir.rglob('*'))
-    if not has_files:
-        return
-
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    archive_path = archives_dir / f'run_{timestamp}'
-    archive_path.parent.mkdir(parents=True, exist_ok=True)
-    if archive_path.exists():
-        shutil.rmtree(archive_path)
-    shutil.move(str(latest_dir), str(archive_path))
-    latest_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Archived previous latest_run to: {archive_path}")
 
 
-def load_dataset(dataset_name: str, data_dir: Path, schema_cfg: dict):
+def resolve_target_column(schema_cfg: dict, dataset_name: str, default_target: str) -> str:
+    dataset_cfg = schema_cfg.get('datasets', {}).get(dataset_name, {})
+    return dataset_cfg.get('label') or dataset_cfg.get('target') or default_target
+
+
+def load_dataset(
+    dataset_name: str,
+    data_dir: Path,
+    schema_cfg: dict,
+    target_col: str,
+    sensitive_attrs: list
+):
     """
     Load train/test splits for a dataset.
     
@@ -72,51 +65,73 @@ def load_dataset(dataset_name: str, data_dir: Path, schema_cfg: dict):
     """
     logging.info(f"\nLoading dataset: {dataset_name}")
     
-    train_file = data_dir / f'{dataset_name}_train.csv'
-    test_file = data_dir / f'{dataset_name}_test.csv'
-    
-    if not train_file.exists() or not test_file.exists():
-        raise FileNotFoundError(f"Dataset files not found: {train_file}, {test_file}")
-    
-    train_df = pd.read_csv(train_file)
-    test_df = pd.read_csv(test_file)
+    train_scaled = data_dir / f'{dataset_name}_train_scaled.csv'
+    test_scaled = data_dir / f'{dataset_name}_test_scaled.csv'
+    train_raw = data_dir / f'{dataset_name}_train.csv'
+    test_raw = data_dir / f'{dataset_name}_test.csv'
+
+    if train_scaled.exists() and test_scaled.exists():
+        train_df = pd.read_csv(train_scaled)
+        test_df = pd.read_csv(test_scaled)
+        if train_raw.exists() and test_raw.exists():
+            train_raw_df = pd.read_csv(train_raw)
+            test_raw_df = pd.read_csv(test_raw)
+        else:
+            train_raw_df = train_df
+            test_raw_df = test_df
+    else:
+        if not train_raw.exists() or not test_raw.exists():
+            raise FileNotFoundError(f"Dataset files not found: {train_raw}, {test_raw}")
+        train_df = pd.read_csv(train_raw)
+        test_df = pd.read_csv(test_raw)
+        train_raw_df = train_df
+        test_raw_df = test_df
     
     logging.info(f"  Train: {len(train_df)} samples")
     logging.info(f"  Test: {len(test_df)} samples")
     
     # Encode sex if it's categorical
-    if train_df['sex'].dtype == 'object':
+    if 'sex' in train_raw_df.columns and train_raw_df['sex'].dtype == 'object':
         logging.info("  Encoding categorical 'sex' variable...")
         sex_map = {'Male': 1, 'Female': 0, 'M': 1, 'F': 0}
-        train_df['sex'] = train_df['sex'].map(sex_map)
-        test_df['sex'] = test_df['sex'].map(sex_map)
+        train_raw_df['sex'] = train_raw_df['sex'].map(sex_map)
+        test_raw_df['sex'] = test_raw_df['sex'].map(sex_map)
     
     # Separate features, target, and sensitive attributes
     # Exclude target, sensitive attrs, metadata, and original categorical columns
-    dataset_cfg = schema_cfg.get('datasets', {}).get(dataset_name, {})
-    unified_cfg = schema_cfg.get('unified_schema', {})
-    schema_exclude = list(dataset_cfg.get('exclude_features') or [])
-    schema_exclude += list(unified_cfg.get('exclude_features') or [])
-    label_col = dataset_cfg.get('label') or dataset_cfg.get('target')
-    if label_col:
-        schema_exclude.append(label_col)
-
-    exclude = [
-        'heart_disease', 'age_group', 'sex', 'sex_extended', 'sex_bin',
-        'Sex', 'ChestPainType', 'RestingECG', 'ExerciseAngina', 'ST_Slope',
-        '_dataset_source', '_dataset_file', 'age_raw', 'HeartDisease'
-    ]
-    exclude.extend(schema_exclude)
+    sensitive_cols = [col for col in sensitive_attrs if col in train_raw_df.columns]
+    exclude = default_exclude_columns(
+        schema_cfg,
+        dataset_name,
+        target=target_col,
+        sensitive_attrs=sensitive_cols
+    )
     # Only exclude columns that actually exist
     exclude = [col for col in exclude if col in train_df.columns]
     
     X_train = train_df.drop(columns=exclude)
-    y_train = train_df['heart_disease']
-    sensitive_train = train_df[['age_group', 'sex']]
+    y_train = train_raw_df[target_col]
+    sensitive_train = train_raw_df[sensitive_cols].copy() if sensitive_cols else pd.DataFrame(index=train_raw_df.index)
     
     X_test = test_df.drop(columns=exclude)
-    y_test = test_df['heart_disease']
-    sensitive_test = test_df[['age_group', 'sex']]
+    y_test = test_raw_df[target_col]
+    sensitive_test = test_raw_df[sensitive_cols].copy() if sensitive_cols else pd.DataFrame(index=test_raw_df.index)
+
+    # Coerce continuous targets to binary if needed
+    if pd.api.types.is_numeric_dtype(y_train):
+        unique_vals = pd.Series(y_train).dropna().unique()
+        if len(unique_vals) > 2 and pd.api.types.is_float_dtype(y_train):
+            logging.warning("Target appears continuous; coercing to binary with threshold 0.5")
+            y_train = (y_train >= 0.5).astype(int)
+            y_test = (y_test >= 0.5).astype(int)
+
+    # Ensure only numeric features remain
+    numeric_cols = X_train.select_dtypes(include=[np.number]).columns
+    dropped = [c for c in X_train.columns if c not in numeric_cols]
+    if dropped:
+        logging.warning(f"Dropping non-numeric features: {dropped}")
+    X_train = X_train[numeric_cols]
+    X_test = X_test.reindex(columns=numeric_cols)
     
     logging.info(f"  Features: {X_train.shape[1]}")
     logging.info(f"  Sensitive attributes: {list(sensitive_train.columns)}")
@@ -124,13 +139,13 @@ def load_dataset(dataset_name: str, data_dir: Path, schema_cfg: dict):
     return X_train, y_train, sensitive_train, X_test, y_test, sensitive_test
 
 
-def train_baseline(X_train, y_train, X_test, y_test, sensitive_test, dataset_name):
+def train_baseline(X_train, y_train, X_test, y_test, sensitive_test, dataset_name, model_params=None):
     """Train baseline model without mitigation."""
     logging.info(f"\n{'='*60}")
     logging.info(f"Training Baseline: {dataset_name}")
     logging.info(f"{'='*60}")
     
-    model = BaselineLogisticRegression(class_weight='balanced', random_state=42)
+    model = BaselineLogisticRegression(**(model_params or {}))
     train_metrics = model.train(X_train, y_train)
     test_metrics = model.evaluate(X_test, y_test)
     
@@ -149,7 +164,7 @@ def train_baseline(X_train, y_train, X_test, y_test, sensitive_test, dataset_nam
     # Calculate fairness metrics
     # Note: feature_cols for individual fairness should be numeric features only
     # X_test columns are the actual model features (all numeric after exclusions)
-    fairness_calc = FairnessMetrics()
+    fairness_calc = FairnessMetrics(list(sensitive_test.columns))
     fairness_results = fairness_calc.calculate_all_metrics(
         predictions, 
         feature_cols=list(X_test.columns)  # Use actual model features, not sensitive attrs
@@ -165,7 +180,7 @@ def train_baseline(X_train, y_train, X_test, y_test, sensitive_test, dataset_nam
 
 def apply_mitigation_techniques(
     X_train, y_train, X_test, y_test, sensitive_train, sensitive_test,
-    dataset_name, baseline_model, techniques_config
+    dataset_name, baseline_model, techniques_config, base_model_params=None
 ):
     """
     Apply all mitigation techniques and collect results.
@@ -192,6 +207,9 @@ def apply_mitigation_techniques(
         logging.info(f"{'='*60}")
         
         try:
+            sensitive_attr = next((c for c in sensitive_test.columns), None)
+            if sensitive_attr is None:
+                raise ValueError("No sensitive attributes available for mitigation")
             # Apply technique
             if stage == 'post-processing':
                 result = engine.apply_technique(
@@ -203,7 +221,7 @@ def apply_mitigation_techniques(
                     y_test=y_test,
                     sensitive_train=sensitive_train,
                     sensitive_test=sensitive_test,
-                    sensitive_attr='sex',  # Primary sensitive attribute
+                    sensitive_attr=sensitive_attr,
                     base_model=baseline_model
                 )
             else:
@@ -216,7 +234,8 @@ def apply_mitigation_techniques(
                     y_test=y_test,
                     sensitive_train=sensitive_train,
                     sensitive_test=sensitive_test,
-                    sensitive_attr='sex'
+                    sensitive_attr=sensitive_attr,
+                    base_model_params=base_model_params
                 )
             
             # Generate predictions DataFrame for fairness assessment
@@ -230,9 +249,9 @@ def apply_mitigation_techniques(
                 'y_true': y_test.values,
                 'y_pred': result['predictions']['y_pred'],
                 'y_proba': y_proba,
-                'age_group': sensitive_test['age_group'].values,
-                'sex': sensitive_test['sex'].values
             })
+            for col in sensitive_test.columns:
+                predictions_df[col] = sensitive_test[col].values
             
             # Add model features for individual fairness calculation
             for col in X_test.columns:
@@ -240,7 +259,7 @@ def apply_mitigation_techniques(
             
             # Calculate fairness metrics
             # Use actual model features (numeric) for individual fairness, not sensitive attrs
-            fairness_calc = FairnessMetrics()
+            fairness_calc = FairnessMetrics(list(sensitive_test.columns))
             fairness_results = fairness_calc.calculate_all_metrics(
                 predictions_df,
                 feature_cols=list(X_test.columns)
@@ -269,6 +288,8 @@ def apply_mitigation_techniques(
 
 def create_comparison_table(all_results):
     """Create comparison DataFrame from results."""
+    if not all_results:
+        return pd.DataFrame()
     comparison_data = []
     
     for result in all_results:
@@ -344,9 +365,11 @@ def main():
                        default='configs/experiments/mitigation.yaml',
                        help='Path to experiment config file')
     parser.add_argument('--datasets', type=str, nargs='+',
-                       help='Datasets to process (default: from config)')
+                        help='Datasets to process (default: from config)')
     parser.add_argument('--output-dir', type=str,
-                       help='Output directory (default: results/cardiac/experiments/latest_run/mitigation)')
+                       help='Output directory (default: from config or results/{pipeline}/experiments/{run_mode}/latest_run/mitigation)')
+    parser.add_argument('--pipeline', type=str, default='cardiac',
+                       help='Pipeline name (e.g., cardiac, dermatology)')
     parser.add_argument('--run-mode', type=str, choices=['full', 'partial'],
                        default=os.getenv('EXPERIMENT_RUN_MODE', 'partial'),
                        help='Run mode (full or partial)')
@@ -357,7 +380,7 @@ def main():
     args = parser.parse_args()
     
     # Paths
-    project_root = Path(__file__).parent.parent.parent
+    project_root = get_project_root(Path(__file__))
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     
     # Load config
@@ -367,10 +390,18 @@ def main():
         return
     
     experiment_cfg = load_yaml_config(str(config_path))
-    pipeline_cfg = load_yaml_config(str(project_root / 'configs/pipelines/cardiac.yaml'))
+    pipeline_cfg = load_pipeline_config(project_root, args.pipeline)
+    raw_model_params = dict(pipeline_cfg.get('training', {}))
     schema_path = project_root / pipeline_cfg['runtime']['schema_mapping_json']
     with open(schema_path, 'r') as f:
         schema_cfg = json.load(f)
+        target_col = experiment_cfg.get('data', {}).get('target') or raw_model_params.get('target', 'heart_disease')
+        allowed_model_keys = {
+            'C', 'penalty', 'solver', 'tol', 'l1_ratio',
+            'max_iter', 'random_state', 'class_weight'
+        }
+        model_params = {k: v for k, v in raw_model_params.items() if k in allowed_model_keys}
+    sensitive_attrs = pipeline_cfg.get('fairness', {}).get('sensitive_attributes', ['age_group', 'sex'])
     
     # Validate config
     REQUIRED_KEYS = ['data', 'mitigation_strategies']
@@ -383,10 +414,18 @@ def main():
     datasets = args.datasets if args.datasets else experiment_cfg['data']['datasets']
     
     # Determine output directory
-    if args.run_mode == 'partial':
-        base_results = project_root / 'results/cardiac/experiments/partial'
+    default_output_dir = experiment_cfg.get('output', {}).get('results_dir')
+    if default_output_dir:
+        base_results = Path(default_output_dir)
+        if base_results.parts and base_results.name == 'mitigation':
+            base_results = base_results.parents[1]
+        if args.run_mode == 'partial' and 'full' in base_results.parts:
+            parts = list(base_results.parts)
+            idx = len(parts) - 1 - parts[::-1].index('full')
+            parts[idx] = 'partial'
+            base_results = Path(*parts)
     else:
-        base_results = project_root / 'results/cardiac/experiments/full'
+        base_results = project_root / f"results/{args.pipeline}/experiments/{args.run_mode}"
     latest_dir = base_results / 'latest_run'
     if args.output_dir:
         output_dir = Path(args.output_dir)
@@ -396,8 +435,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Setup logging
-    log_dir = project_root / 'logs/experiments/latest_run'
-    setup_logging(log_dir / 'mitigation_comparison.log', verbose=args.verbose)
+    setup_phase_logging(project_root, 'mitigation_comparison.log', verbose=args.verbose, log_subdir='experiments/latest_run')
     logger = logging.getLogger(__name__)
     logging.info("[PHASE] Mitigation comparison started")
 
@@ -413,7 +451,7 @@ def main():
     logging.info(f"  Timestamp: {timestamp}")
     
     # Data directory
-    data_dir = project_root / 'data/processed/cardiac'
+    data_dir = project_root / pipeline_cfg['paths']['processed_dir']
     
     # Techniques to test (from config)
     techniques = experiment_cfg['mitigation_strategies']
@@ -443,13 +481,14 @@ def main():
         
         try:
             # Load data
+            dataset_target = resolve_target_column(schema_cfg, dataset_name, target_col)
             X_train, y_train, sensitive_train, X_test, y_test, sensitive_test = load_dataset(
-                dataset_name, data_dir, schema_cfg
+                dataset_name, data_dir, schema_cfg, dataset_target, sensitive_attrs
             )
             
             # Train baseline
             baseline = train_baseline(
-                X_train, y_train, X_test, y_test, sensitive_test, dataset_name
+                X_train, y_train, X_test, y_test, sensitive_test, dataset_name, model_params
             )
             
             baseline_results.append({
@@ -465,7 +504,8 @@ def main():
             mitigation_results = apply_mitigation_techniques(
                 X_train, y_train, X_test, y_test,
                 sensitive_train, sensitive_test,
-                dataset_name, baseline['model'], implemented
+                dataset_name, baseline['model'], implemented,
+                base_model_params=model_params
             )
             
             all_results.extend(mitigation_results)
@@ -476,6 +516,9 @@ def main():
     
     # Combine baseline and mitigation results
     all_results = baseline_results + all_results
+    if not all_results:
+        logging.error("No results produced; aborting report generation")
+        return
     
     # Summary statistics
     logging.info(f"\n{'='*80}")
@@ -491,6 +534,9 @@ def main():
     logging.info(f"{'='*80}")
     
     comparison_df = create_comparison_table(all_results)
+    if comparison_df.empty:
+        logging.error("No comparison data available")
+        return
     
     # Save results
     csv_file = output_dir / f'mitigation_comparison_{timestamp}.csv'

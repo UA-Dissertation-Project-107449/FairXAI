@@ -23,8 +23,9 @@ from fairxai.fairness.mitigation import MitigationEngine
 from fairxai.experiments.versioning import ExperimentVersioning
 from fairxai.data.schemas import available_sensitive, preferred_sensitive
 from fairxai.utils.config import load_yaml_config
+from fairxai.experiments.data_io import load_schema_config as load_schema_config_shared, build_schema_excludes, default_exclude_columns
 from fairxai.explainability.tabular import shap_explain_tabular, lime_explain_instance
-from fairxai.utils.logging_utils import setup_logging
+from fairxai.cli.runner_base import get_project_root, setup_phase_logging
 
 
 STAGE_MAP = {
@@ -73,29 +74,20 @@ def load_processed_data(
     }
 
 
-def load_schema_config(project_root: Path) -> Dict[str, Any]:
-    pipeline_cfg = load_yaml_config(str(project_root / 'configs/pipelines/cardiac.yaml'))
-    schema_path = project_root / pipeline_cfg['runtime']['schema_mapping_json']
-    with open(schema_path, 'r') as f:
-        return json.load(f)
+def load_schema_config(project_root: Path, pipeline: str) -> Dict[str, Any]:
+    return load_schema_config_shared(project_root, pipeline)
 
 
 def schema_excludes(schema_cfg: Dict[str, Any], dataset_name: str) -> List[str]:
-    dataset_cfg = schema_cfg.get('datasets', {}).get(dataset_name, {})
-    unified = schema_cfg.get('unified_schema', {})
-    exclude = list(dataset_cfg.get('exclude_features') or [])
-    unified_exclude = list(unified.get('exclude_features') or [])
-    label_col = dataset_cfg.get('label') or dataset_cfg.get('target')
-    if label_col:
-        exclude.append(label_col)
-    return list(dict.fromkeys(exclude + unified_exclude))
+    return build_schema_excludes(schema_cfg, dataset_name)
 
 
 def prepare_data_splits(
     train_df: pd.DataFrame,
     test_df: pd.DataFrame,
     exclude_cols: List[str],
-    sensitive_attrs: List[str]
+    sensitive_attrs: List[str],
+    target_col: str
 ) -> Dict[str, Any]:
     """
     Prepare train/test splits with feature/target separation.
@@ -113,9 +105,9 @@ def prepare_data_splits(
     
     # Separate features, target, and sensitive/group attributes
     X_train = train_df.drop(columns=exclude_cols)
-    y_train = train_df['heart_disease']
+    y_train = train_df[target_col]
     X_test = test_df.drop(columns=exclude_cols)
-    y_test = test_df['heart_disease']
+    y_test = test_df[target_col]
 
     sens_cols_train = available_sensitive(train_df, sensitive_attrs)
     sens_cols_test = available_sensitive(test_df, sensitive_attrs)
@@ -319,7 +311,8 @@ def run_single_experiment(
     versioning: ExperimentVersioning,
     processed_dir: Path,
     schema_cfg: Dict[str, Any],
-    logger: logging.Logger
+    logger: logging.Logger,
+    target_col: str
 ) -> Dict[str, Any]:
     """
     Run a single experiment with given configuration.
@@ -353,18 +346,18 @@ def run_single_experiment(
         )
         
         # Prepare splits
-        exclude_cols = [
-            'heart_disease', 'age_group', 'sex', 'sex_extended', 'sex_bin',
-            'Sex', 'ChestPainType', 'RestingECG', 'ExerciseAngina', 'ST_Slope',
-            '_dataset_source', '_dataset_file', 'age_raw', 'HeartDisease'
-        ]
-        exclude_cols.extend(schema_excludes(schema_cfg, config['dataset']))
-        exclude_cols.extend(config.get('sensitive_attributes', []))
+        exclude_cols = default_exclude_columns(
+            schema_cfg,
+            config['dataset'],
+            target=target_col,
+            sensitive_attrs=config.get('sensitive_attributes', [])
+        )
         splits = prepare_data_splits(
             data['train_df'],
             data['test_df'],
             exclude_cols,
-            config['sensitive_attributes']
+            config['sensitive_attributes'],
+            target_col
         )
 
         if config['mitigation_technique'] != 'baseline' and not splits['sensitive_cols']:
@@ -459,6 +452,7 @@ def run_single_split_experiment(
             base_model.train(splits['X_train'], splits['y_train'])
 
         # Apply mitigation technique
+        fairness_base_params = config.get('fairness_base_model_params')
         result = engine.apply_technique(
             technique_name=mitigation,
             stage=stage,
@@ -469,7 +463,8 @@ def run_single_split_experiment(
             sensitive_train=splits['sensitive_train'],
             sensitive_test=splits['sensitive_test'],
             sensitive_attr=sensitive_attr,
-            base_model=base_model
+            base_model=base_model,
+            base_model_params=fairness_base_params
         )
     
     # Calculate fairness metrics
@@ -710,6 +705,12 @@ def main():
         help='Path to experiment configuration file'
     )
     parser.add_argument(
+        '--pipeline',
+        type=str,
+        default='cardiac',
+        help='Pipeline name (e.g., cardiac, dermatology)'
+    )
+    parser.add_argument(
         '--n-jobs',
         type=int,
         default=None,
@@ -728,8 +729,8 @@ def main():
     )
     
     args = parser.parse_args()
-    log_dir = Path(__file__).parent.parent.parent / 'logs/experiments/latest_run'
-    setup_logging(log_dir / 'combinatorial_experiments.log', verbose=args.verbose)
+    project_root = get_project_root(Path(__file__))
+    setup_phase_logging(project_root, 'combinatorial_experiments.log', verbose=args.verbose, log_subdir='experiments/latest_run')
     logger = logging.getLogger(__name__)
     
     logger.info("="*80)
@@ -753,6 +754,10 @@ def main():
 
     sensitive_attrs = preferred_sensitive(config.get('sensitive_attributes'))
     
+    # Load pipeline config
+    pipeline_cfg = load_yaml_config(str(project_root / f"configs/pipelines/{args.pipeline}.yaml"))
+    target_col = pipeline_cfg.get('training', {}).get('target', 'heart_disease')
+
     # Initialize versioning
     base_results_dir = Path(config['paths']['results_dir'])
     versioning = ExperimentVersioning(base_results_dir)
@@ -763,7 +768,14 @@ def main():
     
     # Generate all experiment combinations
     experiments = []
+    fairness_base_params_cfg = config.get('fairness_base_model_params')
     for dataset in config['datasets']:
+        if isinstance(fairness_base_params_cfg, dict) and dataset in fairness_base_params_cfg:
+            fairness_base_params = fairness_base_params_cfg.get(dataset)
+        else:
+            fairness_base_params = fairness_base_params_cfg
+        if not fairness_base_params:
+            fairness_base_params = config.get('model_params', {})
         for binning in config['binning_strategies']:
             for mitigation in config['mitigation_techniques']:
                 for training_method in config['training_methods']:
@@ -776,6 +788,7 @@ def main():
                         'cv_folds': config.get('cv_folds', 5),
                         'random_seed': config.get('random_seed', 42),
                         'model_params': config.get('model_params', {}),
+                        'fairness_base_model_params': fairness_base_params or None,
                         'sensitive_attributes': sensitive_attrs,
                     }
                     
@@ -797,21 +810,21 @@ def main():
     # Run experiments
     logger.info("\nStarting experiments...")
     processed_dir = Path(config['paths']['processed_dir'])
-    schema_cfg = load_schema_config(Path(__file__).parent.parent.parent)
+    schema_cfg = load_schema_config(Path(__file__).parent.parent.parent, args.pipeline)
     
     if args.n_jobs == 1:
         # Sequential execution
         results = []
         for i, (exp_id, exp_config) in enumerate(experiments, 1):
             logger.info(f"\n[{i}/{total_experiments}] Running experiment {exp_id}...")
-            result = run_single_experiment(exp_id, exp_config, versioning, processed_dir, schema_cfg, logger)
+            result = run_single_experiment(exp_id, exp_config, versioning, processed_dir, schema_cfg, logger, target_col)
             results.append(result)
             versioning.save_results(exp_id, result)
     else:
         # Parallel execution
         logger.info(f"Running experiments in parallel with {args.n_jobs} jobs...")
         results = Parallel(n_jobs=args.n_jobs, verbose=10)(
-            delayed(run_single_experiment)(exp_id, exp_config, versioning, processed_dir, schema_cfg, logger)
+            delayed(run_single_experiment)(exp_id, exp_config, versioning, processed_dir, schema_cfg, logger, target_col)
             for exp_id, exp_config in experiments
         )
         

@@ -18,6 +18,10 @@ class BaselineLogisticRegression:
     def __init__(
         self,
         C: float = 1.0,
+        penalty: str = "l2",
+        solver: str = "lbfgs",
+        tol: float = 1e-4,
+        l1_ratio: Optional[float] = None,
         max_iter: int = 1000,
         random_state: int = 42,
         class_weight: Optional[str] = None
@@ -27,12 +31,20 @@ class BaselineLogisticRegression:
         
         Args:
             C: Inverse of regularization strength
+            penalty: Regularization penalty (e.g. 'l1', 'l2', 'elasticnet', 'none')
+            solver: Optimization solver (e.g. 'lbfgs', 'liblinear', 'saga')
+            tol: Tolerance for stopping criteria
+            l1_ratio: Elastic-net mixing parameter (only used if penalty='elasticnet')
             max_iter: Maximum iterations for convergence
             random_state: Random seed
             class_weight: 'balanced' to handle class imbalance, or None
         """
         self.model = LogisticRegression(
             C=C,
+            penalty=penalty,
+            solver=solver,
+            tol=tol,
+            l1_ratio=l1_ratio,
             max_iter=max_iter,
             random_state=random_state,
             class_weight=class_weight

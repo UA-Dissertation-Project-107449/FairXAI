@@ -20,7 +20,6 @@ import sys
 import logging
 import argparse
 import os
-import shutil
 from pathlib import Path
 from datetime import datetime
 import json
@@ -36,31 +35,13 @@ from fairxai.experiments.age_binning import (
     generate_summary_report
 )
 from fairxai.utils.config import load_yaml_config
-from fairxai.utils.logging_utils import setup_logging
+from fairxai.cli.runner_base import get_project_root, setup_phase_logging, load_pipeline_config
+from fairxai.cli.runner_utils import archive_latest_run
 
 
-def archive_latest_run(base_dir: Path, enabled: bool, logger: logging.Logger):
-    if not enabled:
-        return
-    latest_dir = base_dir / 'latest_run'
-    archives_dir = base_dir / 'archived_runs'
-    archives_dir.mkdir(parents=True, exist_ok=True)
-
-    has_files = latest_dir.exists() and any(p.is_file() for p in latest_dir.rglob('*'))
-    if not has_files:
-        return
-
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    archive_path = archives_dir / f'run_{timestamp}'
-    archive_path.parent.mkdir(parents=True, exist_ok=True)
-    if archive_path.exists():
-        shutil.rmtree(archive_path)
-    shutil.move(str(latest_dir), str(archive_path))
-    latest_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Archived previous latest_run to: {archive_path}")
 
 
-def load_dataset_for_binning(dataset_name: str, data_dir: Path):
+def load_dataset_for_binning(dataset_name: str, data_dir: Path, sensitive_col: str, target_col: str):
     """
     Load standardized raw dataset with age_raw column.
     
@@ -81,19 +62,19 @@ def load_dataset_for_binning(dataset_name: str, data_dir: Path):
     df = pd.read_csv(file_path)
     
     # Verify required columns
-    REQUIRED_COLUMNS = ['age_raw', 'sex', 'heart_disease']
+    REQUIRED_COLUMNS = ['age_raw', sensitive_col, target_col]
     missing = [col for col in REQUIRED_COLUMNS if col not in df.columns]
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
     
     logging.info(f"  Loaded: {len(df)} samples")
     logging.info(f"  Age range: [{df['age_raw'].min()}, {df['age_raw'].max()}]")
-    logging.info(f"  Target prevalence: {df['heart_disease'].mean():.2%}")
+    logging.info(f"  Target prevalence: {df[target_col].mean():.2%}")
     
     return df
 
 
-def run_strategy_analysis(df, strategy_name, dataset_name):
+def run_strategy_analysis(df, strategy_name, dataset_name, sensitive_col, target_col):
     """
     Analyze a single binning strategy on a dataset.
     
@@ -119,8 +100,8 @@ def run_strategy_analysis(df, strategy_name, dataset_name):
             labels=labels,
             dataset_name=dataset_name,
             age_col='age_raw',
-            sensitive_col='sex',
-            target_col='heart_disease'
+            sensitive_col=sensitive_col,
+            target_col=target_col
         )
         
         return result
@@ -141,7 +122,9 @@ def main():
     parser.add_argument('--strategies', type=str, nargs='+',
                        help='Strategies to test (default: from config)')
     parser.add_argument('--output-dir', type=str,
-                       help='Output directory (default: results/cardiac/experiments/latest_run/age_binning)')
+                       help='Output directory (default: from config or results/{pipeline}/experiments/{run_mode}/latest_run/age_binning)')
+    parser.add_argument('--pipeline', type=str, default='cardiac',
+                       help='Pipeline name (e.g., cardiac, dermatology)')
     parser.add_argument('--run-mode', type=str, choices=['full', 'partial'],
                        default=os.getenv('EXPERIMENT_RUN_MODE', 'partial'),
                        help='Run mode (full or partial)')
@@ -152,7 +135,7 @@ def main():
     args = parser.parse_args()
     
     # Paths
-    project_root = Path(__file__).parent.parent.parent
+    project_root = get_project_root(Path(__file__))
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     
     # Load config
@@ -162,6 +145,7 @@ def main():
         return
     
     experiment_cfg = load_yaml_config(str(config_path))
+    pipeline_cfg = load_pipeline_config(project_root, args.pipeline)
     
     # Validate config
     required_keys = ['data', 'binning_strategies']
@@ -172,6 +156,9 @@ def main():
     
     # Determine datasets and strategies to process
     datasets = args.datasets if args.datasets else experiment_cfg['data']['datasets']
+    sensitive_attrs = experiment_cfg.get('data', {}).get('sensitive_attributes', ['sex'])
+    sensitive_col = sensitive_attrs[0] if sensitive_attrs else 'sex'
+    target_col = experiment_cfg.get('data', {}).get('target', 'heart_disease')
     
     if args.strategies:
         strategies = args.strategies
@@ -179,16 +166,23 @@ def main():
         strategies = list(experiment_cfg['binning_strategies'].keys())
     
     # Setup logging
-    log_dir = project_root / 'logs/experiments/latest_run'
-    setup_logging(log_dir / 'age_binning_analysis.log', verbose=args.verbose)
+    setup_phase_logging(project_root, 'age_binning_analysis.log', verbose=args.verbose, log_subdir='experiments/latest_run')
     logger = logging.getLogger(__name__)
     logging.info("[PHASE] Age binning analysis started")
 
     # Determine output directory
-    if args.run_mode == 'partial':
-        base_results = project_root / 'results/cardiac/experiments/partial'
+    default_output_dir = experiment_cfg.get('output', {}).get('results_dir')
+    if default_output_dir:
+        base_results = Path(default_output_dir)
+        if base_results.parts and base_results.name == 'age_binning':
+            base_results = base_results.parents[1]
+        if args.run_mode == 'partial' and 'full' in base_results.parts:
+            parts = list(base_results.parts)
+            idx = len(parts) - 1 - parts[::-1].index('full')
+            parts[idx] = 'partial'
+            base_results = Path(*parts)
     else:
-        base_results = project_root / 'results/cardiac/experiments/full'
+        base_results = project_root / f"results/{args.pipeline}/experiments/{args.run_mode}"
     latest_dir = base_results / 'latest_run'
 
     if args.run_mode == 'partial':
@@ -210,7 +204,7 @@ def main():
     logging.info(f"  Timestamp: {timestamp}")
     
     # Data directory (use raw standardized data)
-    data_dir = project_root / 'data/raw/cardiac'
+    data_dir = project_root / pipeline_cfg['paths']['raw_dir']
     
     # Get scoring weights from config
     scoring_cfg = experiment_cfg.get('scoring', {})
@@ -235,7 +229,7 @@ def main():
         
         try:
             # Load dataset
-            df = load_dataset_for_binning(dataset_name, data_dir)
+            df = load_dataset_for_binning(dataset_name, data_dir, sensitive_col, target_col)
         except Exception as e:
             logging.error(f"Failed to load {dataset_name}: {e}")
             logging.exception(e)
@@ -243,7 +237,7 @@ def main():
         
         # Test each strategy (errors handled within run_strategy_analysis)
         for strategy_name in strategies:
-            result = run_strategy_analysis(df, strategy_name, dataset_name)
+            result = run_strategy_analysis(df, strategy_name, dataset_name, sensitive_col, target_col)
             if result:
                 all_results.append(result)
     

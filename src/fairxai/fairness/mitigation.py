@@ -8,7 +8,7 @@ fairness metrics while maintaining model performance.
 import logging
 import numpy as np
 import pandas as pd
-from typing import Dict, Tuple, Optional, Union
+from typing import Dict, Tuple, Optional, Union, Any
 
 # Scikit-learn
 from sklearn.linear_model import LogisticRegression
@@ -244,7 +244,8 @@ class InProcessingMitigation:
         constraint_type: str = 'demographic_parity',
         eps: float = 0.05,
         max_iter: int = 50,
-        random_state: int = 42
+        random_state: int = 42,
+        base_model_params: Optional[Dict[str, Any]] = None
     ):
         """
         Apply Exponentiated Gradient reduction for fairness.
@@ -260,6 +261,7 @@ class InProcessingMitigation:
             eps: Tolerance for constraint violation
             max_iter: Maximum iterations
             random_state: Random seed
+            base_model_params: Optional LogisticRegression kwargs override
             
         Returns:
             Trained fairness-aware model
@@ -276,7 +278,10 @@ class InProcessingMitigation:
             raise ValueError(f"Unknown constraint type: {constraint_type}")
         
         # Base estimator
-        base_model = LogisticRegression(max_iter=1000, random_state=random_state)
+        base_params = dict(base_model_params or {})
+        base_params.setdefault('max_iter', 1000)
+        base_params.setdefault('random_state', random_state)
+        base_model = LogisticRegression(**base_params)
         
         # Fairness-aware model
         mitigator = ExponentiatedGradient(
@@ -305,7 +310,8 @@ class InProcessingMitigation:
         sensitive_attr: str = 'sex',
         constraint_type: str = 'equalized_odds',
         grid_size: int = 20,
-        random_state: int = 42
+        random_state: int = 42,
+        base_model_params: Optional[Dict[str, Any]] = None
     ):
         """
         Apply Grid Search reduction for fairness.
@@ -336,7 +342,10 @@ class InProcessingMitigation:
             raise ValueError(f"Unknown constraint type: {constraint_type}")
         
         # Base estimator
-        base_model = LogisticRegression(max_iter=1000, random_state=random_state)
+        base_params = dict(base_model_params or {})
+        base_params.setdefault('max_iter', 1000)
+        base_params.setdefault('random_state', random_state)
+        base_model = LogisticRegression(**base_params)
         
         # Fairness-aware model
         mitigator = GridSearch(
@@ -612,15 +621,20 @@ class MitigationEngine:
         sensitive_train, sensitive_test, sensitive_attr, **kwargs
     ) -> Dict:
         """Apply in-processing technique."""
+        base_model_params = kwargs.pop('base_model_params', None)
         if technique_name == 'exponentiated_gradient':
             model = self.inprocessing.apply_exponentiated_gradient(
                 X_train, y_train, sensitive_train, sensitive_attr,
-                random_state=self.random_state, **kwargs
+                random_state=self.random_state,
+                base_model_params=base_model_params,
+                **kwargs
             )
         elif technique_name == 'grid_search':
             model = self.inprocessing.apply_grid_search(
                 X_train, y_train, sensitive_train, sensitive_attr,
-                random_state=self.random_state, **kwargs
+                random_state=self.random_state,
+                base_model_params=base_model_params,
+                **kwargs
             )
         else:
             raise ValueError(f"Unknown in-processing technique: {technique_name}")
@@ -660,7 +674,38 @@ class MitigationEngine:
         sensitive_train, sensitive_test, sensitive_attr, **kwargs
     ) -> Dict:
         """Apply post-processing technique."""
+        _ = kwargs.pop('base_model_params', None)
         if technique_name == 'threshold_optimizer':
+            if sensitive_attr not in sensitive_train.columns:
+                raise ValueError(f"Sensitive attribute '{sensitive_attr}' not found in training data")
+            group_counts = (
+                y_train.groupby(sensitive_train[sensitive_attr])
+                .nunique(dropna=False)
+            )
+            if (group_counts < 2).any():
+                logger.warning(
+                    "Degenerate labels for at least one sensitive group; "
+                    "skipping threshold optimizer and returning baseline predictions."
+                )
+                y_pred = base_model.predict(X_test)
+                y_proba = None
+                if hasattr(base_model, 'model') and hasattr(base_model.model, 'predict_proba'):
+                    y_proba = base_model.model.predict_proba(X_test)[:, 1]
+                elif hasattr(base_model, 'predict_proba'):
+                    y_proba = base_model.predict_proba(X_test)[:, 1]
+                test_metrics = self._compute_metrics(y_test, y_pred, y_proba)
+                return {
+                    'model': base_model,
+                    'test_metrics': test_metrics,
+                    'predictions': {'y_pred': y_pred, 'y_proba': y_proba},
+                    'metadata': {
+                        'technique': technique_name,
+                        'stage': 'post-processing',
+                        'base_model': type(base_model).__name__,
+                        'skipped': True,
+                        'skip_reason': 'degenerate_labels'
+                    }
+                }
             postprocessor = self.postprocessing.apply_threshold_optimizer(
                 base_model.model, X_train, y_train, sensitive_train, sensitive_attr, **kwargs
             )
