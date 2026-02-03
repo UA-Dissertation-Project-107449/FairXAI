@@ -16,7 +16,7 @@ class ExperimentVersioning:
     Manages experiment versioning with latest_run and archived runs.
     """
     
-    def __init__(self, base_results_dir: Path):
+    def __init__(self, base_results_dir: Path, run_dir: Optional[Path] = None):
         """
         Initialize versioning system.
         
@@ -25,7 +25,7 @@ class ExperimentVersioning:
                              (e.g., results/experiments/)
         """
         self.base_dir = Path(base_results_dir)
-        self.latest_dir = self.base_dir / "latest_run"
+        self.latest_dir = Path(run_dir) if run_dir is not None else self.base_dir / "latest_run"
         self.archives_dir = self.base_dir / "archived_runs"
         self.logger = logging.getLogger(__name__)
         
@@ -218,6 +218,10 @@ class ExperimentVersioning:
         Returns:
             Path to archived directory or None if nothing to archive
         """
+        if self.latest_dir != self.base_dir / "latest_run":
+            self.logger.info("Run-scoped directory in use; skipping archive.")
+            return None
+
         # Check if latest_run has any results
         results_dir = self.latest_dir / "results"
         has_results = results_dir.exists() and any(results_dir.rglob("*.json"))

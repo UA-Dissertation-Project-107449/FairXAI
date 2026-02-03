@@ -26,6 +26,12 @@ from fairxai.utils.config import load_yaml_config
 from fairxai.experiments.data_io import load_schema_config as load_schema_config_shared, build_schema_excludes, default_exclude_columns
 from fairxai.explainability.tabular import shap_explain_tabular, lime_explain_instance
 from fairxai.cli.runner_base import get_project_root, setup_phase_logging
+from fairxai.cli.runner_utils import (
+    append_run_history,
+    get_run_root,
+    resolve_run_id,
+    update_latest_pointer,
+)
 
 
 STAGE_MAP = {
@@ -693,44 +699,21 @@ def run_cv_experiment(
     }
 
 
-def main():
+def run_combinatorial_analysis(
+    config_path: str,
+    pipeline: str = 'cardiac',
+    n_jobs: int = 1,
+    verbose: bool = False,
+    archive_previous: bool = True,
+    run_id: Optional[str] = None,
+    results_root: Optional[str] = None
+):
     """Main orchestration for combinatorial experiments."""
-    parser = argparse.ArgumentParser(
-        description='Run combinatorial fairness mitigation experiments'
-    )
-    parser.add_argument(
-        '--config',
-        type=str,
-        default='configs/experiments/combinatorial.yaml',
-        help='Path to experiment configuration file'
-    )
-    parser.add_argument(
-        '--pipeline',
-        type=str,
-        default='cardiac',
-        help='Pipeline name (e.g., cardiac, dermatology)'
-    )
-    parser.add_argument(
-        '--n-jobs',
-        type=int,
-        default=None,
-        help='Number of parallel jobs (-1 for all cores)'
-    )
-    parser.add_argument(
-        '--verbose',
-        action='store_true',
-        help='Enable verbose logging'
-    )
-    parser.add_argument(
-        '--archive-previous',
-        action='store_true',
-        default=os.getenv('ARCHIVE_PREVIOUS', 'true').lower() == 'true',
-        help='Archive previous run before starting'
-    )
-    
-    args = parser.parse_args()
     project_root = get_project_root(Path(__file__))
-    setup_phase_logging(project_root, 'combinatorial_experiments.log', verbose=args.verbose, log_subdir='experiments/latest_run')
+    use_run_id = bool(run_id or os.getenv('RUN_ID') or os.getenv('PREFECT__RUNTIME__FLOW_RUN_ID'))
+    run_id = resolve_run_id(run_id) if use_run_id else None
+    log_subdir = f"experiments/{run_id}" if run_id else 'experiments/latest_run'
+    setup_phase_logging(project_root, 'combinatorial_experiments.log', verbose=verbose, log_subdir=log_subdir)
     logger = logging.getLogger(__name__)
     
     logger.info("="*80)
@@ -739,7 +722,7 @@ def main():
     logger.info("[PHASE] Combinatorial experiments started")
     
     # Load configuration
-    config_path = Path(args.config)
+    config_path = Path(config_path)
     if not config_path.exists():
         logger.error(f"Configuration file not found: {config_path}")
         sys.exit(1)
@@ -747,24 +730,39 @@ def main():
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
 
-    if args.n_jobs is None:
-        args.n_jobs = int(config.get('n_jobs', 1))
+    if n_jobs is None:
+        n_jobs = int(config.get('n_jobs', 1))
     
     logger.info(f"Loaded configuration from: {config_path}")
 
     sensitive_attrs = preferred_sensitive(config.get('sensitive_attributes'))
     
     # Load pipeline config
-    pipeline_cfg = load_yaml_config(str(project_root / f"configs/pipelines/{args.pipeline}.yaml"))
+    pipeline_cfg = load_yaml_config(str(project_root / f"configs/pipelines/{pipeline}.yaml"))
     target_col = pipeline_cfg.get('training', {}).get('target', 'heart_disease')
 
     # Initialize versioning
-    base_results_dir = Path(config['paths']['results_dir'])
-    versioning = ExperimentVersioning(base_results_dir)
-    
-    # Archive previous run if requested
-    if args.archive_previous:
-        versioning.archive_previous_run()
+    base_results_dir = Path(results_root) if results_root else Path(config['paths']['results_dir'])
+    if run_id:
+        run_dir = get_run_root(base_results_dir, run_id)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        versioning = ExperimentVersioning(base_results_dir, run_dir=run_dir)
+    else:
+        versioning = ExperimentVersioning(base_results_dir)
+        # Archive previous run if requested
+        if archive_previous:
+            versioning.archive_previous_run()
+
+    if run_id:
+        append_run_history(base_results_dir, {
+            'run_id': run_id,
+            'pipeline': pipeline,
+            'mode': 'full',
+            'phase': 'combinatorial',
+            'datasets': config.get('datasets', []),
+            'output_dir': str(versioning.latest_dir),
+            'status': 'started'
+        })
     
     # Generate all experiment combinations
     experiments = []
@@ -800,7 +798,7 @@ def main():
     logger.info(f"  Binning strategies: {len(config['binning_strategies'])}")
     logger.info(f"  Mitigation techniques: {len(config['mitigation_techniques'])}")
     logger.info(f"  Training methods: {len(config['training_methods'])}")
-    logger.info(f"  Parallel jobs: {args.n_jobs}")
+    logger.info(f"  Parallel jobs: {n_jobs}")
     
     # Save manifests first
     logger.info("\nSaving experiment manifests...")
@@ -810,9 +808,9 @@ def main():
     # Run experiments
     logger.info("\nStarting experiments...")
     processed_dir = Path(config['paths']['processed_dir'])
-    schema_cfg = load_schema_config(Path(__file__).parent.parent.parent, args.pipeline)
+    schema_cfg = load_schema_config(Path(__file__).parent.parent.parent, pipeline)
     
-    if args.n_jobs == 1:
+    if n_jobs == 1:
         # Sequential execution
         results = []
         for i, (exp_id, exp_config) in enumerate(experiments, 1):
@@ -822,8 +820,9 @@ def main():
             versioning.save_results(exp_id, result)
     else:
         # Parallel execution
-        logger.info(f"Running experiments in parallel with {args.n_jobs} jobs...")
-        results = Parallel(n_jobs=args.n_jobs, verbose=10)(
+        logger.info(f"Running experiments in parallel with {n_jobs} jobs...")
+        parallel_verbose = int(config.get('parallel_verbose', 0))
+        results = Parallel(n_jobs=n_jobs, verbose=parallel_verbose)(
             delayed(run_single_experiment)(exp_id, exp_config, versioning, processed_dir, schema_cfg, logger, target_col)
             for exp_id, exp_config in experiments
         )
@@ -850,6 +849,18 @@ def main():
     logger.info(f"\nResults saved to: {versioning.latest_dir}")
     logger.info("[PHASE] Combinatorial experiments complete")
 
+    if run_id:
+        update_latest_pointer(base_results_dir, versioning.latest_dir, logger)
+        append_run_history(base_results_dir, {
+            'run_id': run_id,
+            'pipeline': pipeline,
+            'mode': 'full',
+            'phase': 'combinatorial',
+            'datasets': config.get('datasets', []),
+            'output_dir': str(versioning.latest_dir),
+            'status': 'completed'
+        })
+
     # Aggregate dataset-level SHAP summaries (global/local)
     xai_root = versioning.latest_dir / 'xai'
     for dataset in config['datasets']:
@@ -857,6 +868,65 @@ def main():
         if shap_dir.exists():
             aggregate_dataset_shap(shap_dir, 'global')
             aggregate_dataset_shap(shap_dir, 'local')
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Run combinatorial fairness mitigation experiments'
+    )
+    parser.add_argument(
+        '--config',
+        type=str,
+        default='configs/experiments/combinatorial.yaml',
+        help='Path to experiment configuration file'
+    )
+    parser.add_argument(
+        '--pipeline',
+        type=str,
+        default='cardiac',
+        help='Pipeline name (e.g., cardiac, dermatology)'
+    )
+    parser.add_argument(
+        '--n-jobs',
+        type=int,
+        default=None,
+        help='Number of parallel jobs (-1 for all cores)'
+    )
+    parser.add_argument(
+        '--verbose',
+        action='store_true',
+        help='Enable verbose logging'
+    )
+    parser.add_argument(
+        '--archive-previous',
+        action='store_true',
+        default=os.getenv('ARCHIVE_PREVIOUS', 'true').lower() == 'true',
+        help='Archive previous run before starting'
+    )
+    parser.add_argument(
+        '--run-id',
+        type=str,
+        default=os.getenv('RUN_ID'),
+        help='Run identifier (optional, enables run-scoped outputs)'
+    )
+    parser.add_argument(
+        '--results-root',
+        type=str,
+        default=None,
+        help='Base results directory for run outputs'
+    )
+    
+    args = parser.parse_args()
+    
+    run_combinatorial_analysis(
+        config_path=args.config,
+        pipeline=args.pipeline,
+        n_jobs=args.n_jobs,
+        verbose=args.verbose,
+        archive_previous=args.archive_previous,
+        run_id=args.run_id,
+        results_root=args.results_root
+    )
 
 
 if __name__ == '__main__':

@@ -3,6 +3,7 @@
 import argparse
 import json
 import yaml
+import os
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -14,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 
 from fairxai.experiments.versioning import ExperimentVersioning
 from fairxai.cli.runner_base import get_project_root, setup_phase_logging
+from fairxai.cli.runner_utils import resolve_latest_run_dir, resolve_run_id
 from fairxai.visualization.plots import (
     save_comparison_heatmap,
     save_tradeoff_scatter,
@@ -353,64 +355,49 @@ def filter_best_configurations(
     return best_df
 
 
-def main():
+def run_comparison_analysis(
+    results_dir: str = None,
+    pipeline: str = 'cardiac',
+    fairness_threshold: float = 0.10,
+    performance_threshold: float = 0.15,
+    no_plots: bool = False,
+    verbose: bool = False,
+    run_id: str = None,
+    results_root: str = None
+):
     """Main comparison script."""
-    parser = argparse.ArgumentParser(
-        description='Compare combinatorial experiment results'
-    )
-    parser.add_argument(
-        '--results-dir',
-        type=str,
-        default=None,
-        help='Base results directory'
-    )
-    parser.add_argument(
-        '--pipeline',
-        type=str,
-        default='cardiac',
-        help='Pipeline name (e.g., cardiac, dermatology)'
-    )
-    parser.add_argument(
-        '--fairness-threshold',
-        type=float,
-        default=0.10,
-        help='Minimum fairness improvement (10%% default)'
-    )
-    parser.add_argument(
-        '--performance-threshold',
-        type=float,
-        default=0.15,
-        help='Maximum performance drop (15%% default)'
-    )
-    parser.add_argument(
-        '--no-plots',
-        action='store_true',
-        help='Disable plot generation'
-    )
-    parser.add_argument(
-        '-v', '--verbose',
-        action='store_true',
-        help='Verbose console output'
-    )
-    
-    args = parser.parse_args()
     project_root = get_project_root(Path(__file__))
-    setup_phase_logging(project_root, 'experiment_comparison.log', verbose=args.verbose, log_subdir='experiments/latest_run')
+    use_run_id = bool(run_id or os.getenv('RUN_ID') or os.getenv('PREFECT__RUNTIME__FLOW_RUN_ID'))
+    run_id = resolve_run_id(run_id) if use_run_id else None
+    log_subdir = f"experiments/{run_id}" if run_id else 'experiments/latest_run'
+    setup_phase_logging(project_root, 'experiment_comparison.log', verbose=verbose, log_subdir=log_subdir)
     
     logging.info("="*80)
     logging.info("EXPERIMENT COMPARISON")
     logging.info("="*80)
     logging.info("[PHASE] Comparison started")
     
-    results_dir = Path(args.results_dir) if args.results_dir else (project_root / f"results/{args.pipeline}/experiments/full")
-    # Initialize versioning
-    versioning = ExperimentVersioning(results_dir)
-    
-    # Check if latest_run exists
-    if not versioning.latest_dir.exists():
-        logging.error(f"No latest_run found in {results_dir}")
+    base_results_dir = Path(results_root) if results_root else (project_root / f"results/{pipeline}/experiments/full")
+    if results_dir:
+        candidate = Path(results_dir)
+        if (candidate / 'manifests').exists() or (candidate / 'results').exists():
+            run_dir = candidate
+            base_results_dir = candidate.parent
+        else:
+            base_results_dir = candidate
+            run_dir = resolve_latest_run_dir(base_results_dir)
+    elif run_id:
+        run_dir = base_results_dir / run_id
+    else:
+        run_dir = resolve_latest_run_dir(base_results_dir)
+
+    if run_dir is None or not run_dir.exists():
+        logging.error(f"No run directory found under {base_results_dir}")
         logging.error("Run combinatorial experiments first")
         return
+
+    # Initialize versioning
+    versioning = ExperimentVersioning(base_results_dir, run_dir=run_dir)
     
     # Load all results
     logging.info("\nLoading experiment results...")
@@ -514,8 +501,8 @@ def main():
     best_configs = filter_best_configurations(
         df_success,
         output_dir,
-        args.fairness_threshold,
-        args.performance_threshold
+        fairness_threshold,
+        performance_threshold
     )
 
     # Diagnostics: repeated metrics
@@ -554,7 +541,7 @@ def main():
     logging.info(f"[SUCCESS] Saved experiment counts: {combo_file}")
 
     # Trade-off visuals (per dataset)
-    if not args.no_plots:
+    if not no_plots:
         for dataset in sorted(df_success['dataset'].unique()):
             subset = df_success[df_success['dataset'] == dataset].copy()
             if subset.empty:
@@ -631,6 +618,72 @@ def main():
     logging.info(f"  - mitigation_comparison.csv")
     if best_configs is not None and not best_configs.empty:
         logging.info(f"  - best_configurations.csv ({len(best_configs)} configs)")
+
+
+def main():
+    """Main comparison script."""
+    parser = argparse.ArgumentParser(
+        description='Compare combinatorial experiment results'
+    )
+    parser.add_argument(
+        '--results-dir',
+        type=str,
+        default=None,
+        help='Base results directory'
+    )
+    parser.add_argument(
+        '--run-id',
+        type=str,
+        default=os.getenv('RUN_ID'),
+        help='Run identifier to compare'
+    )
+    parser.add_argument(
+        '--results-root',
+        type=str,
+        default=None,
+        help='Base results directory for run outputs'
+    )
+    parser.add_argument(
+        '--pipeline',
+        type=str,
+        default='cardiac',
+        help='Pipeline name (e.g., cardiac, dermatology)'
+    )
+    parser.add_argument(
+        '--fairness-threshold',
+        type=float,
+        default=0.10,
+        help='Minimum fairness improvement (10%% default)'
+    )
+    parser.add_argument(
+        '--performance-threshold',
+        type=float,
+        default=0.15,
+        help='Maximum performance drop (15%% default)'
+    )
+    parser.add_argument(
+        '--no-plots',
+        action='store_true',
+        help='Disable plot generation'
+    )
+    parser.add_argument(
+        '-v', '--verbose',
+        action='store_true',
+        help='Verbose console output'
+    )
+    
+    args = parser.parse_args()
+    
+    run_comparison_analysis(
+        results_dir=args.results_dir,
+        pipeline=args.pipeline,
+        fairness_threshold=args.fairness_threshold,
+        performance_threshold=args.performance_threshold,
+        no_plots=args.no_plots,
+        verbose=args.verbose,
+        run_id=args.run_id,
+        results_root=args.results_root
+    )
 
 
 if __name__ == '__main__':

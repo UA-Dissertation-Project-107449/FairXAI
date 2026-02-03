@@ -36,10 +36,13 @@ from fairxai.fairness.mitigation import MitigationEngine
 from fairxai.utils.config import load_yaml_config
 from fairxai.experiments.data_io import default_exclude_columns
 from fairxai.cli.runner_base import get_project_root, setup_phase_logging, load_pipeline_config
-from fairxai.cli.runner_utils import archive_latest_run
-
-
-
+from fairxai.cli.runner_utils import (
+    append_run_history,
+    archive_latest_run,
+    get_run_root,
+    resolve_run_id,
+    update_latest_pointer,
+)
 
 def resolve_target_column(schema_cfg: dict, dataset_name: str, default_target: str) -> str:
     dataset_cfg = schema_cfg.get('datasets', {}).get(dataset_name, {})
@@ -359,96 +362,96 @@ def create_comparison_table(all_results):
     return df
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Run mitigation comparison experiment')
-    parser.add_argument('--config', type=str, 
-                       default='configs/experiments/mitigation.yaml',
-                       help='Path to experiment config file')
-    parser.add_argument('--datasets', type=str, nargs='+',
-                        help='Datasets to process (default: from config)')
-    parser.add_argument('--output-dir', type=str,
-                       help='Output directory (default: from config or results/{pipeline}/experiments/{run_mode}/latest_run/mitigation)')
-    parser.add_argument('--pipeline', type=str, default='cardiac',
-                       help='Pipeline name (e.g., cardiac, dermatology)')
-    parser.add_argument('--run-mode', type=str, choices=['full', 'partial'],
-                       default=os.getenv('EXPERIMENT_RUN_MODE', 'partial'),
-                       help='Run mode (full or partial)')
-    parser.add_argument('--archive-previous', action='store_true',
-                       default=os.getenv('ARCHIVE_PREVIOUS', 'true').lower() == 'true',
-                       help='Archive previous latest_run (full runs only)')
-    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose console output')
-    args = parser.parse_args()
-    
+def run_analysis(
+    config_path: str,
+    datasets: list = None,
+    output_dir: str = None,
+    pipeline: str = 'cardiac',
+    run_mode: str = 'partial',
+    archive_previous: bool = True,
+    run_id: str = None,
+    results_root: str = None,
+    verbose: bool = False
+):
+    """
+    Runs the mitigation comparison experiment.
+    """
     # Paths
     project_root = get_project_root(Path(__file__))
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     
-    # Load config
-    config_path = project_root / args.config
-    if not config_path.exists():
-        logging.error(f"Config file not found: {config_path}")
-        return
     
     experiment_cfg = load_yaml_config(str(config_path))
-    pipeline_cfg = load_pipeline_config(project_root, args.pipeline)
+    pipeline_cfg = load_pipeline_config(project_root, pipeline)
     raw_model_params = dict(pipeline_cfg.get('training', {}))
     schema_path = project_root / pipeline_cfg['runtime']['schema_mapping_json']
     with open(schema_path, 'r') as f:
         schema_cfg = json.load(f)
-        target_col = experiment_cfg.get('data', {}).get('target') or raw_model_params.get('target', 'heart_disease')
-        allowed_model_keys = {
-            'C', 'penalty', 'solver', 'tol', 'l1_ratio',
-            'max_iter', 'random_state', 'class_weight'
-        }
-        model_params = {k: v for k, v in raw_model_params.items() if k in allowed_model_keys}
-    sensitive_attrs = pipeline_cfg.get('fairness', {}).get('sensitive_attributes', ['age_group', 'sex'])
-    
-    # Validate config
-    REQUIRED_KEYS = ['data', 'mitigation_strategies']
-    missing = [k for k in REQUIRED_KEYS if k not in experiment_cfg]
-    if missing:
-        logging.error(f"Config missing required keys: {missing}")
-        sys.exit(1)
-    
-    # Determine datasets to process
-    datasets = args.datasets if args.datasets else experiment_cfg['data']['datasets']
-    
-    # Determine output directory
+
+    target_col = experiment_cfg.get('data', {}).get('target') or raw_model_params.get('target', 'heart_disease')
+    allowed_model_keys = {
+        'C', 'penalty', 'solver', 'tol', 'l1_ratio',
+        'max_iter', 'random_state', 'class_weight'
+    }
+    model_params = {k: v for k, v in raw_model_params.items() if k in allowed_model_keys}
+
+    sensitive_attrs = experiment_cfg.get('data', {}).get('sensitive_attributes', ['sex'])
+
     default_output_dir = experiment_cfg.get('output', {}).get('results_dir')
-    if default_output_dir:
+    if results_root:
+        base_results = Path(results_root)
+    elif default_output_dir:
         base_results = Path(default_output_dir)
         if base_results.parts and base_results.name == 'mitigation':
             base_results = base_results.parents[1]
-        if args.run_mode == 'partial' and 'full' in base_results.parts:
+        if run_mode == 'partial' and 'full' in base_results.parts:
             parts = list(base_results.parts)
             idx = len(parts) - 1 - parts[::-1].index('full')
             parts[idx] = 'partial'
             base_results = Path(*parts)
     else:
-        base_results = project_root / f"results/{args.pipeline}/experiments/{args.run_mode}"
-    latest_dir = base_results / 'latest_run'
-    if args.output_dir:
-        output_dir = Path(args.output_dir)
-    else:
-        output_dir = latest_dir / 'mitigation'
-    
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
+        base_results = project_root / f"results/{pipeline}/experiments/{run_mode}"
+
+    use_run_id = bool(run_id or os.getenv('RUN_ID') or os.getenv('PREFECT__RUNTIME__FLOW_RUN_ID'))
+    run_id = resolve_run_id(run_id) if use_run_id else None
+    log_subdir = f"experiments/{run_id}" if run_id else 'experiments/latest_run'
+
     # Setup logging
-    setup_phase_logging(project_root, 'mitigation_comparison.log', verbose=args.verbose, log_subdir='experiments/latest_run')
+    setup_phase_logging(project_root, 'mitigation_comparison.log', verbose=verbose, log_subdir=log_subdir)
     logger = logging.getLogger(__name__)
     logging.info("[PHASE] Mitigation comparison started")
 
-    if args.run_mode == 'partial':
-        archive_latest_run(base_results, enabled=True, logger=logger)
+    if run_id:
+        run_dir = get_run_root(base_results, run_id)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = Path(output_dir) if output_dir else run_dir / 'mitigation'
     else:
-        archive_latest_run(base_results, enabled=args.archive_previous, logger=logger)
+        latest_dir = base_results / 'latest_run'
+        if run_mode == 'partial':
+            archive_latest_run(base_results, enabled=True, logger=logger)
+        else:
+            archive_latest_run(base_results, enabled=archive_previous, logger=logger)
+        output_dir = Path(output_dir) if output_dir else latest_dir / 'mitigation'
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    datasets = datasets if datasets else experiment_cfg['data']['datasets']
     
     logging.info(f"Configuration:")
     logging.info(f"  Datasets: {datasets}")
     logging.info(f"  Output: {output_dir}")
-    logging.info(f"  Run mode: {args.run_mode}")
+    logging.info(f"  Run mode: {run_mode}")
     logging.info(f"  Timestamp: {timestamp}")
+    if run_id:
+        logging.info(f"  Run ID: {run_id}")
+        append_run_history(base_results, {
+            'run_id': run_id,
+            'pipeline': pipeline,
+            'mode': run_mode,
+            'phase': 'mitigation',
+            'datasets': datasets,
+            'output_dir': str(output_dir),
+            'status': 'started'
+        })
     
     # Data directory
     data_dir = project_root / pipeline_cfg['paths']['processed_dir']
@@ -565,6 +568,54 @@ def main():
     logging.info("EXPERIMENT COMPLETE")
     logging.info(f"{'='*80}")
     logging.info("[PHASE] Mitigation comparison complete")
+
+    if run_id:
+        update_latest_pointer(base_results, run_dir, logger)
+        append_run_history(base_results, {
+            'run_id': run_id,
+            'pipeline': pipeline,
+            'mode': run_mode,
+            'phase': 'mitigation',
+            'datasets': datasets,
+            'output_dir': str(output_dir),
+            'status': 'completed'
+        })
+
+def main():
+    parser = argparse.ArgumentParser(description='Run mitigation comparison experiment')
+    parser.add_argument('--config', type=str, 
+                       default='configs/experiments/mitigation.yaml',
+                       help='Path to experiment config file')
+    parser.add_argument('--datasets', type=str, nargs='+',
+                        help='Datasets to process (default: from config)')
+    parser.add_argument('--output-dir', type=str,
+                       help='Output directory (default: from config or results/{pipeline}/experiments/{run_mode}/latest_run/mitigation)')
+    parser.add_argument('--pipeline', type=str, default='cardiac',
+                       help='Pipeline name (e.g., cardiac, dermatology)')
+    parser.add_argument('--run-mode', type=str, choices=['full', 'partial'],
+                       default=os.getenv('EXPERIMENT_RUN_MODE', 'partial'),
+                       help='Run mode (full or partial)')
+    parser.add_argument('--archive-previous', action='store_true',
+                       default=os.getenv('ARCHIVE_PREVIOUS', 'true').lower() == 'true',
+                       help='Archive previous latest_run (full runs only)')
+    parser.add_argument('--run-id', type=str, default=os.getenv('RUN_ID'),
+                       help='Run identifier (optional, enables run-scoped outputs)')
+    parser.add_argument('--results-root', type=str, default=None,
+                       help='Base results directory for run outputs')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose console output')
+    args = parser.parse_args()
+    
+    run_analysis(
+        config_path=args.config,
+        datasets=args.datasets,
+        output_dir=args.output_dir,
+        pipeline=args.pipeline,
+        run_mode=args.run_mode,
+        archive_previous=args.archive_previous,
+        run_id=args.run_id,
+        results_root=args.results_root,
+        verbose=args.verbose
+    )
 
 
 if __name__ == '__main__':
