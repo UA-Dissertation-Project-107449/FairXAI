@@ -377,7 +377,7 @@ def run_comparison_analysis(
     logging.info("="*80)
     logging.info("[PHASE] Comparison started")
     
-    base_results_dir = Path(results_root) if results_root else (project_root / f"results/{pipeline}/experiments/full")
+    base_results_dir = Path(results_root) if results_root else (project_root / f"results/{pipeline}")
     if results_dir:
         candidate = Path(results_dir)
         if (candidate / 'manifests').exists() or (candidate / 'results').exists():
@@ -387,9 +387,14 @@ def run_comparison_analysis(
             base_results_dir = candidate
             run_dir = resolve_latest_run_dir(base_results_dir)
     elif run_id:
-        run_dir = base_results_dir / run_id
+        run_dir = base_results_dir / 'runs' / run_id / 'experiments' / 'full'
     else:
         run_dir = resolve_latest_run_dir(base_results_dir)
+
+    if run_dir is not None and not (run_dir / 'manifests').exists():
+        candidate = run_dir / 'experiments' / 'full'
+        if (candidate / 'manifests').exists() or (candidate / 'results').exists():
+            run_dir = candidate
 
     if run_dir is None or not run_dir.exists():
         logging.error(f"No run directory found under {base_results_dir}")

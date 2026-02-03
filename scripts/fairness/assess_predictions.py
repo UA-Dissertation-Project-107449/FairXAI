@@ -12,6 +12,7 @@ import numpy as np
 import json
 import logging
 import argparse
+import os
 from typing import Dict, List
 
 # Add src to path
@@ -275,8 +276,14 @@ def main():
 
     project_root = Path(__file__).parent.parent.parent
     pipeline_cfg = load_pipeline_config(project_root, "cardiac")
-    experiments_dir = project_root / pipeline_cfg['paths']['experiments_dir']
-    results_dir = project_root / pipeline_cfg['paths']['results_fairness_dir']
+    run_id = os.getenv('RUN_ID')
+    if run_id:
+        baseline_root = project_root / f"results/cardiac/runs/{run_id}/baseline"
+        experiments_dir = baseline_root / "results"
+        results_dir = baseline_root / "fairness"
+    else:
+        experiments_dir = project_root / pipeline_cfg['paths']['experiments_dir']
+        results_dir = project_root / pipeline_cfg['paths']['results_fairness_dir']
     log_dir = project_root / 'logs/cardiac'
     
     # Setup

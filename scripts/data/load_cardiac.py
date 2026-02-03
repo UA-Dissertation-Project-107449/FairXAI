@@ -16,6 +16,7 @@ Usage:
 import sys
 import logging
 import argparse
+import os
 from pathlib import Path
 import json
 import pandas as pd
@@ -40,7 +41,11 @@ def main():
     data_external = project_root / pipeline_cfg['paths']['external_dir']
     data_raw_cardiac = project_root / pipeline_cfg['paths']['raw_dir']
     log_dir = setup_phase_logging(project_root, 'data_loading.log', verbose=args.verbose)
-    results_profiling = project_root / 'results/cardiac/profiling'
+    run_id = os.getenv('RUN_ID')
+    if run_id:
+        results_profiling = project_root / f"results/cardiac/runs/{run_id}/profiling"
+    else:
+        results_profiling = project_root / 'results/cardiac/profiling'
     
     # Setup
     logging.info("[PHASE] Cardiac data loading started")

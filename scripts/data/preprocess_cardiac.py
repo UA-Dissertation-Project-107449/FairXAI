@@ -16,6 +16,7 @@ Usage:
 
 import sys
 import logging
+import os
 from pathlib import Path
 import json
 import pandas as pd
@@ -98,7 +99,11 @@ def main():
     data_raw_cardiac = project_root / pipeline_cfg['paths']['raw_dir']
     data_processed_cardiac_base = project_root / pipeline_cfg['paths']['processed_dir']
     log_dir = setup_phase_logging(project_root, 'preprocessing.log', verbose=args.verbose)
-    results_fairness = project_root / 'results/cardiac/profiling/fairness'
+    run_id = os.getenv('RUN_ID')
+    if run_id:
+        results_fairness = project_root / f"results/cardiac/runs/{run_id}/profiling/fairness"
+    else:
+        results_fairness = project_root / 'results/cardiac/profiling/fairness'
     
     # Setup
     logging.info("[PHASE] Preprocessing started")

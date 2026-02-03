@@ -62,7 +62,7 @@ def resolve_run_id(explicit: Optional[str] = None) -> str:
 
 
 def get_run_root(base_results: Path, run_id: str) -> Path:
-    return base_results / _sanitize_run_id(run_id)
+    return base_results / 'runs' / _sanitize_run_id(run_id)
 
 
 def resolve_latest_run_dir(base_results: Path) -> Optional[Path]:
@@ -83,7 +83,7 @@ def resolve_latest_run_dir(base_results: Path) -> Optional[Path]:
                 return None
             candidate = Path(raw)
             if not candidate.is_absolute():
-                candidate = base_results / candidate
+                candidate = base_results / 'runs' / candidate
             return candidate
         except OSError:
             return None
@@ -137,8 +137,8 @@ def update_latest_pointer(base_results: Path, run_dir: Path, logger: logging.Log
 
         if not latest_link.exists():
             try:
-                os.symlink(run_dir.name, latest_link)
-                logger.info(f"Updated latest_run symlink -> {run_dir.name}")
+                os.symlink(Path('runs') / run_dir.name, latest_link)
+                logger.info(f"Updated latest_run symlink -> runs/{run_dir.name}")
             except OSError:
                 logger.info("Symlink not supported; using latest_run.txt pointer.")
 

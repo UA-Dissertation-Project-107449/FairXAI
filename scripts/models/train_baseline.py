@@ -146,18 +146,26 @@ def main():
     with open(schema_path, 'r') as f:
         schema_cfg = json.load(f)
     data_processed = project_root / pipeline_cfg['paths']['processed_dir']
-    experiments_dir = project_root / pipeline_cfg['paths']['experiments_dir']
-    models_dir = project_root / pipeline_cfg['paths']['models_dir']
+    run_id = os.getenv('RUN_ID')
+    if run_id:
+        baseline_root = project_root / f"results/cardiac/runs/{run_id}/baseline"
+        experiments_dir = baseline_root / "results"
+        models_dir = baseline_root / "models"
+    else:
+        experiments_dir = project_root / pipeline_cfg['paths']['experiments_dir']
+        models_dir = project_root / pipeline_cfg['paths']['models_dir']
     log_dir = setup_phase_logging(project_root, 'training_baseline.log', verbose=args.verbose)
-    baseline_root = project_root / 'results/cardiac/baseline'
+    if not run_id:
+        baseline_root = project_root / 'results/cardiac/baseline'
     
     # Setup
     logging.info("[PHASE] Baseline training started")
-    archive_latest_run(
-        baseline_root,
-        enabled=(os.getenv('ARCHIVE_BASELINE', 'true').lower() == 'true'),
-        logger=logging.getLogger(__name__)
-    )
+    if not run_id:
+        archive_latest_run(
+            baseline_root,
+            enabled=(os.getenv('ARCHIVE_BASELINE', 'true').lower() == 'true'),
+            logger=logging.getLogger(__name__)
+        )
 
     models_dir.mkdir(parents=True, exist_ok=True)
     experiments_dir.mkdir(parents=True, exist_ok=True)

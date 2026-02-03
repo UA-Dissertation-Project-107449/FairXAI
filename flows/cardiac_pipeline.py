@@ -182,13 +182,13 @@ def cardiac_pipeline(
     logger.info(f"  - Baseline results:   {ROOT_DIR}/results/cardiac/baseline")
     logger.info(f"  - Baseline models:    {ROOT_DIR}/results/cardiac/baseline/models")
     if run_age_binning:
-        logger.info(f"  - Age binning:        {ROOT_DIR}/results/cardiac/experiments/full/{run_id}/age_binning")
+        logger.info(f"  - Age binning:        {ROOT_DIR}/results/cardiac/runs/{run_id}/experiments/full/age_binning")
     if run_mitigation:
-        logger.info(f"  - Mitigation:         {ROOT_DIR}/results/cardiac/experiments/full/{run_id}/mitigation")
+        logger.info(f"  - Mitigation:         {ROOT_DIR}/results/cardiac/runs/{run_id}/experiments/full/mitigation")
     if run_combinatorial:
-        logger.info(f"  - Combinatorial:      {ROOT_DIR}/results/cardiac/experiments/full/{run_id}")
+        logger.info(f"  - Combinatorial:      {ROOT_DIR}/results/cardiac/runs/{run_id}/experiments/full")
     if run_comparison:
-        logger.info(f"  - Comparison:         {ROOT_DIR}/results/cardiac/experiments/full/{run_id}/comparisons")
+        logger.info(f"  - Comparison:         {ROOT_DIR}/results/cardiac/runs/{run_id}/experiments/full/comparisons")
 
 if __name__ == "__main__":
     cardiac_pipeline()

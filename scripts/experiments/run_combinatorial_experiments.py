@@ -744,7 +744,8 @@ def run_combinatorial_analysis(
     # Initialize versioning
     base_results_dir = Path(results_root) if results_root else Path(config['paths']['results_dir'])
     if run_id:
-        run_dir = get_run_root(base_results_dir, run_id)
+        base_results_dir = Path(results_root) if results_root else (project_root / f"results/{pipeline}")
+        run_dir = get_run_root(base_results_dir, run_id) / 'experiments' / 'full'
         run_dir.mkdir(parents=True, exist_ok=True)
         versioning = ExperimentVersioning(base_results_dir, run_dir=run_dir)
     else:

@@ -23,6 +23,7 @@ suffix = uuid.uuid4().hex[:6]
 print(f"run_{ts}_{pid}_{suffix}")
 PY
 )}
+export RUN_ID
 
 echo "======================================================================"
 echo "CARDIAC FAIRNESS PIPELINE"
@@ -104,14 +105,14 @@ echo "  - Baseline results:   $ROOT_DIR/results/cardiac/baseline"
 echo "  - Baseline models:    $ROOT_DIR/results/cardiac/baseline/models"
 echo "  - Profiling results:  $ROOT_DIR/results/cardiac/profiling"
 if [[ "$RUN_AGE_BINNING" == "true" ]]; then
-    echo "  - Age binning:        $ROOT_DIR/results/cardiac/experiments/age_binning"
+    echo "  - Age binning:        $ROOT_DIR/results/cardiac/runs/$RUN_ID/experiments/full/age_binning"
 fi
 if [[ "$RUN_MITIGATION" == "true" ]]; then
-    echo "  - Mitigation:         $ROOT_DIR/results/cardiac/experiments/mitigation"
+    echo "  - Mitigation:         $ROOT_DIR/results/cardiac/runs/$RUN_ID/experiments/full/mitigation"
 fi
 if [[ "$RUN_COMBINATORIAL" == "true" ]]; then
-    echo "  - Combinatorial:      $ROOT_DIR/results/cardiac/experiments/full/$RUN_ID"
+    echo "  - Combinatorial:      $ROOT_DIR/results/cardiac/runs/$RUN_ID/experiments/full"
 fi
 if [[ "$RUN_COMPARISON" == "true" ]]; then
-    echo "  - Comparison:         $ROOT_DIR/results/cardiac/experiments/full/$RUN_ID/comparisons"
+    echo "  - Comparison:         $ROOT_DIR/results/cardiac/runs/$RUN_ID/experiments/full/comparisons"
 fi

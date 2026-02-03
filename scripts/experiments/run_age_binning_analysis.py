@@ -162,9 +162,14 @@ def run_analysis(
     else:
         strategies = list(experiment_cfg['binning_strategies'].keys())
     
+    use_run_id = bool(run_id or os.getenv('RUN_ID') or os.getenv('PREFECT__RUNTIME__FLOW_RUN_ID'))
+    run_id = resolve_run_id(run_id) if use_run_id else None
+
     # Determine output directory
     default_output_dir = experiment_cfg.get('output', {}).get('results_dir')
-    if results_root:
+    if run_id:
+        base_results = Path(results_root) if results_root else (project_root / f"results/{pipeline}")
+    elif results_root:
         base_results = Path(results_root)
     elif default_output_dir:
         base_results = Path(default_output_dir)
@@ -177,9 +182,6 @@ def run_analysis(
             base_results = Path(*parts)
     else:
         base_results = project_root / f"results/{pipeline}/experiments/{run_mode}"
-
-    use_run_id = bool(run_id or os.getenv('RUN_ID') or os.getenv('PREFECT__RUNTIME__FLOW_RUN_ID'))
-    run_id = resolve_run_id(run_id) if use_run_id else None
     log_subdir = f"experiments/{run_id}" if run_id else 'experiments/latest_run'
 
     # Setup logging
@@ -190,7 +192,7 @@ def run_analysis(
     if run_id:
         run_dir = get_run_root(base_results, run_id)
         run_dir.mkdir(parents=True, exist_ok=True)
-        output_dir = Path(output_dir) if output_dir else run_dir / 'age_binning'
+        output_dir = Path(output_dir) if output_dir else run_dir / 'experiments' / run_mode / 'age_binning'
     else:
         latest_dir = base_results / 'latest_run'
         if run_mode == 'partial':
