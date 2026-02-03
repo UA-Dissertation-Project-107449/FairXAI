@@ -125,7 +125,20 @@ def update_latest_pointer(base_results: Path, run_dir: Path, logger: logging.Log
         logger.warning("Could not acquire latest pointer lock; skipping update.")
         return
 
+    def _extract_run_id(path: Path) -> Optional[str]:
+        parts = list(path.parts)
+        if 'runs' in parts:
+            idx = parts.index('runs')
+            if idx + 1 < len(parts):
+                return parts[idx + 1]
+        return path.name if path.name else None
+
     try:
+        run_id = _extract_run_id(run_dir)
+        if not run_id:
+            logger.warning("Could not resolve run_id from run_dir; skipping update.")
+            return
+
         latest_link = base_results / 'latest_run'
         latest_txt = base_results / 'latest_run.txt'
 
@@ -137,12 +150,12 @@ def update_latest_pointer(base_results: Path, run_dir: Path, logger: logging.Log
 
         if not latest_link.exists():
             try:
-                os.symlink(Path('runs') / run_dir.name, latest_link)
-                logger.info(f"Updated latest_run symlink -> runs/{run_dir.name}")
+                os.symlink(Path('runs') / run_id, latest_link)
+                logger.info(f"Updated latest_run symlink -> runs/{run_id}")
             except OSError:
                 logger.info("Symlink not supported; using latest_run.txt pointer.")
 
-        latest_txt.write_text(run_dir.name)
+        latest_txt.write_text(run_id)
     finally:
         _release_lock(lock_path, fd)
 
