@@ -1,0 +1,108 @@
+# Canonical feature mapping for cardiac datasets
+# Structure: sensitive -> common -> dataset_specific
+# Notes:
+# - Keep canonical names aligned to UCI/Cleveland for stability.
+# - Sensitive variables are normalized first.
+# - Dataset-specific fields are preserved for future integration.
+
+sensitive:
+  # Age is stored in age_raw; units differ by dataset (years vs days).
+  # Do not convert units here (keep raw values).
+  age:
+    canonical: age_raw
+    aliases:
+      - age        # Cleveland
+      - Age        # Kaggle Heart
+      - age_days   # placeholder if provided later
+  # Sex is normalized to 0/1 in loader; label kept in sex_extended.
+  sex:
+    canonical: sex
+    aliases:
+      - sex        # Cleveland
+      - Sex        # Kaggle Heart
+      - gender     # 70k dataset
+
+target:
+  # Target/label mappings (for documentation and future integration)
+  heart_disease:
+    canonical: heart_disease
+    aliases:
+      - condition     # Cleveland
+      - HeartDisease  # Kaggle Heart
+      - cardio        # 70k dataset
+
+common:
+  # Cleveland (UCI) vs Kaggle Heart names
+  cp:
+    canonical: cp
+    aliases: [cp, ChestPainType]
+  trestbps:
+    canonical: trestbps
+    aliases: [trestbps, RestingBP]
+  chol:
+    canonical: chol
+    aliases: [chol, Cholesterol]
+  fbs:
+    canonical: fbs
+    aliases: [fbs, FastingBS]
+  restecg:
+    canonical: restecg
+    aliases: [restecg, RestingECG]
+  thalach:
+    canonical: thalach
+    aliases: [thalach, MaxHR]
+  exang:
+    canonical: exang
+    aliases: [exang, ExerciseAngina]
+  oldpeak:
+    canonical: oldpeak
+    aliases: [oldpeak, Oldpeak]
+  slope:
+    canonical: slope
+    aliases: [slope, ST_Slope]
+  ca:
+    canonical: ca
+    aliases: [ca]
+  thal:
+    canonical: thal
+    aliases: [thal]
+
+# Dataset-specific fields (kept as-is; not forced into common schema yet)
+# This will be used once the 70k dataset is fully integrated.
+# 70k dataset (cardio_train.csv):
+# - age is in days
+# - gender coded as 1/2 (typically 1: female, 2: male) or 0/1 depending on source
+# - ap_hi/ap_lo are systolic/diastolic blood pressure
+# - cholesterol/gluc are ordinal categories
+# - smoke/alco/active are binary lifestyle features
+# - cardio is the target
+
+dataset_specific:
+  cardio70k:
+    height:
+      canonical: height
+      aliases: [height]
+    weight:
+      canonical: weight
+      aliases: [weight]
+    ap_hi:
+      canonical: ap_hi
+      aliases: [ap_hi]
+    ap_lo:
+      canonical: ap_lo
+      aliases: [ap_lo]
+    cholesterol:
+      canonical: cholesterol
+      aliases: [cholesterol]
+    gluc:
+      canonical: gluc
+      aliases: [gluc]
+    smoke:
+      canonical: smoke
+      aliases: [smoke]
+    alco:
+      canonical: alco
+      aliases: [alco]
+    active:
+      canonical: active
+      aliases: [active]

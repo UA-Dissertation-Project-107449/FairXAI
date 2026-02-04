@@ -2,7 +2,7 @@ from typing import Iterable, List, Sequence, Tuple
 import pandas as pd
 
 
-CARDIAC_DATASETS = {"cleveland", "kaggle_heart"}
+CARDIAC_DATASETS = {"cleveland", "kaggle_heart", "cardio70k"}
 
 # Canonical sensitive/group columns to support across areas.
 # Order matters for stratification and reporting.

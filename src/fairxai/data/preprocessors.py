@@ -133,6 +133,14 @@ class CardiacPreprocessor:
                 'age_raw',  # Keep age_group instead
             ]
 
+        # Exclude raw/original aliases to avoid duplicate semantics in training
+        exclude_cols = list(dict.fromkeys(exclude_cols + [
+            'age', 'Age',
+            'Sex', 'gender',
+            'condition', 'HeartDisease', 'cardio',
+            'id'
+        ]))
+
         # Always exclude sensitive/group columns from model features to avoid leakage
         exclude_cols = list(dict.fromkeys(exclude_cols + self.sensitive_attrs + [
             'sex_extended', 'sex_bin'
@@ -143,10 +151,22 @@ class CardiacPreprocessor:
         
         X = df[feature_cols].copy()
         y = df[target].copy()
+
+        # Handle missing values in features before encoding/scaling
+        numeric_cols = X.select_dtypes(include=[np.number]).columns
+        categorical_cols = X.select_dtypes(include=['object', 'category']).columns
+
+        for col in numeric_cols:
+            if X[col].isnull().any():
+                X[col] = X[col].fillna(X[col].median())
+
+        for col in categorical_cols:
+            if X[col].isnull().any():
+                mode = X[col].mode(dropna=True)
+                fill_value = mode.iloc[0] if not mode.empty else 'unknown'
+                X[col] = X[col].fillna(fill_value)
         
         # Encode categorical variables
-        categorical_cols = X.select_dtypes(include=['object', 'category']).columns
-        
         for col in categorical_cols:
             if col not in self.encoders:
                 self.encoders[col] = LabelEncoder()
@@ -214,26 +234,59 @@ class CardiacPreprocessor:
         """
         # Create stratification variable combining target and sensitive attributes
         strat_cols = [target] + [attr for attr in self.sensitive_attrs if attr in df.columns]
+        strat_cols = list(dict.fromkeys(strat_cols))
         
-        # Create combined stratification key
-        df['_strat_key'] = df[strat_cols].astype(str).agg('_'.join, axis=1)
+        # Create combined stratification key (dedupe duplicate columns if present)
+        strat_df = df[strat_cols]
+        if strat_df.columns.duplicated().any():
+            strat_df = strat_df.loc[:, ~strat_df.columns.duplicated()]
+        strat_values = strat_df.astype(str).to_numpy()
+        strat_key = ['_'.join(row) for row in strat_values]
+        df['_strat_key'] = pd.Series(strat_key, index=df.index)
         
         # Remove rare combinations (< 2 samples) to avoid split errors
         strat_counts = df['_strat_key'].value_counts()
         valid_strats = strat_counts[strat_counts >= 2].index
         df_valid = df[df['_strat_key'].isin(valid_strats)].copy()
-        
+
         if len(df_valid) < len(df):
             dropped = len(df) - len(df_valid)
             logging.warning(f"⚠️  Dropped {dropped} samples with rare group combinations")
+
+            # Fallback: if too many dropped, retry with fewer stratification columns
+            if len(df_valid) < 0.9 * len(df):
+                fallback_cols = [target]
+                primary_sensitive = next((attr for attr in self.sensitive_attrs if attr in df.columns), None)
+                if primary_sensitive:
+                    fallback_cols.append(primary_sensitive)
+                fallback_df = df[fallback_cols]
+                if fallback_df.columns.duplicated().any():
+                    fallback_df = fallback_df.loc[:, ~fallback_df.columns.duplicated()]
+                fallback_values = fallback_df.astype(str).to_numpy()
+                fallback_key = ['_'.join(row) for row in fallback_values]
+                df['_strat_key'] = pd.Series(fallback_key, index=df.index)
+                strat_counts = df['_strat_key'].value_counts()
+                valid_strats = strat_counts[strat_counts >= 2].index
+                df_valid = df[df['_strat_key'].isin(valid_strats)].copy()
+                dropped = len(df) - len(df_valid)
+                logging.warning(f"⚠️  Fallback stratification dropped {dropped} samples")
         
-        # Perform stratified split
-        train_df, test_df = train_test_split(
-            df_valid,
-            test_size=test_size,
-            stratify=df_valid['_strat_key'],
-            random_state=random_state
-        )
+        # Perform stratified split (fallback to unstratified if no valid groups)
+        if df_valid.empty or df_valid['_strat_key'].nunique() < 2:
+            logging.warning("⚠️  Stratified split unavailable; falling back to random split")
+            train_df, test_df = train_test_split(
+                df,
+                test_size=test_size,
+                random_state=random_state,
+                shuffle=True
+            )
+        else:
+            train_df, test_df = train_test_split(
+                df_valid,
+                test_size=test_size,
+                stratify=df_valid['_strat_key'],
+                random_state=random_state
+            )
         
         # Remove stratification key
         train_df = train_df.drop(columns=['_strat_key'])
@@ -295,9 +348,18 @@ class CardiacPreprocessor:
     
     def save_metadata(self, filepath: str):
         """Save preprocessing metadata to JSON."""
+        scaler_params = {}
+        for name, scaler in self.scalers.items():
+            params = {}
+            if hasattr(scaler, 'mean_'):
+                params['mean'] = scaler.mean_.tolist()
+            if hasattr(scaler, 'scale_'):
+                params['scale'] = scaler.scale_.tolist()
+            scaler_params[name] = params if params else 'fitted'
+
         metadata = {
             'encoders': {k: list(v.classes_) for k, v in self.encoders.items()},
-            'scalers': {k: 'fitted' for k in self.scalers.keys()},
+            'scalers': scaler_params,
             'sensitive_attrs': self.sensitive_attrs
         }
         

@@ -7,14 +7,17 @@
       "target": "condition",
       "target_mapping": {
         "0": "no_disease",
-        "1": "disease"
+        "1": "disease",
+        "2": "disease",
+        "3": "disease",
+        "4": "disease"
       },
       "include_features": [],
       "exclude_features": ["condition"],
       "sensitive_attributes": {
         "age": {
           "type": "continuous",
-          "bins": [0, 40, 50, 60, 70, 100],
+          "bins": [0, 40, 50, 60, 70, 120],
           "labels": ["<40", "40-49", "50-59", "60-69", "70+"]
         },
         "sex": {
@@ -57,7 +60,7 @@
       "sensitive_attributes": {
         "Age": {
           "type": "continuous",
-          "bins": [0, 40, 50, 60, 70, 100],
+          "bins": [0, 40, 50, 60, 70, 120],
           "labels": ["<40", "40-49", "50-59", "60-69", "70+"]
         },
         "Sex": {
@@ -83,6 +86,46 @@
         "Oldpeak": "st_depression",
         "ST_Slope": "st_slope"
       }
+    },
+    "cardio70k": {
+      "filename": "cardio_train.csv",
+      "source": "IEEE (cardio_train)",
+      "label": "cardio",
+      "target": "cardio",
+      "target_mapping": {
+        "0": "no_disease",
+        "1": "disease"
+      },
+      "include_features": [],
+      "exclude_features": ["cardio", "id"],
+      "sensitive_attributes": {
+        "age": {
+          "type": "continuous",
+          "bins": [0, 14610, 18263, 21915, 25568, 43830],
+          "labels": ["<40", "40-49", "50-59", "60-69", "70+"]
+        },
+        "gender": {
+          "type": "categorical",
+          "mapping": {
+            "1": "Female",
+            "2": "Male"
+          }
+        }
+      },
+      "clinical_features": [
+        "ap_hi", "ap_lo", "cholesterol", "gluc"
+      ],
+      "feature_descriptions": {
+        "ap_hi": "systolic_blood_pressure",
+        "ap_lo": "diastolic_blood_pressure",
+        "cholesterol": "cholesterol_level",
+        "gluc": "glucose_level",
+        "smoke": "smoking",
+        "alco": "alcohol_intake",
+        "active": "physical_activity",
+        "height": "height_cm",
+        "weight": "weight_kg"
+      }
     }
   },
   "unified_schema": {
@@ -102,5 +145,5 @@
       "bmi": ["BMI"]
     }
   },
-  "cardiac_relevant_datasets": ["cleveland", "kaggle_heart"]
+  "cardiac_relevant_datasets": ["cleveland", "kaggle_heart", "cardio70k"]
 }

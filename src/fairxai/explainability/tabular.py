@@ -5,7 +5,7 @@ inputs/output formats consistent so pipeline callers can swap explainers.
 """
 
 from dataclasses import dataclass
-from typing import Any, Iterable, List, Optional
+from typing import Any, Iterable, List, Optional, Union
 import numpy as np
 import pandas as pd
 
@@ -80,6 +80,38 @@ def lime_explain_instance(
     if feature_names is None:
         feature_names = list(training_data.columns)
 
+    def _to_proba_matrix(scores: np.ndarray) -> np.ndarray:
+        scores = np.asarray(scores)
+        if scores.ndim == 1:
+            return np.vstack([1 - scores, scores]).T
+        if scores.ndim == 2 and scores.shape[1] == 2:
+            return scores
+        # Multi-class or unexpected shape: apply softmax
+        exp_scores = np.exp(scores - np.max(scores, axis=1, keepdims=True))
+        return exp_scores / np.sum(exp_scores, axis=1, keepdims=True)
+
+    def _to_frame(X: Union[np.ndarray, pd.DataFrame]) -> pd.DataFrame:
+        if isinstance(X, pd.DataFrame):
+            return X
+        try:
+            return pd.DataFrame(X, columns=list(feature_names))
+        except Exception:
+            return pd.DataFrame(X)
+
+    def _predict_proba(X: np.ndarray) -> np.ndarray:
+        X_df = _to_frame(X)
+        if hasattr(model, 'predict_proba'):
+            return _to_proba_matrix(model.predict_proba(X_df))
+        if hasattr(model, 'decision_function'):
+            raw = model.decision_function(X_df)
+            raw = np.asarray(raw)
+            if raw.ndim == 1:
+                prob_pos = 1.0 / (1.0 + np.exp(-raw))
+                return np.vstack([1 - prob_pos, prob_pos]).T
+            exp_scores = np.exp(raw - np.max(raw, axis=1, keepdims=True))
+            return exp_scores / np.sum(exp_scores, axis=1, keepdims=True)
+        raise ValueError("Model must provide predict_proba or decision_function for LIME")
+
     explainer = LimeTabularExplainer(
         training_data.values,
         feature_names=list(feature_names),
@@ -89,14 +121,27 @@ def lime_explain_instance(
     )
     exp = explainer.explain_instance(
         data_row.values,
-        model.predict_proba,
+        _predict_proba,
         num_features=num_features,
     )
+    def _extract_first(value: Any) -> float:
+        if value is None:
+            return 0.0
+        if isinstance(value, dict):
+            if 1 in value:
+                return float(value[1])
+            if 0 in value:
+                return float(value[0])
+            return float(next(iter(value.values())))
+        if isinstance(value, (list, tuple, np.ndarray)):
+            return float(value[0]) if len(value) else 0.0
+        return float(value)
+
     return LimeExplanation(
         weights=exp.as_list(),
-        intercept=exp.intercept[0] if exp.intercept is not None else 0.0,
-        score=exp.score,
-        local_pred=exp.local_pred[0] if hasattr(exp, "local_pred") else np.nan,
+        intercept=_extract_first(exp.intercept),
+        score=float(exp.score) if exp.score is not None else np.nan,
+        local_pred=_extract_first(getattr(exp, "local_pred", None)),
     )
 
 

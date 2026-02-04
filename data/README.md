@@ -1,19 +1,22 @@
 # Data Directory
 
-This directory contains cardiac disease datasets used in the FairXAI pipeline.
+This directory contains datasets used by FairXAI pipelines.
 
 ## Structure
 
-- `external/` - Original datasets
-- `raw/` - Standardized datasets with unified schema (gitignored)
-- `processed/` - Train/test splits ready for modeling (gitignored)
+- `external/` - Original source datasets
+- `raw/` - Standardized datasets with unified schema (generated)
+- `processed/` - Train/test splits and scaled data (generated)
 
 ## Datasets
 
-To reproduce the pipeline, run:
-```bash
-python scripts/data/load_cardiac.py
-python scripts/data/preprocess_cardiac.py
-```
+Cardiac pipeline (current):
+- Cleveland
+- Kaggle Heart
+- Cardio70k
 
-This will regenerate all processed data from the original sources.
+Dermatology pipeline: TODO
+
+## Regenerating data
+
+Run the pipeline scripts (see scripts/README.md) to rebuild raw and processed data from `external/` sources.

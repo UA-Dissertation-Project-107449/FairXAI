@@ -20,7 +20,6 @@ import sys
 import logging
 import argparse
 import os
-import shutil
 from pathlib import Path
 from datetime import datetime
 import json
@@ -36,48 +35,17 @@ from fairxai.experiments.age_binning import (
     generate_summary_report
 )
 from fairxai.utils.config import load_yaml_config
+from fairxai.cli.runner_base import get_project_root, setup_phase_logging, load_pipeline_config
+from fairxai.cli.runner_utils import (
+    append_run_history,
+    archive_latest_run,
+    get_run_root,
+    resolve_run_id,
+    update_latest_pointer,
+)
 
 
-def setup_logging(log_dir: Path, timestamp: str):
-    """Configure logging to file and console."""
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / f'age_binning_analysis_{timestamp}.log'
-    
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file, mode='w'),
-            logging.StreamHandler()
-        ]
-    )
-    
-    logging.info("="*80)
-    logging.info("AGE BINNING STRATEGIES ANALYSIS EXPERIMENT")
-    logging.info("="*80)
-
-
-def archive_latest_run(base_dir: Path, enabled: bool, logger: logging.Logger):
-    if not enabled:
-        return
-    latest_dir = base_dir / 'latest_run'
-    archives_dir = base_dir / 'archived_runs'
-    archives_dir.mkdir(parents=True, exist_ok=True)
-
-    has_files = latest_dir.exists() and any(p.is_file() for p in latest_dir.rglob('*'))
-    if not has_files:
-        return
-
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    archive_path = archives_dir / f'run_{timestamp}'
-    archive_path.parent.mkdir(parents=True, exist_ok=True)
-    archive_path.mkdir(parents=True, exist_ok=True)
-    # copytree into archive/run_.../latest_run
-    shutil.copytree(latest_dir, archive_path / 'latest_run', dirs_exist_ok=True)
-    logger.info(f"Archived previous latest_run to: {archive_path}")
-
-
-def load_dataset_for_binning(dataset_name: str, data_dir: Path):
+def load_dataset_for_binning(dataset_name: str, data_dir: Path, sensitive_col: str, target_col: str):
     """
     Load standardized raw dataset with age_raw column.
     
@@ -98,19 +66,19 @@ def load_dataset_for_binning(dataset_name: str, data_dir: Path):
     df = pd.read_csv(file_path)
     
     # Verify required columns
-    REQUIRED_COLUMNS = ['age_raw', 'sex', 'heart_disease']
+    REQUIRED_COLUMNS = ['age_raw', sensitive_col, target_col]
     missing = [col for col in REQUIRED_COLUMNS if col not in df.columns]
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
     
     logging.info(f"  Loaded: {len(df)} samples")
     logging.info(f"  Age range: [{df['age_raw'].min()}, {df['age_raw'].max()}]")
-    logging.info(f"  Target prevalence: {df['heart_disease'].mean():.2%}")
+    logging.info(f"  Target prevalence: {df[target_col].mean():.2%}")
     
     return df
 
 
-def run_strategy_analysis(df, strategy_name, dataset_name):
+def run_strategy_analysis(df, strategy_name, dataset_name, sensitive_col, target_col):
     """
     Analyze a single binning strategy on a dataset.
     
@@ -136,8 +104,8 @@ def run_strategy_analysis(df, strategy_name, dataset_name):
             labels=labels,
             dataset_name=dataset_name,
             age_col='age_raw',
-            sensitive_col='sex',
-            target_col='heart_disease'
+            sensitive_col=sensitive_col,
+            target_col=target_col
         )
         
         return result
@@ -148,36 +116,33 @@ def run_strategy_analysis(df, strategy_name, dataset_name):
         return None
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Run age binning analysis experiment')
-    parser.add_argument('--config', type=str,
-                       default='configs/experiments/age_binning.yaml',
-                       help='Path to experiment config file')
-    parser.add_argument('--datasets', type=str, nargs='+',
-                       help='Datasets to process (default: from config)')
-    parser.add_argument('--strategies', type=str, nargs='+',
-                       help='Strategies to test (default: from config)')
-    parser.add_argument('--output-dir', type=str,
-                       help='Output directory (default: results/cardiac/experiments/latest_run/age_binning)')
-    parser.add_argument('--run-mode', type=str, choices=['full', 'partial'],
-                       default=os.getenv('EXPERIMENT_RUN_MODE', 'partial'),
-                       help='Run mode (full or partial)')
-    parser.add_argument('--archive-previous', action='store_true',
-                       default=os.getenv('ARCHIVE_PREVIOUS', 'true').lower() == 'true',
-                       help='Archive previous latest_run (full runs only)')
-    args = parser.parse_args()
-    
+def run_analysis(
+    config_path: str,
+    datasets: list = None,
+    strategies: list = None,
+    output_dir: str = None,
+    pipeline: str = 'cardiac',
+    run_mode: str = 'partial',
+    archive_previous: bool = True,
+    run_id: str = None,
+    results_root: str = None,
+    verbose: bool = False
+):
+    """
+    Runs the age binning analysis experiment.
+    """
     # Paths
-    project_root = Path(__file__).parent.parent.parent
+    project_root = get_project_root(Path(__file__))
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     
     # Load config
-    config_path = project_root / args.config
+    config_path = project_root / config_path
     if not config_path.exists():
         logging.error(f"Config file not found: {config_path}")
         return
     
     experiment_cfg = load_yaml_config(str(config_path))
+    pipeline_cfg = load_pipeline_config(project_root, pipeline)
     
     # Validate config
     required_keys = ['data', 'binning_strategies']
@@ -187,43 +152,77 @@ def main():
         sys.exit(1)
     
     # Determine datasets and strategies to process
-    datasets = args.datasets if args.datasets else experiment_cfg['data']['datasets']
+    datasets = datasets if datasets else experiment_cfg['data']['datasets']
+    sensitive_attrs = experiment_cfg.get('data', {}).get('sensitive_attributes', ['sex'])
+    sensitive_col = sensitive_attrs[0] if sensitive_attrs else 'sex'
+    target_col = experiment_cfg.get('data', {}).get('target', 'heart_disease')
     
-    if args.strategies:
-        strategies = args.strategies
+    if strategies:
+        strategies = strategies
     else:
         strategies = list(experiment_cfg['binning_strategies'].keys())
     
+    use_run_id = bool(run_id or os.getenv('RUN_ID') or os.getenv('PREFECT__RUNTIME__FLOW_RUN_ID'))
+    run_id = resolve_run_id(run_id) if use_run_id else None
+
     # Determine output directory
-    base_results = project_root / 'results/cardiac/experiments/full'
-    latest_dir = base_results / 'latest_run'
-    if args.output_dir:
-        output_dir = Path(args.output_dir)
+    default_output_dir = experiment_cfg.get('output', {}).get('results_dir')
+    if run_id:
+        base_results = Path(results_root) if results_root else (project_root / f"results/{pipeline}")
+    elif results_root:
+        base_results = Path(results_root)
+    elif default_output_dir:
+        base_results = Path(default_output_dir)
+        if base_results.parts and base_results.name == 'age_binning':
+            base_results = base_results.parents[1]
+        if run_mode == 'partial' and 'full' in base_results.parts:
+            parts = list(base_results.parts)
+            idx = len(parts) - 1 - parts[::-1].index('full')
+            parts[idx] = 'partial'
+            base_results = Path(*parts)
     else:
-        if args.run_mode == 'partial':
-            output_dir = project_root / 'results/cardiac/experiments/partial' / 'age_binning' / timestamp
+        base_results = project_root / f"results/{pipeline}/experiments/{run_mode}"
+    log_subdir = f"experiments/{run_id}" if run_id else 'experiments/latest_run'
+
+    # Setup logging
+    setup_phase_logging(project_root, 'age_binning_analysis.log', verbose=verbose, log_subdir=log_subdir)
+    logger = logging.getLogger(__name__)
+    logging.info("[PHASE] Age binning analysis started")
+
+    if run_id:
+        run_dir = get_run_root(base_results, run_id)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = Path(output_dir) if output_dir else run_dir / 'experiments' / run_mode / 'age_binning'
+    else:
+        latest_dir = base_results / 'latest_run'
+        if run_mode == 'partial':
+            archive_latest_run(base_results, enabled=True, logger=logger)
         else:
-            output_dir = latest_dir / 'age_binning'
+            archive_latest_run(base_results, enabled=archive_previous, logger=logger)
+        output_dir = Path(output_dir) if output_dir else latest_dir / 'age_binning'
     
     output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Setup logging
-    log_dir = project_root / 'logs/experiments'
-    setup_logging(log_dir, timestamp)
-    logger = logging.getLogger(__name__)
-
-    if args.run_mode == 'full':
-        archive_latest_run(base_results, enabled=args.archive_previous, logger=logger)
     
     logging.info(f"Configuration:")
     logging.info(f"  Datasets: {datasets}")
     logging.info(f"  Strategies: {strategies}")
     logging.info(f"  Output: {output_dir}")
-    logging.info(f"  Run mode: {args.run_mode}")
+    logging.info(f"  Run mode: {run_mode}")
     logging.info(f"  Timestamp: {timestamp}")
+    if run_id:
+        logging.info(f"  Run ID: {run_id}")
+        append_run_history(base_results, {
+            'run_id': run_id,
+            'pipeline': pipeline,
+            'mode': run_mode,
+            'phase': 'age_binning',
+            'datasets': datasets,
+            'output_dir': str(output_dir),
+            'status': 'started'
+        })
     
     # Data directory (use raw standardized data)
-    data_dir = project_root / 'data/raw/cardiac'
+    data_dir = project_root / pipeline_cfg['paths']['raw_dir']
     
     # Get scoring weights from config
     scoring_cfg = experiment_cfg.get('scoring', {})
@@ -248,7 +247,7 @@ def main():
         
         try:
             # Load dataset
-            df = load_dataset_for_binning(dataset_name, data_dir)
+            df = load_dataset_for_binning(dataset_name, data_dir, sensitive_col, target_col)
         except Exception as e:
             logging.error(f"Failed to load {dataset_name}: {e}")
             logging.exception(e)
@@ -256,7 +255,7 @@ def main():
         
         # Test each strategy (errors handled within run_strategy_analysis)
         for strategy_name in strategies:
-            result = run_strategy_analysis(df, strategy_name, dataset_name)
+            result = run_strategy_analysis(df, strategy_name, dataset_name, sensitive_col, target_col)
             if result:
                 all_results.append(result)
     
@@ -288,15 +287,15 @@ def main():
     report_file = output_dir / f'age_binning_report_{timestamp}.md'
     
     comparison_df.to_csv(csv_file, index=False)
-    logging.info(f"\n✓ Saved CSV: {csv_file}")
+    logging.info(f"\n[SUCCESS] Saved CSV: {csv_file}")
     
     with open(json_file, 'w') as f:
         json.dump(all_results, f, indent=2, default=str)
-    logging.info(f"✓ Saved JSON: {json_file}")
+    logging.info(f"[SUCCESS] Saved JSON: {json_file}")
     
     # Generate markdown report
     generate_summary_report(all_results, report_file, scoring_weights)
-    logging.info(f"✓ Saved Report: {report_file}")
+    logging.info(f"[SUCCESS] Saved Report: {report_file}")
     
     # Print summary
     logging.info(f"\n{'='*80}")
@@ -334,6 +333,59 @@ def main():
     logging.info(f"  - Comparison CSV: {csv_file.name}")
     logging.info(f"  - Detailed JSON: {json_file.name}")
     logging.info(f"  - Summary Report: {report_file.name}")
+    logging.info("[PHASE] Age binning analysis complete")
+
+    if run_id:
+        update_latest_pointer(base_results, run_dir, logger)
+        append_run_history(base_results, {
+            'run_id': run_id,
+            'pipeline': pipeline,
+            'mode': run_mode,
+            'phase': 'age_binning',
+            'datasets': datasets,
+            'output_dir': str(output_dir),
+            'status': 'completed'
+        })
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Run age binning analysis experiment')
+    parser.add_argument('--config', type=str,
+                       default='configs/experiments/age_binning.yaml',
+                       help='Path to experiment config file')
+    parser.add_argument('--datasets', type=str, nargs='+',
+                       help='Datasets to process (default: from config)')
+    parser.add_argument('--strategies', type=str, nargs='+',
+                       help='Strategies to test (default: from config)')
+    parser.add_argument('--output-dir', type=str,
+                       help='Output directory (default: from config or results/{pipeline}/experiments/{run_mode}/latest_run/age_binning)')
+    parser.add_argument('--pipeline', type=str, default='cardiac',
+                       help='Pipeline name (e.g., cardiac, dermatology)')
+    parser.add_argument('--run-mode', type=str, choices=['full', 'partial'],
+                       default=os.getenv('EXPERIMENT_RUN_MODE', 'partial'),
+                       help='Run mode (full or partial)')
+    parser.add_argument('--archive-previous', action='store_true',
+                       default=os.getenv('ARCHIVE_PREVIOUS', 'true').lower() == 'true',
+                       help='Archive previous latest_run (full runs only)')
+    parser.add_argument('--run-id', type=str, default=os.getenv('RUN_ID'),
+                       help='Run identifier (optional, enables run-scoped outputs)')
+    parser.add_argument('--results-root', type=str, default=None,
+                       help='Base results directory for run outputs')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose console output')
+    args = parser.parse_args()
+    
+    run_analysis(
+        config_path=args.config,
+        datasets=args.datasets,
+        strategies=args.strategies,
+        output_dir=args.output_dir,
+        pipeline=args.pipeline,
+        run_mode=args.run_mode,
+        archive_previous=args.archive_previous,
+        run_id=args.run_id,
+        results_root=args.results_root,
+        verbose=args.verbose
+    )
 
 
 if __name__ == '__main__':
