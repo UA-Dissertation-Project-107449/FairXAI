@@ -24,11 +24,11 @@ See `docs/DECISIONS.md` for detailed architecture decisions.
 ```
 FairXAI/
 ├── src/fairxai/          # Core package
-├── scripts/              # Main executable code
+├── scripts/              # Entry points and pipelines (see scripts/README.md)
+├── configs/              # Pipeline/dataset/experiment configs
 ├── notebooks/            # Jupyter notebooks & runs
-├── experiments/          # Configs and experiment tracking
-├── data/                 # Datasets (raw, processed, external)
-├── results/              # All outputs (metrics, plots, reports)
+├── data/                 # Datasets (external/raw/processed)
+├── results/              # Outputs (metrics, plots, reports)
 ├── models/               # Trained checkpoints
 ├── logs/                 # Execution logs
 └── docs/                 # Documentation
@@ -36,13 +36,19 @@ FairXAI/
 
 ## Getting Started
 
-(To be filled in with setup instructions)
+For how to run the pipeline, see:
+- scripts/README.md (script-by-script and run_id usage)
+- data/README.md (dataset layout and regeneration)
+- configs/README.md (config files and how they are used)
 
 ## Datasets
 
-Currently targeting 3 cardiac disease detection datasets:
+Cardiac pipeline datasets:
 - Cleveland
-- Kaggle datasets (synthetic)
+- Kaggle Heart
+- Cardio70k
+
+Dermatology pipeline: TODO
 
 ## Related Work
 
