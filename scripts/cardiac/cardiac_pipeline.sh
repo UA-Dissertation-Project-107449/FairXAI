@@ -46,7 +46,11 @@ python3 "$ROOT_DIR/scripts/cardiac/load_data.py" $VERBOSE_FLAG
 echo ""
 
 echo "[PHASE 2/8] Preprocessing datasets (split + scale + fairness profiles)"
-python3 "$ROOT_DIR/scripts/cardiac/preprocess.py" $VERBOSE_FLAG
+PREPROCESS_ARGS=""
+if [[ "$RUN_COMBINATORIAL" == "true" ]]; then
+    PREPROCESS_ARGS="--all-binnings"
+fi
+python3 "$ROOT_DIR/scripts/cardiac/preprocess.py" $PREPROCESS_ARGS $VERBOSE_FLAG
 echo ""
 
 echo "[PHASE 3/8] Training baseline model(s)"

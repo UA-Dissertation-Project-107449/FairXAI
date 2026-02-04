@@ -808,8 +808,11 @@ def run_combinatorial_analysis(
     
     # Run experiments
     logger.info("\nStarting experiments...")
+    project_root = Path(__file__).parent.parent.parent
     processed_dir = Path(config['paths']['processed_dir'])
-    schema_cfg = load_schema_config(Path(__file__).parent.parent.parent, pipeline)
+    if not processed_dir.is_absolute():
+        processed_dir = project_root / processed_dir
+    schema_cfg = load_schema_config(project_root, pipeline)
     
     if n_jobs == 1:
         # Sequential execution

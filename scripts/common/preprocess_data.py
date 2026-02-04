@@ -193,6 +193,9 @@ def main():
             df = pd.read_csv(filepath)
             df = _apply_schema_rules(df, schema_cfg, dataset_name)
             logging.info(f"Loaded: {len(df)} samples, {len(df.columns)} features")
+            if df.empty:
+                logging.error(f"No rows available after schema rules for {dataset_name}. Skipping.")
+                continue
 
             # Apply age binning if specified
             if binning_strategy:
@@ -206,6 +209,9 @@ def main():
 
                 # Apply binning (overwrite canonical age_group)
                 df = apply_binning(df, bins, labels, age_col='age_raw', output_col='age_group')
+                if df.empty:
+                    logging.error(f"No rows available after binning for {dataset_name}. Skipping.")
+                    continue
 
                 # Log binning results
                 age_dist = df['age_group'].value_counts().sort_index()
@@ -227,6 +233,9 @@ def main():
 
             # Handle missing values (strategy: drop rows if < 5% missing)
             df_clean, actions = preprocessor.handle_missing_values(df, strategy='drop_rows')
+            if df_clean.empty:
+                logging.error(f"No rows available after missing-value handling for {dataset_name}. Skipping.")
+                continue
 
             # Step 2: Stratified train/test split
             logging.info(f"\n--- Stratified Train/Test Split ---")

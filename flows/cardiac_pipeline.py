@@ -33,11 +33,15 @@ def load_data(run_id: str, verbose: bool = False):
 
 
 @task
-def preprocess_data(run_id: str, verbose: bool = False):
+def preprocess_data(run_id: str, all_binnings: bool = False, verbose: bool = False):
     logger = get_run_logger()
     logger.info("[PHASE 2/8] Preprocessing datasets (split + scale + fairness profiles)")
     script = ROOT_DIR / "scripts" / "cardiac" / "preprocess.py"
-    args = ["-v"] if verbose else []
+    args = []
+    if all_binnings:
+        args.append("--all-binnings")
+    if verbose:
+        args.append("-v")
     env = os.environ.copy()
     env["RUN_ID"] = run_id
     _run_script(script, args, env)
@@ -138,7 +142,7 @@ def cardiac_pipeline(
     logger.info(f"Comparison: {run_comparison}")
 
     load_data_task = load_data.submit(run_id, verbose)
-    preprocess_data_task = preprocess_data.submit(run_id, verbose, wait_for=[load_data_task])
+    preprocess_data_task = preprocess_data.submit(run_id, run_combinatorial, verbose, wait_for=[load_data_task])
     train_baseline_model_task = train_baseline_model.submit(run_id, verbose, wait_for=[preprocess_data_task])
     assess_predictions_task = assess_predictions.submit(run_id, verbose, wait_for=[train_baseline_model_task])
 

@@ -236,8 +236,13 @@ class CardiacPreprocessor:
         strat_cols = [target] + [attr for attr in self.sensitive_attrs if attr in df.columns]
         strat_cols = list(dict.fromkeys(strat_cols))
         
-        # Create combined stratification key
-        df['_strat_key'] = df[strat_cols].astype(str).agg('_'.join, axis=1)
+        # Create combined stratification key (dedupe duplicate columns if present)
+        strat_df = df[strat_cols]
+        if strat_df.columns.duplicated().any():
+            strat_df = strat_df.loc[:, ~strat_df.columns.duplicated()]
+        strat_values = strat_df.astype(str).to_numpy()
+        strat_key = ['_'.join(row) for row in strat_values]
+        df['_strat_key'] = pd.Series(strat_key, index=df.index)
         
         # Remove rare combinations (< 2 samples) to avoid split errors
         strat_counts = df['_strat_key'].value_counts()
@@ -254,20 +259,34 @@ class CardiacPreprocessor:
                 primary_sensitive = next((attr for attr in self.sensitive_attrs if attr in df.columns), None)
                 if primary_sensitive:
                     fallback_cols.append(primary_sensitive)
-                df['_strat_key'] = df[fallback_cols].astype(str).agg('_'.join, axis=1)
+                fallback_df = df[fallback_cols]
+                if fallback_df.columns.duplicated().any():
+                    fallback_df = fallback_df.loc[:, ~fallback_df.columns.duplicated()]
+                fallback_values = fallback_df.astype(str).to_numpy()
+                fallback_key = ['_'.join(row) for row in fallback_values]
+                df['_strat_key'] = pd.Series(fallback_key, index=df.index)
                 strat_counts = df['_strat_key'].value_counts()
                 valid_strats = strat_counts[strat_counts >= 2].index
                 df_valid = df[df['_strat_key'].isin(valid_strats)].copy()
                 dropped = len(df) - len(df_valid)
                 logging.warning(f"⚠️  Fallback stratification dropped {dropped} samples")
         
-        # Perform stratified split
-        train_df, test_df = train_test_split(
-            df_valid,
-            test_size=test_size,
-            stratify=df_valid['_strat_key'],
-            random_state=random_state
-        )
+        # Perform stratified split (fallback to unstratified if no valid groups)
+        if df_valid.empty or df_valid['_strat_key'].nunique() < 2:
+            logging.warning("⚠️  Stratified split unavailable; falling back to random split")
+            train_df, test_df = train_test_split(
+                df,
+                test_size=test_size,
+                random_state=random_state,
+                shuffle=True
+            )
+        else:
+            train_df, test_df = train_test_split(
+                df_valid,
+                test_size=test_size,
+                stratify=df_valid['_strat_key'],
+                random_state=random_state
+            )
         
         # Remove stratification key
         train_df = train_df.drop(columns=['_strat_key'])
