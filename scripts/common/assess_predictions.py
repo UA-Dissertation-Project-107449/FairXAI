@@ -271,20 +271,29 @@ def compare_fairness(train_metrics: Dict, test_metrics: Dict) -> Dict:
 def main():
     """Main execution function."""
     parser = argparse.ArgumentParser(description='Assess post-prediction fairness')
+    parser.add_argument(
+        '--pipeline',
+        type=str,
+        default='cardiac',
+        choices=['cardiac', 'dermatology'],
+        help='Pipeline name (e.g., cardiac, dermatology)'
+    )
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose console output')
     args = parser.parse_args()
 
+    pipeline = args.pipeline
+
     project_root = Path(__file__).parent.parent.parent
-    pipeline_cfg = load_pipeline_config(project_root, "cardiac")
+    pipeline_cfg = load_pipeline_config(project_root, pipeline)
     run_id = os.getenv('RUN_ID')
     if run_id:
-        baseline_root = project_root / f"results/cardiac/runs/{run_id}/baseline"
+        baseline_root = project_root / f"results/{pipeline}/runs/{run_id}/baseline"
         experiments_dir = baseline_root / "results"
         results_dir = baseline_root / "fairness"
     else:
         experiments_dir = project_root / pipeline_cfg['paths']['experiments_dir']
         results_dir = project_root / pipeline_cfg['paths']['results_fairness_dir']
-    log_dir = project_root / 'logs/cardiac'
+    log_dir = project_root / f'logs/{pipeline}'
     
     # Setup
     log_dir = setup_phase_logging(project_root, 'fairness_assessment.log', verbose=args.verbose)

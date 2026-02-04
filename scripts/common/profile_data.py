@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Profile cardiac datasets for fairness assessment (pre-model).
+Profile pipeline datasets for fairness assessment (pre-model).
 
 This script:
 1. Loads standardized datasets
@@ -10,7 +10,7 @@ This script:
 5. Generates comprehensive fairness report (PRE-PROCESSING)
 
 Usage:
-    python scripts/data/profile_data.py
+    python scripts/common/profile_data.py --pipeline cardiac
 """
 
 import sys
@@ -28,33 +28,44 @@ from fairxai.cli.runner_base import get_project_root, load_pipeline_config, setu
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Profile cardiac datasets')
+    parser = argparse.ArgumentParser(description='Profile pipeline datasets')
+    parser.add_argument(
+        '--pipeline',
+        type=str,
+        default='cardiac',
+        choices=['cardiac', 'dermatology'],
+        help='Pipeline name (e.g., cardiac, dermatology)'
+    )
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose console output')
     args = parser.parse_args()
 
+    pipeline = args.pipeline
+
     # Paths
     project_root = get_project_root(Path(__file__))
-    pipeline_cfg = load_pipeline_config(project_root, "cardiac")
-    data_raw_cardiac = project_root / pipeline_cfg['paths']['raw_dir']
+    pipeline_cfg = load_pipeline_config(project_root, pipeline)
+    data_raw = project_root / pipeline_cfg['paths']['raw_dir']
     log_dir = setup_phase_logging(project_root, 'data_profiling.log', verbose=args.verbose)
-    results_profiling = project_root / 'results/cardiac/profiling'
+    results_profiling = project_root / f'results/{pipeline}/profiling'
     
     # Setup
     logging.info("[PHASE] Data profiling started")
     results_profiling.mkdir(parents=True, exist_ok=True)
     
     # Initialize profiler
-    profiler = DataProfiler(sensitive_attrs=['age_group', 'sex'])
+    sensitive_attrs = pipeline_cfg.get('fairness', {}).get('sensitive_attributes', ['age_group', 'sex'])
+    profiler = DataProfiler(sensitive_attrs=sensitive_attrs)
     
     # Find all standardized datasets
-    dataset_files = list(data_raw_cardiac.glob('*_standardized.csv'))
+    dataset_files = list(data_raw.glob('*_standardized.csv'))
     
     if not dataset_files:
-        logging.error(f"No standardized datasets found in {data_raw_cardiac}")
-        logging.error("Please run scripts/data/load_cardiac.py first.")
+        logging.error(f"No standardized datasets found in {data_raw}")
+        logging.error("Please run scripts/common/load_data.py --pipeline %s first." % pipeline)
         return
     
     logging.info(f"Found {len(dataset_files)} standardized datasets")
+    target_col = pipeline_cfg.get('training', {}).get('target', 'heart_disease')
     
     # Profile each dataset
     all_profiles = []
@@ -70,7 +81,7 @@ def main():
         logging.info(f"Loaded: {len(df)} samples, {len(df.columns)} features")
         
         # Generate profile
-        profile = profiler.profile_dataset(df, target='heart_disease', dataset_name=dataset_name)
+        profile = profiler.profile_dataset(df, target=target_col, dataset_name=dataset_name)
         all_profiles.append(profile)
         
         # Log key findings

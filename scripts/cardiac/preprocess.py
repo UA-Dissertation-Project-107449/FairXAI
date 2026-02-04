@@ -5,8 +5,11 @@ import runpy
 import sys
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-TARGET = ROOT_DIR / "scripts" / "data" / "preprocess_cardiac.py"
+TARGET = ROOT_DIR / "scripts" / "common" / "preprocess_data.py"
 
 if __name__ == "__main__":
-    sys.argv = [str(TARGET)] + sys.argv[1:]
+    args = sys.argv[1:]
+    if "--pipeline" not in args:
+        args = ["--pipeline", "cardiac"] + args
+    sys.argv = [str(TARGET)] + args
     runpy.run_path(str(TARGET), run_name="__main__")

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Train baseline logistic regression models for cardiac disease prediction.
+Train baseline logistic regression models for a pipeline.
 
 This script:
 1. Loads preprocessed train/test datasets
@@ -11,7 +11,7 @@ This script:
 6. Logs performance metrics
 
 Usage:
-    python scripts/models/train_baseline.py
+    python scripts/common/train_baseline.py --pipeline cardiac
 """
 
 import sys
@@ -136,19 +136,28 @@ def save_xai_outputs(
 
 def main():
     parser = argparse.ArgumentParser(description='Train baseline models')
+    parser.add_argument(
+        '--pipeline',
+        type=str,
+        default='cardiac',
+        choices=['cardiac', 'dermatology'],
+        help='Pipeline name (e.g., cardiac, dermatology)'
+    )
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose console output')
     args = parser.parse_args()
 
+    pipeline = args.pipeline
+
     # Paths
     project_root = get_project_root(Path(__file__))
-    pipeline_cfg = load_pipeline_config(project_root, "cardiac")
+    pipeline_cfg = load_pipeline_config(project_root, pipeline)
     schema_path = project_root / pipeline_cfg['runtime']['schema_mapping_json']
     with open(schema_path, 'r') as f:
         schema_cfg = json.load(f)
     data_processed = project_root / pipeline_cfg['paths']['processed_dir']
     run_id = os.getenv('RUN_ID')
     if run_id:
-        baseline_root = project_root / f"results/cardiac/runs/{run_id}/baseline"
+        baseline_root = project_root / f"results/{pipeline}/runs/{run_id}/baseline"
         experiments_dir = baseline_root / "results"
         models_dir = baseline_root / "models"
     else:
@@ -156,7 +165,7 @@ def main():
         models_dir = project_root / pipeline_cfg['paths']['models_dir']
     log_dir = setup_phase_logging(project_root, 'training_baseline.log', verbose=args.verbose)
     if not run_id:
-        baseline_root = project_root / 'results/cardiac/baseline'
+        baseline_root = project_root / f'results/{pipeline}/baseline'
     
     # Setup
     logging.info("[PHASE] Baseline training started")
@@ -171,8 +180,9 @@ def main():
     experiments_dir.mkdir(parents=True, exist_ok=True)
     
     # Configuration
-    random_state = 42
-    thresholds_to_test = [0.3, 0.4, 0.5, 0.6, 0.7]
+    training_cfg = pipeline_cfg.get('training', {})
+    random_state = training_cfg.get('random_state', 42)
+    thresholds_to_test = training_cfg.get('thresholds', [0.3, 0.4, 0.5, 0.6, 0.7])
     
     logging.info(f"Configuration:")
     logging.info(f"  Model: Logistic Regression")
@@ -184,7 +194,7 @@ def main():
     
     if not train_files:
         logging.error(f"No training datasets found in {data_processed}")
-        logging.error("Please run scripts/data/preprocess_cardiac.py first.")
+        logging.error("Please run scripts/common/preprocess_data.py --pipeline %s first." % pipeline)
         return
     
     logging.info(f"\nFound {len(train_files)} datasets to train on")
@@ -215,8 +225,9 @@ def main():
         # Separate features, target, and sensitive attributes
         # Note: scaled files have both encoded and categorical versions
         # We keep the encoded numerical versions for modeling
-        sensitive_cols = ['age_group', 'sex']
-        target_col = 'heart_disease'
+        target_col = training_cfg.get('target', 'heart_disease')
+        sensitive_candidates = pipeline_cfg.get('fairness', {}).get('sensitive_attributes', ['age_group', 'sex'])
+        sensitive_cols = [col for col in sensitive_candidates if col in train_df.columns]
 
         base_dataset = resolve_base_dataset(schema_cfg, dataset_name)
         schema_exclude = build_schema_excludes(schema_cfg, base_dataset)
@@ -244,8 +255,8 @@ def main():
         # Train model
         logging.info(f"\n--- Training ---")
         model = BaselineLogisticRegression(
-            C=1.0,
-            max_iter=1000,
+            C=training_cfg.get('C', 1.0),
+            max_iter=training_cfg.get('max_iter', 1000),
             random_state=random_state,
             class_weight='balanced'  # Handle class imbalance
         )
