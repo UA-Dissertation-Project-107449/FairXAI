@@ -34,8 +34,12 @@ def harmonize_cardiac_schema(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
             df["age_raw"] = pd.to_numeric(df["Age"], errors="coerce")
 
     # Clip to reasonable human range to avoid outliers corrupting scaling
+    # Cardio70k stores age in days, so allow day-scale upper bounds there.
     if "age_raw" in df.columns:
-        df["age_raw"] = df["age_raw"].clip(lower=0, upper=120)
+        if dataset == "cardio70k" and df["age_raw"].max() > 130:
+            df["age_raw"] = df["age_raw"].clip(lower=0, upper=43830)
+        else:
+            df["age_raw"] = df["age_raw"].clip(lower=0, upper=120)
 
     # Sex: harmonize to string labels where possible
     if "sex" not in df.columns and "Sex" in df.columns:
