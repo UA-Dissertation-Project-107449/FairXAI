@@ -15,8 +15,8 @@ scripts/
 ## Run order (cardiac)
 
 1. Load data
-2. Preprocess data (use all binnings for combinatorial)
-3. Profile data
+2. Profile data
+3. Preprocess data (use all binnings for combinatorial)
 4. Train baseline
 5. Assess baseline fairness
 6. Age binning analysis

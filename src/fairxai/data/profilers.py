@@ -4,6 +4,7 @@ import pandas as pd
 from typing import Dict, List
 
 from .schemas import available_sensitive, preferred_sensitive
+from ..profiling import compute_complexity_metrics
 
 
 class DataProfiler:
@@ -49,7 +50,8 @@ class DataProfiler:
             'group_statistics': self._group_statistics(df, target),
             'representation_balance': self._representation_balance(df),
             'label_imbalance_by_group': self._label_imbalance_by_group(df, target),
-            'missing_value_analysis': self._missing_value_analysis(df)
+            'missing_value_analysis': self._missing_value_analysis(df),
+            'complexity_metrics': compute_complexity_metrics(df, target=target)
         }
         
         return profile

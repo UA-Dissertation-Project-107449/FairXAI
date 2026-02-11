@@ -129,6 +129,13 @@ def main():
             # Convert numpy types to native Python for JSON serialization
             json.dump(profile, f, indent=2, default=str)
         logging.info(f"\n[SUCCESS] Profile saved to: {profile_file}")
+
+        complexity = profile.get('complexity_metrics')
+        if complexity:
+            complexity_file = results_profiling / f'{dataset_name}_complexity.json'
+            with open(complexity_file, 'w') as f:
+                json.dump(complexity, f, indent=2, default=str)
+            logging.info(f"[SUCCESS] Complexity metrics saved to: {complexity_file}")
     
     # Compare datasets
     logging.info(f"\n{'='*60}")
