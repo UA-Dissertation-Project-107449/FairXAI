@@ -13,6 +13,7 @@ from .distributions import (
     plot_categorical_distribution_grid,
     plot_numeric_distribution_comparison,
     plot_target_distribution_by_group,
+    plot_stacked_group_distribution_grid,
 )
 
 from .comparisons import (
@@ -37,6 +38,7 @@ __all__ = [
     "plot_categorical_distribution_grid",
     "plot_numeric_distribution_comparison",
     "plot_target_distribution_by_group",
+    "plot_stacked_group_distribution_grid",
     "plot_feature_drift_matrix",
     "plot_dataset_similarity_radar",
     "plot_group_representation_bars",

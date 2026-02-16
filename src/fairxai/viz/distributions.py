@@ -130,14 +130,29 @@ def plot_categorical_distribution_grid(
         
         if as_proportion:
             proportions = series.value_counts(normalize=True).reindex(category_order, fill_value=0)
-            bar_colors = [palette.get(cat, "#7f7f7f") for cat in category_order] if palette else None
+            if palette:
+                if name in palette:
+                    bar_colors = [palette.get(name, "#7f7f7f")] * len(category_order)
+                else:
+                    bar_colors = [palette.get(cat, "#7f7f7f") for cat in category_order]
+            else:
+                bar_colors = None
             sns.barplot(x=proportions.index.astype(str), y=proportions.values, palette=bar_colors, ax=ax)
             ax.set_ylabel("proportion")
-            ax.set_ylim(0, 1.05)
+            ax.set_ylim(0, 1.08)
         else:
             if palette:
-                bar_colors = [palette.get(cat, "#7f7f7f") for cat in category_order]
-                sns.countplot(data=df.astype({column: str}), x=column, order=category_order, palette=bar_colors, ax=ax)
+                if name in palette:
+                    sns.countplot(
+                        data=df.astype({column: str}),
+                        x=column,
+                        order=category_order,
+                        color=palette.get(name, "#7f7f7f"),
+                        ax=ax,
+                    )
+                else:
+                    bar_colors = [palette.get(cat, "#7f7f7f") for cat in category_order]
+                    sns.countplot(data=df.astype({column: str}), x=column, order=category_order, palette=bar_colors, ax=ax)
             else:
                 sns.countplot(data=df.astype({column: str}), x=column, order=category_order, ax=ax)
             ax.set_ylabel("Count")
@@ -157,6 +172,13 @@ def plot_categorical_distribution_grid(
                 else:
                     labels = [f'{(v/total*100 if total else 0):.1f}%\n({int(v)})' for v in container.datavalues]
                 ax.bar_label(container, labels=labels, fontsize=9)
+
+            if as_proportion:
+                ymax = max((container.datavalues.max() for container in ax.containers), default=1.0)
+                ax.set_ylim(0, max(1.08, float(ymax) * 1.12))
+            else:
+                ymax = max((container.datavalues.max() for container in ax.containers), default=0)
+                ax.set_ylim(0, float(ymax) * 1.18 if ymax else 1.0)
         
         # Imbalance warning box
         if annotate_imbalance:
@@ -174,13 +196,16 @@ def plot_categorical_distribution_grid(
         axes[idx].set_visible(False)
     
     # Main title and subtitle
+    layout_top = 0.95
     if title:
-        fig.suptitle(title, fontsize=16, fontweight='bold', y=0.98)
+        fig.suptitle(title, fontsize=16, fontweight='bold', y=1.01)
+        layout_top = 0.88
     if subtitle:
         fig.text(
-            0.5, 0.94, subtitle, 
+            0.5, 0.925, subtitle,
             ha='center', fontsize=11, style='italic', color='#555555'
         )
+        layout_top = 0.80 if title else 0.88
     
     # Fairness context box
     if fairness_context:
@@ -191,7 +216,8 @@ def plot_categorical_distribution_grid(
             wrap=True
         )
     
-    plt.tight_layout(rect=[0, 0.04, 1, 0.92])  # Leave space for title/subtitle
+    layout_bottom = 0.08 if fairness_context else 0.03
+    plt.tight_layout(rect=[0, layout_bottom, 1, layout_top])
     
     if save_path:
         save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -340,6 +366,111 @@ def plot_target_distribution_by_group(
         fig.suptitle(title, fontsize=16, fontweight="bold", y=0.98)
 
     plt.tight_layout(rect=[0, 0.02, 1, 0.95])
+
+    if save_path:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+
+    if show:
+        plt.show()
+
+    return fig, axes
+
+
+def plot_stacked_group_distribution_grid(
+    datasets: dict[str, pd.DataFrame],
+    group_col: str,
+    stack_col: str,
+    title: str | None = None,
+    subtitle: str | None = None,
+    group_order_by_dataset: dict[str, list[str]] | None = None,
+    stack_order: list[str] | None = None,
+    stack_palette: dict[str, str] | None = None,
+    figsize: tuple | None = None,
+    annotate_totals: bool = True,
+    save_path: Path | None = None,
+    show: bool = False,
+) -> tuple[plt.Figure, np.ndarray]:
+    _ensure_non_empty_datasets(datasets)
+
+    n_datasets = len(datasets)
+    ncols = min(3, n_datasets)
+    nrows = (n_datasets + ncols - 1) // ncols
+
+    if figsize is None:
+        figsize = (5 * ncols, 4 * nrows + 1)
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize)
+    axes = np.atleast_1d(axes).ravel()
+
+    for idx, (name, df) in enumerate(datasets.items()):
+        ax = axes[idx]
+
+        if group_col not in df.columns or stack_col not in df.columns:
+            ax.set_title(f"{name} (missing {group_col} or {stack_col})")
+            ax.axis("off")
+            continue
+
+        temp = pd.DataFrame(
+            {
+                group_col: df[group_col].astype(str),
+                stack_col: df[stack_col].astype(str),
+            }
+        )
+
+        grouped = temp.groupby([group_col, stack_col], observed=True).size().reset_index(name="count")
+        pivoted = grouped.pivot(index=group_col, columns=stack_col, values="count").fillna(0)
+
+        if group_order_by_dataset and name in group_order_by_dataset:
+            ordered_groups = [str(value) for value in group_order_by_dataset[name]]
+            pivoted = pivoted.reindex(ordered_groups, fill_value=0)
+
+        if stack_order is not None:
+            ordered_stack = [str(value) for value in stack_order]
+            pivoted = pivoted.reindex(columns=ordered_stack, fill_value=0)
+        else:
+            pivoted = pivoted.sort_index(axis=1)
+
+        colors = None
+        if stack_palette:
+            colors = [stack_palette.get(str(column), "#7f7f7f") for column in pivoted.columns]
+
+        pivoted.plot(kind="bar", stacked=True, ax=ax, color=colors, legend=False)
+
+        if annotate_totals:
+            totals = pivoted.sum(axis=1)
+            for x_pos, total in enumerate(totals):
+                ax.annotate(
+                    f"{int(total)}",
+                    (x_pos, total),
+                    ha="center",
+                    va="bottom",
+                    fontsize=9,
+                    xytext=(0, 3),
+                    textcoords="offset points",
+                )
+            ymax = totals.max() if len(totals) else 0
+            ax.set_ylim(0, float(ymax) * 1.18 if ymax else 1.0)
+
+        ax.set_title(f"{name} {group_col} x {stack_col}")
+        ax.set_xlabel(group_col)
+        ax.set_ylabel("count")
+
+        if idx == 0 and len(pivoted.columns) > 0:
+            ax.legend(title=stack_col, loc="best")
+
+    for idx in range(n_datasets, len(axes)):
+        axes[idx].set_visible(False)
+
+    layout_top = 0.95
+    if title:
+        fig.suptitle(title, fontsize=16, fontweight="bold", y=1.01)
+        layout_top = 0.88
+    if subtitle:
+        fig.text(0.5, 0.925, subtitle, ha="center", fontsize=11, style="italic", color="#555555")
+        layout_top = 0.80 if title else 0.88
+
+    plt.tight_layout(rect=[0, 0.03, 1, layout_top])
 
     if save_path:
         save_path.parent.mkdir(parents=True, exist_ok=True)
