@@ -14,9 +14,15 @@ from .distributions import (
     plot_numeric_distribution_comparison,
     plot_target_distribution_by_group,
     plot_stacked_group_distribution_grid,
+    plot_mixed_feature_batches,
+    plot_bmi_and_bp_relationship,
 )
 
 from .comparisons import (
+    plot_correlation_heatmap_grid,
+    plot_pca_kmeans_scatter_grid,
+    plot_two_dataset_feature_distributions,
+    summarize_ks_test_between_datasets,
     plot_feature_drift_matrix,
     plot_dataset_similarity_radar,
     plot_group_representation_bars,
@@ -39,6 +45,12 @@ __all__ = [
     "plot_numeric_distribution_comparison",
     "plot_target_distribution_by_group",
     "plot_stacked_group_distribution_grid",
+    "plot_mixed_feature_batches",
+    "plot_bmi_and_bp_relationship",
+    "plot_correlation_heatmap_grid",
+    "plot_pca_kmeans_scatter_grid",
+    "plot_two_dataset_feature_distributions",
+    "summarize_ks_test_between_datasets",
     "plot_feature_drift_matrix",
     "plot_dataset_similarity_radar",
     "plot_group_representation_bars",

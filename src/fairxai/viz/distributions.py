@@ -549,3 +549,85 @@ def _generate_distribution_subtitle(
             f"Notable distribution differences detected. "
             + ", ".join(dominance_statements) + "."
         )
+
+
+def plot_mixed_feature_batches(
+    df: pd.DataFrame,
+    features: list[str],
+    dataset_name: str,
+    color: str,
+    units: dict[str, str] | None = None,
+    batch_size: int = 4,
+    categorical_unique_threshold: int = 5,
+    show: bool = False,
+) -> list[tuple[plt.Figure, np.ndarray]]:
+    figures: list[tuple[plt.Figure, np.ndarray]] = []
+    if not features:
+        return figures
+
+    units = units or {}
+    batches = [features[index:index + batch_size] for index in range(0, len(features), batch_size)]
+
+    for batch in batches:
+        fig, axes = plt.subplots(1, len(batch), figsize=(4 * len(batch), 3))
+        axes = np.atleast_1d(axes).ravel()
+
+        for idx, feature in enumerate(batch):
+            ax = axes[idx]
+            series = df[feature]
+
+            if series.nunique(dropna=False) <= categorical_unique_threshold:
+                counts = series.value_counts(dropna=False).sort_index()
+                sns.barplot(x=counts.index.astype(str), y=counts.values, ax=ax, color=color)
+                ax.set_ylabel("count")
+                ymax = counts.max() if len(counts) else 0
+                ax.set_ylim(0, float(ymax) * 1.15 if ymax else 1.0)
+                for container in ax.containers:
+                    ax.bar_label(container, labels=[str(int(value)) for value in container.datavalues], fontsize=9)
+            else:
+                sns.histplot(series, bins=20, ax=ax, color=color)
+                unit = units.get(feature)
+                if unit:
+                    ax.set_xlabel(f"{feature} ({unit})")
+
+            ax.set_title(f"{dataset_name} {feature}")
+
+        plt.tight_layout()
+        if show:
+            plt.show()
+        figures.append((fig, axes))
+
+    return figures
+
+
+def plot_bmi_and_bp_relationship(
+    df: pd.DataFrame,
+    color: str,
+    height_col: str = "height",
+    weight_col: str = "weight",
+    systolic_col: str = "ap_hi",
+    diastolic_col: str = "ap_lo",
+    show: bool = False,
+) -> tuple[plt.Figure, np.ndarray] | None:
+    if not {height_col, weight_col}.issubset(df.columns):
+        return None
+
+    bmi = df[weight_col] / (df[height_col] / 100) ** 2
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+
+    sns.histplot(bmi, bins=30, ax=axes[0], color=color)
+    axes[0].set_title("cardio70k BMI distribution")
+    axes[0].set_xlabel("BMI (kg/m^2)")
+
+    if {systolic_col, diastolic_col}.issubset(df.columns):
+        sns.scatterplot(x=df[systolic_col], y=df[diastolic_col], ax=axes[1], s=8, color=color)
+        axes[1].set_title("cardio70k systolic vs diastolic BP")
+        axes[1].set_xlabel("ap_hi (mm Hg)")
+        axes[1].set_ylabel("ap_lo (mm Hg)")
+    else:
+        axes[1].axis("off")
+
+    plt.tight_layout()
+    if show:
+        plt.show()
+    return fig, axes
