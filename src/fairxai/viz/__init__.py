@@ -40,6 +40,37 @@ from .fairness import (
     plot_bias_amplification_waterfall,
 )
 
+from .eda_utils import (
+    load_external_datasets,
+    load_raw_datasets,
+    load_processed_scaled_datasets,
+    summarize_stage,
+    canonical_features_for_columns,
+)
+
+from fairxai.notebook_utils import (
+    PALETTE_DATASET,
+    PALETTE_SEX,
+    PALETTE_TARGET,
+    UNITS,
+    set_schema_cfg,
+    detect_csv_sep,
+    dataset_age_unit,
+    age_group_order,
+    apply_age_group_order,
+    age_to_years,
+    resolve_sex_series,
+    add_bar_labels,
+    add_grouped_bar_labels,
+    add_point_labels,
+)
+
+from .constants import (
+    CARDIAC_CATEGORY_VALUE_LABEL_MAPPING,
+    CARDIAC_CATEGORY_DISPLAY_ORDER,
+    normalize_cardiac_category_series,
+)
+
 __all__ = [
     "plot_categorical_distribution_grid",
     "plot_numeric_distribution_comparison",
@@ -59,5 +90,27 @@ __all__ = [
     "plot_scaling_effects",
     "plot_fairness_metric_heatmap",
     "plot_group_performance_gaps",
-    "plot_bias_amplification_waterfall"
+    "plot_bias_amplification_waterfall",
+    "PALETTE_DATASET",
+    "PALETTE_SEX",
+    "PALETTE_TARGET",
+    "UNITS",
+    "set_schema_cfg",
+    "detect_csv_sep",
+    "dataset_age_unit",
+    "age_group_order",
+    "apply_age_group_order",
+    "age_to_years",
+    "resolve_sex_series",
+    "add_bar_labels",
+    "add_grouped_bar_labels",
+    "add_point_labels",
+    "CARDIAC_CATEGORY_VALUE_LABEL_MAPPING",
+    "CARDIAC_CATEGORY_DISPLAY_ORDER",
+    "normalize_cardiac_category_series",
+    "load_external_datasets",
+    "load_raw_datasets",
+    "load_processed_scaled_datasets",
+    "summarize_stage",
+    "canonical_features_for_columns",
 ]

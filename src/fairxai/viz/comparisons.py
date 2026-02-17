@@ -6,6 +6,7 @@ This module is intentionally scaffolded for incremental implementation.
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -25,6 +26,7 @@ def plot_correlation_heatmap_grid(
 	cmap: str = "coolwarm",
 	annot: bool = True,
 	annot_size: int = 8,
+	save_path: Path | None = None,
 	show: bool = False,
 ) -> tuple[plt.Figure, np.ndarray]:
 	if not corr_targets:
@@ -78,6 +80,9 @@ def plot_correlation_heatmap_grid(
 		axes[idx].set_title(f"{name} correlations (n={corr.shape[0]})")
 
 	plt.tight_layout()
+	if save_path:
+		save_path.parent.mkdir(parents=True, exist_ok=True)
+		fig.savefig(save_path, dpi=300, bbox_inches="tight")
 	if show:
 		plt.show()
 	return fig, axes
@@ -90,6 +95,7 @@ def plot_pca_kmeans_scatter_grid(
 	sample_size: int = 1500,
 	random_state: int = 42,
 	figsize: tuple[float, float] = (15, 4),
+	save_path: Path | None = None,
 	show: bool = False,
 ) -> tuple[plt.Figure, np.ndarray]:
 	if not datasets:
@@ -120,6 +126,9 @@ def plot_pca_kmeans_scatter_grid(
 		axes[idx].set_ylabel("PC2")
 
 	plt.tight_layout()
+	if save_path:
+		save_path.parent.mkdir(parents=True, exist_ok=True)
+		fig.savefig(save_path, dpi=300, bbox_inches="tight")
 	if show:
 		plt.show()
 	return fig, axes
@@ -136,6 +145,7 @@ def plot_two_dataset_feature_distributions(
 	categorical_feature_names: set[str] | None = None,
 	categorical_series_normalizer: Callable[[str, pd.Series], pd.Series] | None = None,
 	categorical_order_map: dict[str, list[str]] | None = None,
+	save_path_prefix: Path | None = None,
 	show: bool = False,
 ) -> dict[str, list[str]]:
 	units = units or {}
@@ -177,6 +187,10 @@ def plot_two_dataset_feature_distributions(
 			axes[idx].legend(loc="best")
 
 		plt.tight_layout()
+		if save_path_prefix:
+			numeric_path = save_path_prefix.parent / f"{save_path_prefix.name}_numeric.png"
+			numeric_path.parent.mkdir(parents=True, exist_ok=True)
+			fig.savefig(numeric_path, dpi=300, bbox_inches="tight")
 		if show:
 			plt.show()
 
@@ -219,6 +233,10 @@ def plot_two_dataset_feature_distributions(
 			axes[idx].set_ylim(0, 1.08)
 
 		plt.tight_layout()
+		if save_path_prefix:
+			categorical_path = save_path_prefix.parent / f"{save_path_prefix.name}_categorical.png"
+			categorical_path.parent.mkdir(parents=True, exist_ok=True)
+			fig.savefig(categorical_path, dpi=300, bbox_inches="tight")
 		if show:
 			plt.show()
 
