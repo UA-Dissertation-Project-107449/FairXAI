@@ -145,7 +145,7 @@ def plot_two_dataset_feature_distributions(
 	categorical_feature_names: set[str] | None = None,
 	categorical_series_normalizer: Callable[[str, pd.Series], pd.Series] | None = None,
 	categorical_order_map: dict[str, list[str]] | None = None,
-	save_path_prefix: Path | None = None,
+	save_path: Path | None = None,
 	show: bool = False,
 ) -> dict[str, list[str]]:
 	units = units or {}
@@ -187,8 +187,10 @@ def plot_two_dataset_feature_distributions(
 			axes[idx].legend(loc="best")
 
 		plt.tight_layout()
-		if save_path_prefix:
-			numeric_path = save_path_prefix.parent / f"{save_path_prefix.name}_numeric.png"
+		if save_path:
+			base = save_path.stem
+			ext = save_path.suffix or ".png"
+			numeric_path = save_path.parent / f"{base}_numeric{ext}"
 			numeric_path.parent.mkdir(parents=True, exist_ok=True)
 			fig.savefig(numeric_path, dpi=300, bbox_inches="tight")
 		if show:
@@ -233,8 +235,10 @@ def plot_two_dataset_feature_distributions(
 			axes[idx].set_ylim(0, 1.08)
 
 		plt.tight_layout()
-		if save_path_prefix:
-			categorical_path = save_path_prefix.parent / f"{save_path_prefix.name}_categorical.png"
+		if save_path:
+			base = save_path.stem
+			ext = save_path.suffix or ".png"
+			categorical_path = save_path.parent / f"{base}_categorical{ext}"
 			categorical_path.parent.mkdir(parents=True, exist_ok=True)
 			fig.savefig(categorical_path, dpi=300, bbox_inches="tight")
 		if show:

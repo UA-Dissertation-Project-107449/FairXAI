@@ -1,3 +1,5 @@
+"""Notebook data loading and lightweight tabular summary helpers."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -47,9 +49,7 @@ def summarize_stage(dfs: dict[str, pd.DataFrame], stage: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def canonical_features_for_columns(
-    columns: list[str], dataset_name: str, feature_map: dict
-) -> set[str]:
+def canonical_features_for_columns(columns: list[str], dataset_name: str, feature_map: dict) -> set[str]:
     canonical: set[str] = set()
 
     def add_from_section(section: dict) -> None:

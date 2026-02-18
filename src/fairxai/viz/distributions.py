@@ -559,7 +559,7 @@ def plot_mixed_feature_batches(
     units: dict[str, str] | None = None,
     batch_size: int = 4,
     categorical_unique_threshold: int = 5,
-    save_path_prefix: Path | None = None,
+    save_path: Path | None = None,
     show: bool = False,
 ) -> list[tuple[plt.Figure, np.ndarray]]:
     figures: list[tuple[plt.Figure, np.ndarray]] = []
@@ -594,10 +594,12 @@ def plot_mixed_feature_batches(
             ax.set_title(f"{dataset_name} {feature}")
 
         plt.tight_layout()
-        if save_path_prefix:
-            save_path = save_path_prefix.parent / f"{save_path_prefix.name}_batch_{len(figures)+1}.png"
-            save_path.parent.mkdir(parents=True, exist_ok=True)
-            fig.savefig(save_path, dpi=300, bbox_inches="tight")
+        if save_path:
+            base = save_path.stem
+            ext = save_path.suffix or ".png"
+            out_path = save_path.parent / f"{base}_batch_{len(figures)+1}{ext}"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(out_path, dpi=300, bbox_inches="tight")
         if show:
             plt.show()
         figures.append((fig, axes))

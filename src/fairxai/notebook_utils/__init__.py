@@ -6,35 +6,15 @@ from pathlib import Path
 from typing import Iterable
 import numpy as np
 import pandas as pd
-
-PALETTE_DATASET = {
-    "cleveland": "#0072B2",
-    "kaggle_heart": "#009E73",
-    "cardio70k": "#D55E00",
-}
-
-PALETTE_SEX = {
-    "Female": "#CC79A7",
-    "Male": "#56B4E9",
-    "Other": "#9E9E9E",
-}
-
-PALETTE_TARGET = {
-    0: "#2E8B57",
-    1: "#B22222",
-}
-
-UNITS = {
-    "trestbps": "mm Hg",
-    "chol": "mg/dl",
-    "thalach": "bpm",
-    "oldpeak": "ST depression",
-    "ap_hi": "mm Hg",
-    "ap_lo": "mm Hg",
-    "height": "cm",
-    "weight": "kg",
-    "bmi": "kg/m^2",
-}
+from fairxai.viz.style import PALETTE_DATASET, PALETTE_SEX, PALETTE_TARGET, UNITS
+from .context import resolve_root_dir, load_domain_config, get_relevant_datasets, make_figure_path_builder
+from .data import (
+    load_external_datasets,
+    load_raw_datasets,
+    load_processed_scaled_datasets,
+    summarize_stage,
+    canonical_features_for_columns,
+)
 
 _SCHEMA_CFG = None
 
