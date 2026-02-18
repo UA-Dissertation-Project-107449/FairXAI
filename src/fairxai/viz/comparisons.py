@@ -303,8 +303,111 @@ def summarize_ks_test_between_datasets(
 	return result
 
 
+def plot_drift_heatmap(
+	reference_dataset: pd.DataFrame,
+	comparison_datasets: dict[str, pd.DataFrame],
+	features: list[str],
+	reference_name: str = "Reference",
+	test: str = "ks",
+	threshold: float = 0.05,
+	figsize: tuple[float, float] | None = None,
+	cmap: str = "RdYlGn_r",
+	save_path: Path | None = None,
+	show: bool = False,
+) -> tuple[plt.Figure, plt.Axes]:
+	if not comparison_datasets:
+		raise ValueError("Must provide at least one comparison dataset")
+
+	if test != "ks":
+		raise ValueError("Only test='ks' is currently supported.")
+
+	drift_matrix: list[dict[str, object]] = []
+	dataset_names = list(comparison_datasets.keys())
+
+	for feature in features:
+		if feature not in reference_dataset.columns:
+			continue
+
+		ref_vals = pd.to_numeric(reference_dataset[feature], errors="coerce").dropna()
+		if ref_vals.nunique() < 2:
+			continue
+
+		row: dict[str, object] = {"feature": feature}
+		for name in dataset_names:
+			comp_df = comparison_datasets[name]
+			if feature not in comp_df.columns:
+				row[name] = np.nan
+				continue
+
+			comp_vals = pd.to_numeric(comp_df[feature], errors="coerce").dropna()
+			if comp_vals.nunique() < 2:
+				row[name] = np.nan
+				continue
+
+			stat, pval = ks_2samp(ref_vals, comp_vals)
+			_ = stat
+			row[name] = float(pval)
+
+		drift_matrix.append(row)
+
+	if not drift_matrix:
+		raise ValueError("No valid features for drift analysis")
+
+	drift_df = pd.DataFrame(drift_matrix).set_index("feature")
+
+	if figsize is None:
+		figsize = (max(6, len(dataset_names) * 2), max(4, drift_df.shape[0] * 0.45))
+
+	fig, ax = plt.subplots(figsize=figsize)
+
+	display_matrix = -np.log10(drift_df.to_numpy(dtype=float).clip(min=1e-10))
+
+	sns.heatmap(
+		display_matrix,
+		xticklabels=drift_df.columns,
+		yticklabels=drift_df.index,
+		cmap=cmap,
+		center=-np.log10(threshold),
+		cbar_kws={"label": "-log10(p-value)"},
+		annot=True,
+		fmt=".2f",
+		ax=ax,
+	)
+
+	threshold_val = -np.log10(threshold)
+	ax.text(
+		0.02,
+		0.98,
+		f"Threshold: p={threshold}\n(-log10 = {threshold_val:.2f})",
+		transform=ax.transAxes,
+		bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+		fontsize=9,
+		verticalalignment="top",
+	)
+
+	ax.set_title(
+		f"Feature Drift: {reference_name} vs Comparison Datasets\n"
+		f"Red = Significant Drift (p < {threshold})",
+		fontsize=12,
+		fontweight="bold",
+	)
+	ax.set_xlabel("Dataset")
+	ax.set_ylabel("Feature")
+
+	plt.tight_layout()
+
+	if save_path:
+		save_path.parent.mkdir(parents=True, exist_ok=True)
+		fig.savefig(save_path, dpi=300, bbox_inches="tight")
+
+	if show:
+		plt.show()
+
+	return fig, ax
+
+
 def plot_feature_drift_matrix(*args, **kwargs):
-	raise NotImplementedError("plot_feature_drift_matrix is planned but not implemented yet.")
+	return plot_drift_heatmap(*args, **kwargs)
 
 
 def plot_dataset_similarity_radar(*args, **kwargs):

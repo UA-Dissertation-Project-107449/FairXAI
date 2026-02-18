@@ -482,6 +482,223 @@ def plot_stacked_group_distribution_grid(
     return fig, axes
 
 
+def plot_missing_data_patterns(
+    datasets: dict[str, pd.DataFrame],
+    title: str = "Missing Data Patterns",
+    figsize: tuple[float, float] | None = None,
+    save_path: Path | None = None,
+    show: bool = False,
+) -> tuple[plt.Figure, np.ndarray]:
+    _ensure_non_empty_datasets(datasets)
+
+    n_datasets = len(datasets)
+    if figsize is None:
+        figsize = (12, 4 * n_datasets)
+
+    fig, axes = plt.subplots(n_datasets, 2, figsize=figsize)
+    if n_datasets == 1:
+        axes = np.array([axes])
+
+    for idx, (name, df) in enumerate(datasets.items()):
+        missing_pct = (df.isna().sum() / len(df) * 100).sort_values(ascending=False)
+        missing_pct = missing_pct[missing_pct > 0]
+
+        if missing_pct.empty:
+            axes[idx, 0].text(
+                0.5,
+                0.5,
+                f"{name}: No missing values",
+                ha="center",
+                va="center",
+                fontsize=13,
+            )
+            axes[idx, 0].axis("off")
+            axes[idx, 1].axis("off")
+            continue
+
+        axes[idx, 0].barh(missing_pct.index.astype(str), missing_pct.values, color="coral")
+        axes[idx, 0].set_xlabel("Missing (%)")
+        axes[idx, 0].set_title(f"{name}: Missing Data by Feature")
+        axes[idx, 0].grid(axis="x", alpha=0.3)
+
+        for row_i, (_, pct) in enumerate(missing_pct.items()):
+            axes[idx, 0].text(
+                pct + 0.5,
+                row_i,
+                f"{pct:.1f}%",
+                va="center",
+                fontsize=9,
+            )
+
+        missing_mask = df[missing_pct.index].isna().astype(int)
+        if len(missing_pct) > 1:
+            cooccur = missing_mask.T @ missing_mask
+            cooccur_pct = cooccur / len(df) * 100
+            sns.heatmap(
+                cooccur_pct,
+                annot=True,
+                fmt=".1f",
+                cmap="Reds",
+                cbar_kws={"label": "Co-occurrence (%)"},
+                ax=axes[idx, 1],
+            )
+            axes[idx, 1].set_title(f"{name}: Missing Co-occurrence")
+        else:
+            axes[idx, 1].text(
+                0.5,
+                0.5,
+                "Only 1 feature\nwith missing data",
+                ha="center",
+                va="center",
+                fontsize=12,
+            )
+            axes[idx, 1].axis("off")
+
+    fig.suptitle(title, fontsize=14, fontweight="bold", y=0.995)
+    plt.tight_layout()
+
+    if save_path:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+
+    if show:
+        plt.show()
+
+    return fig, axes
+
+
+def plot_outlier_analysis(
+    datasets: dict[str, pd.DataFrame],
+    features: list[str],
+    bounds: dict[str, tuple[float, float]] | None = None,
+    method: str = "iqr",
+    figsize: tuple[float, float] | None = None,
+    save_path: Path | None = None,
+    show: bool = False,
+) -> tuple[plt.Figure, np.ndarray]:
+    _ensure_non_empty_datasets(datasets)
+    if method not in {"iqr", "zscore", "clinical"}:
+        raise ValueError("`method` must be one of: 'iqr', 'zscore', 'clinical'.")
+
+    default_bounds = {
+        "age": (18, 100),
+        "age_raw": (18, 100),
+        "trestbps": (60, 250),
+        "resting_bp": (60, 250),
+        "chol": (100, 500),
+        "cholesterol": (100, 500),
+        "thalach": (60, 220),
+        "max_heart_rate": (60, 220),
+        "ap_hi": (60, 250),
+        "ap_lo": (40, 150),
+        "height": (130, 220),
+        "weight": (40, 200),
+    }
+
+    if bounds:
+        default_bounds.update(bounds)
+    bounds = default_bounds
+
+    n_features = len(features)
+    n_datasets = len(datasets)
+
+    if n_features == 0:
+        raise ValueError("`features` must contain at least one feature.")
+
+    if figsize is None:
+        figsize = (max(10, n_datasets * 3), n_features * 2.5)
+
+    fig, axes = plt.subplots(n_features, 1, figsize=figsize)
+    axes = np.atleast_1d(axes).ravel()
+
+    dataset_names = list(datasets.keys())
+
+    for feat_idx, feature in enumerate(features):
+        ax = axes[feat_idx]
+
+        plot_data = []
+        for name in dataset_names:
+            df = datasets[name]
+            if feature not in df.columns:
+                continue
+            vals = pd.to_numeric(df[feature], errors="coerce").dropna()
+            if vals.empty:
+                continue
+            plot_data.extend([(name, val) for val in vals])
+
+        if not plot_data:
+            ax.text(0.5, 0.5, f"{feature}: No data", ha="center", va="center")
+            ax.axis("off")
+            continue
+
+        plot_df = pd.DataFrame(plot_data, columns=["dataset", feature])
+        sns.boxplot(data=plot_df, x="dataset", y=feature, ax=ax)
+
+        if feature in bounds:
+            low_bound, high_bound = bounds[feature]
+            ax.axhline(low_bound, color="red", linestyle="--", alpha=0.5, linewidth=1)
+            ax.axhline(high_bound, color="red", linestyle="--", alpha=0.5, linewidth=1)
+            ax.text(
+                0.98,
+                0.98,
+                f"Clinical bounds:\n[{low_bound}, {high_bound}]",
+                transform=ax.transAxes,
+                bbox=dict(boxstyle="round", facecolor="lightyellow", alpha=0.7),
+                fontsize=8,
+                va="top",
+                ha="right",
+            )
+
+        outlier_counts = []
+        for name in dataset_names:
+            df = datasets[name]
+            if feature not in df.columns:
+                continue
+            vals = pd.to_numeric(df[feature], errors="coerce").dropna()
+            if vals.empty:
+                continue
+
+            if method == "clinical" and feature in bounds:
+                low, high = bounds[feature]
+                n_outliers = int(((vals < low) | (vals > high)).sum())
+            elif method == "iqr":
+                q1, q3 = vals.quantile([0.25, 0.75])
+                iqr = q3 - q1
+                low, high = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+                n_outliers = int(((vals < low) | (vals > high)).sum())
+            elif method == "zscore":
+                std = vals.std()
+                if std == 0 or np.isnan(std):
+                    n_outliers = 0
+                else:
+                    z = np.abs((vals - vals.mean()) / std)
+                    n_outliers = int((z > 3).sum())
+            else:
+                n_outliers = 0
+
+            pct = (n_outliers / len(vals) * 100) if len(vals) > 0 else 0.0
+            outlier_counts.append(f"{name}: {n_outliers} ({pct:.1f}%)")
+
+        ax.set_title(
+            f"{feature} distribution - Outliers ({method}): {', '.join(outlier_counts)}",
+            fontsize=10,
+        )
+        ax.set_xlabel("")
+        ax.grid(axis="y", alpha=0.3)
+
+    fig.suptitle("Outlier Analysis Across Datasets", fontsize=14, fontweight="bold")
+    plt.tight_layout()
+
+    if save_path:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+
+    if show:
+        plt.show()
+
+    return fig, axes
+
+
 def _generate_distribution_subtitle(
     dist_stats: dict[str, pd.Series],
     column: str
