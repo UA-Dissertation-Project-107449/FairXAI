@@ -26,9 +26,6 @@ from .comparisons import (
     plot_two_dataset_feature_distributions,
     summarize_ks_test_between_datasets,
     plot_drift_heatmap,
-    plot_feature_drift_matrix,
-    plot_dataset_similarity_radar,
-    plot_group_representation_bars,
 )
 
 from .transformations import (
@@ -70,9 +67,6 @@ __all__ = [
     "plot_two_dataset_feature_distributions",
     "summarize_ks_test_between_datasets",
     "plot_drift_heatmap",
-    "plot_feature_drift_matrix",
-    "plot_dataset_similarity_radar",
-    "plot_group_representation_bars",
     "plot_transformation_impact",
     "plot_before_after_distributions",
     "plot_scaling_effects",

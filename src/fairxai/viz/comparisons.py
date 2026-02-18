@@ -404,16 +404,3 @@ def plot_drift_heatmap(
 		plt.show()
 
 	return fig, ax
-
-
-def plot_feature_drift_matrix(*args, **kwargs):
-	return plot_drift_heatmap(*args, **kwargs)
-
-
-def plot_dataset_similarity_radar(*args, **kwargs):
-	raise NotImplementedError("plot_dataset_similarity_radar is planned but not implemented yet.")
-
-
-def plot_group_representation_bars(*args, **kwargs):
-	raise NotImplementedError("plot_group_representation_bars is planned but not implemented yet.")
-
