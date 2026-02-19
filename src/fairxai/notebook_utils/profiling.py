@@ -7,8 +7,39 @@ import json
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+from ..profiling import compute_complexity_metrics
 
 from . import PALETTE_DATASET, PALETTE_SEX
+
+
+EXPECTED_COMPLEXITY_METRICS = [
+    "F2",
+    "F3",
+    "F4",
+    "N2",
+    "N3",
+    "N4",
+    "Raug",
+    "L1",
+    "L2",
+    "L3",
+    "T1",
+    "BayesImbalance",
+]
+
+
+def _finalize_figure(
+    fig: plt.Figure,
+    save_path: Path | None = None,
+    show: bool = True,
+) -> None:
+    if save_path:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
 
 
 def find_profile_files(results_dir: Path, pattern: str, datasets: list[str]) -> dict[str, Path]:
@@ -75,7 +106,13 @@ def sensitive_distribution_rows(
     return pd.DataFrame(rows)
 
 
-def plot_sensitive_proportions(df: pd.DataFrame, attribute: str, datasets: list[str]) -> None:
+def plot_sensitive_proportions(
+    df: pd.DataFrame,
+    attribute: str,
+    datasets: list[str],
+    save_path: Path | None = None,
+    show: bool = True,
+) -> tuple[plt.Figure, plt.Axes] | None:
     subset = df[df["attribute"] == attribute].copy()
     if subset.empty:
         print(f"No data for {attribute}")
@@ -88,6 +125,8 @@ def plot_sensitive_proportions(df: pd.DataFrame, attribute: str, datasets: list[
     ax.set_ylim(0, 1.0)
     ax.legend(title=attribute, bbox_to_anchor=(1.02, 1), loc="upper left")
     plt.tight_layout()
+    _finalize_figure(fig=ax.figure, save_path=save_path, show=show)
+    return ax.figure, ax
 
 
 def representation_balance_rows(
@@ -111,7 +150,11 @@ def representation_balance_rows(
     return pd.DataFrame(rows)
 
 
-def plot_balance_cv(df: pd.DataFrame) -> None:
+def plot_balance_cv(
+    df: pd.DataFrame,
+    save_path: Path | None = None,
+    show: bool = True,
+) -> tuple[plt.Figure, plt.Axes] | None:
     plot_df = df.dropna(subset=["cv"]).copy()
     if plot_df.empty:
         print("No representation balance data available.")
@@ -125,9 +168,16 @@ def plot_balance_cv(df: pd.DataFrame) -> None:
     ax.set_ylim(0, max(0.8, plot_df["cv"].max() * 1.2))
     ax.legend(title="attribute", loc="upper right")
     plt.tight_layout()
+    _finalize_figure(fig=fig, save_path=save_path, show=show)
+    return fig, ax
 
 
-def plot_size_ratio_heatmap(df: pd.DataFrame, datasets: list[str]) -> None:
+def plot_size_ratio_heatmap(
+    df: pd.DataFrame,
+    datasets: list[str],
+    save_path: Path | None = None,
+    show: bool = True,
+) -> tuple[plt.Figure, plt.Axes] | None:
     ratio_df = df.dropna(subset=["size_ratio"]).copy()
     if ratio_df.empty:
         print("No size ratio data available.")
@@ -137,6 +187,8 @@ def plot_size_ratio_heatmap(df: pd.DataFrame, datasets: list[str]) -> None:
     sns.heatmap(heat, annot=True, fmt=".2f", cmap="Reds", ax=ax)
     ax.set_title("Group size ratio (max/min)")
     plt.tight_layout()
+    _finalize_figure(fig=fig, save_path=save_path, show=show)
+    return fig, ax
 
 
 def group_statistics_rows(
@@ -160,7 +212,12 @@ def group_statistics_rows(
     return pd.DataFrame(rows)
 
 
-def plot_prevalence_heatmap_by_age(df: pd.DataFrame, age_order: list[str]) -> None:
+def plot_prevalence_heatmap_by_age(
+    df: pd.DataFrame,
+    age_order: list[str],
+    save_path: Path | None = None,
+    show: bool = True,
+) -> tuple[plt.Figure, plt.Axes] | None:
     age_df = df[df["attribute"] == "age_group"].copy()
     if age_df.empty:
         print("No age-group prevalence data available.")
@@ -173,9 +230,15 @@ def plot_prevalence_heatmap_by_age(df: pd.DataFrame, age_order: list[str]) -> No
     ax.set_xlabel("dataset")
     ax.set_ylabel("age_group")
     plt.tight_layout()
+    _finalize_figure(fig=fig, save_path=save_path, show=show)
+    return fig, ax
 
 
-def plot_prevalence_by_sex(df: pd.DataFrame) -> None:
+def plot_prevalence_by_sex(
+    df: pd.DataFrame,
+    save_path: Path | None = None,
+    show: bool = True,
+) -> tuple[plt.Figure, plt.Axes] | None:
     sex_df = df[df["attribute"] == "sex"].copy()
     if sex_df.empty:
         print("No sex prevalence data available.")
@@ -187,6 +250,8 @@ def plot_prevalence_by_sex(df: pd.DataFrame) -> None:
     ax.set_ylim(0, 1.0)
     ax.legend(title="sex", loc="upper right")
     plt.tight_layout()
+    _finalize_figure(fig=fig, save_path=save_path, show=show)
+    return fig, ax
 
 
 def spd_rows(
@@ -208,7 +273,11 @@ def spd_rows(
     return pd.DataFrame(rows)
 
 
-def plot_spd_bars(df: pd.DataFrame) -> None:
+def plot_spd_bars(
+    df: pd.DataFrame,
+    save_path: Path | None = None,
+    show: bool = True,
+) -> tuple[plt.Figure, list[plt.Axes]] | None:
     plot_spd = df.dropna(subset=["max_spd"]).copy()
     if plot_spd.empty:
         print("No SPD data available.")
@@ -226,6 +295,8 @@ def plot_spd_bars(df: pd.DataFrame) -> None:
     for ax in axes:
         ax.legend(title="attribute", loc="upper right")
     plt.tight_layout()
+    _finalize_figure(fig=fig, save_path=save_path, show=show)
+    return fig, list(axes)
 
 
 def positive_rate_rows(
@@ -237,11 +308,24 @@ def positive_rate_rows(
     for name in datasets:
         rates = profiles.get(name, {}).get("label_imbalance_by_group", {}).get(attribute, {}).get("positive_rates", {})
         for group, value in rates.items():
-            rows.append({"dataset": name, "age_group": group, "prevalence": value})
+            rows.append(
+                {
+                    "dataset": name,
+                    "attribute": attribute,
+                    "group": group,
+                    "age_group": group if attribute == "age_group" else None,
+                    "prevalence": value,
+                }
+            )
     return pd.DataFrame(rows)
 
 
-def plot_positive_rates_by_age(df: pd.DataFrame, age_order: list[str]) -> None:
+def plot_positive_rates_by_age(
+    df: pd.DataFrame,
+    age_order: list[str],
+    save_path: Path | None = None,
+    show: bool = True,
+) -> tuple[plt.Figure, plt.Axes] | None:
     if df.empty:
         print("No positive-rate series available.")
         return
@@ -253,3 +337,94 @@ def plot_positive_rates_by_age(df: pd.DataFrame, age_order: list[str]) -> None:
     ax.set_ylim(0, 1.0)
     ax.legend(title="dataset")
     plt.tight_layout()
+    _finalize_figure(fig=fig, save_path=save_path, show=show)
+    return fig, ax
+
+
+def complexity_rows(
+    profiles: dict[str, dict],
+    datasets: list[str],
+    metrics: list[str] | None = None,
+) -> pd.DataFrame:
+    metric_order = metrics or EXPECTED_COMPLEXITY_METRICS
+    rows = []
+    for name in datasets:
+        complexity = profiles.get(name, {}).get("complexity_metrics", {})
+        row = {"dataset": name}
+        for metric in metric_order:
+            row[metric] = complexity.get(metric)
+        available = [key for key in complexity.keys() if key != "max_samples"]
+        row["available_metrics"] = len(available)
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def complexity_missing_rows(
+    profiles: dict[str, dict],
+    datasets: list[str],
+    expected_metrics: list[str] | None = None,
+) -> pd.DataFrame:
+    expected = expected_metrics or EXPECTED_COMPLEXITY_METRICS
+    rows = []
+    for name in datasets:
+        complexity = profiles.get(name, {}).get("complexity_metrics", {})
+        available = sorted([key for key in complexity.keys() if key != "max_samples"])
+        missing = sorted([metric for metric in expected if metric not in available])
+        extra = sorted([metric for metric in available if metric not in expected])
+        rows.append(
+            {
+                "dataset": name,
+                "available_count": len(available),
+                "missing_count": len(missing),
+                "available_metrics": ", ".join(available),
+                "missing_metrics": ", ".join(missing) if missing else "-",
+                "extra_metrics": ", ".join(extra) if extra else "-",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def group_complexity_rows(
+    df: pd.DataFrame,
+    dataset_name: str,
+    target_col: str = "heart_disease",
+    sensitive_cols: list[str] | None = None,
+    metrics: list[str] | None = None,
+    min_samples: int = 50,
+) -> pd.DataFrame:
+    sensitive_cols = sensitive_cols or ["sex", "age_group"]
+    selected_metrics = metrics or ["F2", "F3", "N3", "Raug", "L2", "BayesImbalance"]
+    rows: list[dict[str, object]] = []
+
+    for sensitive in sensitive_cols:
+        if sensitive not in df.columns:
+            continue
+        for group_name, group_df in df.groupby(sensitive, observed=True):
+            subset = group_df.copy()
+            if len(subset) < min_samples:
+                rows.append(
+                    {
+                        "dataset": dataset_name,
+                        "attribute": sensitive,
+                        "group": str(group_name),
+                        "n_samples": len(subset),
+                        "status": f"skipped (n < {min_samples})",
+                    }
+                )
+                continue
+
+            metrics_result = compute_complexity_metrics(subset, target=target_col)
+            row: dict[str, object] = {
+                "dataset": dataset_name,
+                "attribute": sensitive,
+                "group": str(group_name),
+                "n_samples": len(subset),
+                "status": "ok" if metrics_result else "unavailable",
+            }
+            for metric in selected_metrics:
+                row[metric] = metrics_result.get(metric)
+            missing = [metric for metric in selected_metrics if row.get(metric) is None]
+            row["missing_metrics"] = ", ".join(missing) if missing else "-"
+            rows.append(row)
+
+    return pd.DataFrame(rows)
