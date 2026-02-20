@@ -6,8 +6,8 @@ This folder contains exploratory and profiling notebooks for the FairXAI cardiac
 
 Primary artifacts are written under:
 
-- `results/<pipeline>/profiling/` (default)
-- `results/<pipeline>/runs/<run_id>/profiling/` (when `RUN_ID` is set)
+- `results/<pipeline>/profiling/` (standalone, no `--run-id`)
+- `results/<pipeline>/runs/<run_id>/profiling/` (when `--run-id` is passed or `RUN_ID` env is set)
 
 Files:
 
@@ -53,8 +53,13 @@ Each `<dataset>_data_profile.json` contains:
   - `columns_with_missing`: {column: count}
   - `missing_by_group`: {attribute: {column: {group: count}}}
 - `complexity_metrics`:
-  - `F2`, `F3`, `N3`, `Raug`, `L2`, `BayesImbalance`: float | null
+  - Primary metrics: `F2`, `F3`, `F4`, `N2`, `N3`, `N4`, `Raug`, `L1`, `L2`, `L3`, `T1`, `BayesImbalance`: float | null
+  - Alias metrics: `F2Imbalance`, `F3Imbalance`, `F4Imbalance`, `N2Imbalance`, `N3Imbalance`, `N4Imbalance`, `RaugImbalance`, `L1Imbalance`, `L2Imbalance`, `L3Imbalance`, `T1Imbalance`: float | null
   - `max_samples`: int
+- `group_complexity_metrics`:
+  - Per sensitive attribute, per group: `n_samples`, `status`, `complexity_metrics`
+- `intersection_complexity_metrics`:
+  - Per attribute pair (e.g., `age_group__sex`), per subgroup combination: `n_samples`, `status`, `complexity_metrics`
 
 ## Complexity Metrics Artifact
 
@@ -65,3 +70,6 @@ Each `<dataset>_complexity.json` contains the `complexity_metrics` block only, t
 - Sensitive attributes are configured via `configs/pipelines/<pipeline>.yaml` under `fairness.sensitive_attributes`.
 - Profiling relies on standardized raw datasets (`*_standardized.csv`).
 - If profile files are missing, rerun the profiling step or the full pipeline.
+- Profiling notebook loaders prefer `results/<pipeline>/latest_run/profiling/` when available, and fall back to `results/<pipeline>/profiling/`.
+- Notebook helpers prefer `<dataset>_data_profile.json` as source of truth and fall back to `<dataset>_complexity.json` only when primary profile complexity fields are missing.
+- Notebook-exported tables are saved to `notebooks/tables/<pipeline>/` with a `profiling_` prefix (e.g., `profiling_dataset_overview.csv`).
