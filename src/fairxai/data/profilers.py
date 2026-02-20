@@ -1,7 +1,8 @@
 """Data profiling utilities for fairness assessment."""
 
 import pandas as pd
-from typing import Dict, List
+from itertools import combinations
+from typing import Any, Callable, Dict, List
 
 from .schemas import available_sensitive, preferred_sensitive
 from ..profiling import compute_complexity_metrics
@@ -10,7 +11,12 @@ from ..profiling import compute_complexity_metrics
 class DataProfiler:
     """Profile datasets for fairness assessment before modeling."""
     
-    def __init__(self, sensitive_attrs: List[str] = None):
+    def __init__(
+        self,
+        sensitive_attrs: List[str] = None,
+        min_group_samples: int = 50,
+        subgroup_generators: List[Callable[[pd.DataFrame], pd.DataFrame]] | None = None,
+    ):
         """
         Initialize profiler.
         
@@ -18,6 +24,14 @@ class DataProfiler:
             sensitive_attrs: List of sensitive attribute column names
         """
         self.sensitive_attrs = preferred_sensitive(sensitive_attrs)
+        self.min_group_samples = min_group_samples
+        self.subgroup_generators = subgroup_generators or []
+
+    @staticmethod
+    def _to_builtin(value: Any) -> Any:
+        if hasattr(value, "item"):
+            return value.item()
+        return value
 
     @staticmethod
     def _stringify(obj) -> Dict:
@@ -42,6 +56,9 @@ class DataProfiler:
         Returns:
             Dictionary with profiling results
         """
+        available_attrs = available_sensitive(df, self.sensitive_attrs)
+        subgroup_df = self._build_subgroup_frame(df, available_attrs)
+
         profile = {
             'dataset_name': dataset_name,
             'basic_stats': self._basic_statistics(df, target),
@@ -51,7 +68,17 @@ class DataProfiler:
             'representation_balance': self._representation_balance(df),
             'label_imbalance_by_group': self._label_imbalance_by_group(df, target),
             'missing_value_analysis': self._missing_value_analysis(df),
-            'complexity_metrics': compute_complexity_metrics(df, target=target)
+            'complexity_metrics': compute_complexity_metrics(df, target=target),
+            'group_complexity_metrics': self._group_complexity_metrics(
+                subgroup_df,
+                target=target,
+                sensitive_attrs=available_attrs,
+            ),
+            'intersection_complexity_metrics': self._intersection_complexity_metrics(
+                subgroup_df,
+                target=target,
+                sensitive_attrs=available_attrs,
+            ),
         }
         
         return profile
@@ -195,6 +222,95 @@ class DataProfiler:
                 analysis['missing_by_group'][attr] = group_missing
         
         return analysis
+
+    def _build_subgroup_frame(self, df: pd.DataFrame, sensitive_attrs: List[str]) -> pd.DataFrame:
+        subgroup_df = df.copy()
+        for generator in self.subgroup_generators:
+            try:
+                generated = generator(subgroup_df)
+                if isinstance(generated, pd.DataFrame):
+                    subgroup_df = generated
+            except Exception:
+                continue
+
+        if len(sensitive_attrs) >= 2:
+            for left, right in combinations(sensitive_attrs, 2):
+                if left in subgroup_df.columns and right in subgroup_df.columns:
+                    inter_col = f"{left}__{right}"
+                    subgroup_df[inter_col] = (
+                        subgroup_df[left].astype("object").astype(str)
+                        + "|"
+                        + subgroup_df[right].astype("object").astype(str)
+                    )
+        return subgroup_df
+
+    def _group_complexity_metrics(
+        self,
+        df: pd.DataFrame,
+        target: str,
+        sensitive_attrs: List[str],
+    ) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        result: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        for attr in sensitive_attrs:
+            if attr not in df.columns:
+                continue
+            group_result: Dict[str, Dict[str, Any]] = {}
+            for group_value, group_df in df.groupby(attr, observed=True):
+                key = str(group_value)
+                n_samples = len(group_df)
+                if n_samples < self.min_group_samples:
+                    group_result[key] = {
+                        'n_samples': int(n_samples),
+                        'status': f'skipped (n < {self.min_group_samples})',
+                        'complexity_metrics': {},
+                    }
+                    continue
+
+                metrics = compute_complexity_metrics(group_df, target=target)
+                group_result[key] = {
+                    'n_samples': int(n_samples),
+                    'status': 'ok' if metrics else 'unavailable',
+                    'complexity_metrics': metrics,
+                }
+            result[attr] = group_result
+        return result
+
+    def _intersection_complexity_metrics(
+        self,
+        df: pd.DataFrame,
+        target: str,
+        sensitive_attrs: List[str],
+    ) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        intersections: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        if len(sensitive_attrs) < 2:
+            return intersections
+
+        for left, right in combinations(sensitive_attrs, 2):
+            if left not in df.columns or right not in df.columns:
+                continue
+            pair_key = f"{left}__{right}"
+            pair_groups: Dict[str, Dict[str, Any]] = {}
+            grouped = df.groupby([left, right], observed=True)
+            for (left_value, right_value), group_df in grouped:
+                subgroup_key = f"{left}={left_value}|{right}={right_value}"
+                n_samples = len(group_df)
+                if n_samples < self.min_group_samples:
+                    pair_groups[subgroup_key] = {
+                        'n_samples': int(n_samples),
+                        'status': f'skipped (n < {self.min_group_samples})',
+                        'complexity_metrics': {},
+                    }
+                    continue
+                metrics = compute_complexity_metrics(group_df, target=target)
+                pair_groups[subgroup_key] = {
+                    'n_samples': int(n_samples),
+                    'status': 'ok' if metrics else 'unavailable',
+                    'complexity_metrics': metrics,
+                }
+
+            intersections[pair_key] = pair_groups
+
+        return intersections
 
 
 def compare_datasets(profiles: List[Dict]) -> Dict:

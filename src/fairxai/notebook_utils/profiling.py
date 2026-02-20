@@ -7,25 +7,21 @@ import json
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
-from ..profiling import compute_complexity_metrics
+from ..profiling import (
+    compute_complexity_metrics,
+    get_supported_complexity_metrics,
+    is_complexity_metric_key,
+    is_primary_complexity_metric,
+)
 
 from . import PALETTE_DATASET, PALETTE_SEX
 
 
-EXPECTED_COMPLEXITY_METRICS = [
-    "F2",
-    "F3",
-    "F4",
-    "N2",
-    "N3",
-    "N4",
-    "Raug",
-    "L1",
-    "L2",
-    "L3",
-    "T1",
-    "BayesImbalance",
-]
+EXPECTED_COMPLEXITY_METRICS = get_supported_complexity_metrics(include_aliases=False)
+
+
+def _primary_metric_keys(complexity: dict) -> list[str]:
+    return sorted([key for key in complexity.keys() if is_primary_complexity_metric(key)])
 
 
 def _finalize_figure(
@@ -58,7 +54,20 @@ def load_profiles(files: dict[str, Path]) -> dict[str, dict]:
     for name, path in files.items():
         try:
             with open(path, "r") as f:
-                profiles[name] = json.load(f)
+                profile = json.load(f)
+
+            complexity = profile.get("complexity_metrics", {})
+            has_primary_metrics = any(is_primary_complexity_metric(key) for key in complexity.keys())
+            if not has_primary_metrics:
+                legacy_complexity = path.parent / f"{name}_complexity.json"
+                if legacy_complexity.exists():
+                    try:
+                        with open(legacy_complexity, "r") as legacy_file:
+                            profile["complexity_metrics"] = json.load(legacy_file)
+                    except Exception:
+                        pass
+
+            profiles[name] = profile
         except Exception as exc:
             print(f"Failed to load {name}: {exc}")
     return profiles
@@ -353,8 +362,9 @@ def complexity_rows(
         row = {"dataset": name}
         for metric in metric_order:
             row[metric] = complexity.get(metric)
-        available = [key for key in complexity.keys() if key != "max_samples"]
+        available = _primary_metric_keys(complexity)
         row["available_metrics"] = len(available)
+        row["available_primary_metrics"] = ", ".join(available) if available else "-"
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -368,7 +378,13 @@ def complexity_missing_rows(
     rows = []
     for name in datasets:
         complexity = profiles.get(name, {}).get("complexity_metrics", {})
-        available = sorted([key for key in complexity.keys() if key != "max_samples"])
+        available = _primary_metric_keys(complexity)
+        alias_metrics = sorted([key for key in complexity.keys() if is_complexity_metric_key(key) and not is_primary_complexity_metric(key)])
+        metadata_fields = sorted([
+            key
+            for key in complexity.keys()
+            if key not in available and key not in alias_metrics
+        ])
         missing = sorted([metric for metric in expected if metric not in available])
         extra = sorted([metric for metric in available if metric not in expected])
         rows.append(
@@ -379,6 +395,8 @@ def complexity_missing_rows(
                 "available_metrics": ", ".join(available),
                 "missing_metrics": ", ".join(missing) if missing else "-",
                 "extra_metrics": ", ".join(extra) if extra else "-",
+                "alias_metrics": ", ".join(alias_metrics) if alias_metrics else "-",
+                "metadata_fields": ", ".join(metadata_fields) if metadata_fields else "-",
             }
         )
     return pd.DataFrame(rows)
@@ -393,7 +411,7 @@ def group_complexity_rows(
     min_samples: int = 50,
 ) -> pd.DataFrame:
     sensitive_cols = sensitive_cols or ["sex", "age_group"]
-    selected_metrics = metrics or ["F2", "F3", "N3", "Raug", "L2", "BayesImbalance"]
+    selected_metrics = metrics or get_supported_complexity_metrics(include_aliases=False)
     rows: list[dict[str, object]] = []
 
     for sensitive in sensitive_cols:

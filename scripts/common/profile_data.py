@@ -16,6 +16,7 @@ Usage:
 import sys
 import logging
 import argparse
+import os
 from pathlib import Path
 import json
 import pandas as pd
@@ -25,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 
 from fairxai.data.profilers import DataProfiler, compare_datasets
 from fairxai.cli.runner_base import get_project_root, load_pipeline_config, setup_phase_logging
+from fairxai.cli.runner_utils import resolve_run_id, get_run_root
 
 
 def main():
@@ -37,6 +39,12 @@ def main():
         help='Pipeline name (e.g., cardiac, dermatology)'
     )
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose console output')
+    parser.add_argument(
+        '--run-id',
+        type=str,
+        default=os.getenv('RUN_ID'),
+        help='Run identifier (optional, enables run-scoped outputs)',
+    )
     args = parser.parse_args()
 
     pipeline = args.pipeline
@@ -46,7 +54,11 @@ def main():
     pipeline_cfg = load_pipeline_config(project_root, pipeline)
     data_raw = project_root / pipeline_cfg['paths']['raw_dir']
     log_dir = setup_phase_logging(project_root, 'data_profiling.log', verbose=args.verbose)
-    results_profiling = project_root / f'results/{pipeline}/profiling'
+    run_id = resolve_run_id(args.run_id) if args.run_id else None
+    if run_id:
+        results_profiling = get_run_root(project_root / f'results/{pipeline}', run_id) / 'profiling'
+    else:
+        results_profiling = project_root / f'results/{pipeline}/profiling'
     
     # Setup
     logging.info("[PHASE] Data profiling started")
