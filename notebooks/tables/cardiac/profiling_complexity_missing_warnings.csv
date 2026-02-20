@@ -1,0 +1,4 @@
+dataset,available_count,missing_count,available_metrics,missing_metrics,extra_metrics,alias_metrics,metadata_fields
+cleveland,12,0,"BayesImbalance, F2, F3, F4, L1, L2, L3, N2, N3, N4, Raug, T1",-,-,"F2Imbalance, F3Imbalance, F4Imbalance, L1Imbalance, L2Imbalance, L3Imbalance, N2Imbalance, N3Imbalance, N4Imbalance, RaugImbalance, T1Imbalance",-
+kaggle_heart,12,0,"BayesImbalance, F2, F3, F4, L1, L2, L3, N2, N3, N4, Raug, T1",-,-,"F2Imbalance, F3Imbalance, F4Imbalance, L1Imbalance, L2Imbalance, L3Imbalance, N2Imbalance, N3Imbalance, N4Imbalance, RaugImbalance, T1Imbalance",-
+cardio70k,12,0,"BayesImbalance, F2, F3, F4, L1, L2, L3, N2, N3, N4, Raug, T1",-,-,"F2Imbalance, F3Imbalance, F4Imbalance, L1Imbalance, L2Imbalance, L3Imbalance, N2Imbalance, N3Imbalance, N4Imbalance, RaugImbalance, T1Imbalance",-
