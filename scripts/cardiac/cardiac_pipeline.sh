@@ -41,11 +41,15 @@ if [[ "$VERBOSE" == "true" ]]; then
     VERBOSE_FLAG="-v"
 fi
 
-echo "[PHASE 1/8] Loading cardiac datasets (standardization + profiling)"
+echo "[PHASE 1/9] Loading cardiac datasets (standardization)"
 python3 "$ROOT_DIR/scripts/cardiac/load_data.py" $VERBOSE_FLAG
 echo ""
 
-echo "[PHASE 2/8] Preprocessing datasets (split + scale + fairness profiles)"
+echo "[PHASE 2/9] Profiling datasets (complexity + fairness)"
+python3 "$ROOT_DIR/scripts/cardiac/profile_data.py" $VERBOSE_FLAG
+echo ""
+
+echo "[PHASE 3/9] Preprocessing datasets (split + scale + fairness profiles)"
 PREPROCESS_ARGS=""
 if [[ "$RUN_COMBINATORIAL" == "true" ]]; then
     PREPROCESS_ARGS="--all-binnings"
@@ -53,50 +57,50 @@ fi
 python3 "$ROOT_DIR/scripts/cardiac/preprocess.py" $PREPROCESS_ARGS $VERBOSE_FLAG
 echo ""
 
-echo "[PHASE 3/8] Training baseline model(s)"
+echo "[PHASE 4/9] Training baseline model(s)"
 python3 "$ROOT_DIR/scripts/cardiac/train_baseline.py" $VERBOSE_FLAG
 echo ""
 
-echo "[PHASE 4/8] Assessing post-prediction fairness"
+echo "[PHASE 5/9] Assessing post-prediction fairness"
 python3 "$ROOT_DIR/scripts/cardiac/assess_predictions.py" $VERBOSE_FLAG
 echo ""
 
 ARCHIVE_EXPERIMENTS=true
 if [[ "$RUN_AGE_BINNING" == "true" ]]; then
-    echo "[PHASE 5/8] Age binning strategies analysis"
+    echo "[PHASE 6/9] Age binning strategies analysis"
     EXPERIMENT_RUN_MODE=full ARCHIVE_PREVIOUS=$ARCHIVE_EXPERIMENTS python3 "$ROOT_DIR/scripts/cardiac/age_binning.py" \
         --config "$AGE_BINNING_CONFIG" --run-id "$RUN_ID" $VERBOSE_FLAG
     ARCHIVE_EXPERIMENTS=false
     echo ""
 else
-    echo "[5/8] Age binning analysis SKIPPED"
+    echo "[6/9] Age binning analysis SKIPPED"
 fi
 
 if [[ "$RUN_MITIGATION" == "true" ]]; then
-    echo "[PHASE 6/8] Mitigation techniques comparison"
+    echo "[PHASE 7/9] Mitigation techniques comparison"
     EXPERIMENT_RUN_MODE=full ARCHIVE_PREVIOUS=$ARCHIVE_EXPERIMENTS python3 "$ROOT_DIR/scripts/cardiac/mitigation.py" \
         --config "$MITIGATION_CONFIG" --run-id "$RUN_ID" $VERBOSE_FLAG
     ARCHIVE_EXPERIMENTS=false
     echo ""
 else
-    echo "[6/8] Mitigation comparison SKIPPED"
+    echo "[7/9] Mitigation comparison SKIPPED"
 fi
 
 if [[ "$RUN_COMBINATORIAL" == "true" ]]; then
-    echo "[PHASE 7/8] Combinatorial experiments"
+    echo "[PHASE 8/9] Combinatorial experiments"
     python3 "$ROOT_DIR/scripts/cardiac/combinatorial.py" \
         --config "$COMBINATORIAL_CONFIG" --run-id "$RUN_ID" $VERBOSE_FLAG
     echo ""
 else
-    echo "[7/8] Combinatorial experiments SKIPPED"
+    echo "[8/9] Combinatorial experiments SKIPPED"
 fi
 
 if [[ "$RUN_COMPARISON" == "true" ]]; then
-    echo "[PHASE 8/8] Experiment comparison"
+    echo "[PHASE 9/9] Experiment comparison"
     python3 "$ROOT_DIR/scripts/cardiac/compare.py" --run-id "$RUN_ID" $VERBOSE_FLAG
     echo ""
 else
-    echo "[8/8] Experiment comparison SKIPPED"
+    echo "[9/9] Experiment comparison SKIPPED"
 fi
 
 echo "======================================================================"

@@ -1,0 +1,4 @@
+dataset,samples,features,target_prevalence
+cleveland,297,17,0.4612794612794613
+kaggle_heart,918,15,0.5533769063180828
+cardio70k,70000,15,0.4997

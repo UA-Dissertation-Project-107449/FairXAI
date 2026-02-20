@@ -1,7 +1,7 @@
 # Cardiac pipeline configuration (YAML)
 
 paths:
-  external_dir: data/external
+  external_dir: data/external/cardiac
   raw_dir: data/raw/cardiac
   processed_dir: data/processed/cardiac
   experiments_dir: results/cardiac/baseline/latest_run/results

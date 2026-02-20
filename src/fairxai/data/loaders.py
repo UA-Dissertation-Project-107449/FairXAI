@@ -79,7 +79,12 @@ class CardiacDataLoader:
             df['age_group'] = pd.cut(df['age_raw'], bins=bins, labels=labels, include_lowest=True)
 
         # Sex mapping (normalize to 0/1 in `sex`, keep labels in `sex_extended`)
-        sex_key = 'sex' if 'sex' in sens else 'Sex' if 'Sex' in sens else 'Gender' if 'Gender' in sens else None
+        sex_key = (
+            'sex' if 'sex' in sens else
+            'Sex' if 'Sex' in sens else
+            'Gender' if 'Gender' in sens else
+            'gender' if 'gender' in sens else None
+        )
         if sex_key and sex_key in df.columns:
             raw = df[sex_key]
             mapping_cfg = sens.get(sex_key, {}).get('mapping', {})

@@ -1,0 +1,4 @@
+dataset,difficulty_score,predicted_risks
+cleveland,2.4583333333333335,Higher equal-opportunity risk (high N3)
+kaggle_heart,2.1666666666666665,No immediate high-risk flag
+cardio70k,1.375,Higher predictive-parity risk (high F2); Linear models likely insufficient (high L2)
