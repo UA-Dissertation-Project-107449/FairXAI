@@ -24,7 +24,7 @@ def _run_script(script_path: Path, args: list, env: dict) -> None:
 @task
 def load_data(run_id: str, verbose: bool = False):
     logger = get_run_logger()
-    logger.info("[PHASE 1/9] Loading cardiac datasets (standardization)")
+    logger.info("[PHASE 1/10] Loading cardiac datasets (standardization)")
     script = ROOT_DIR / "scripts" / "cardiac" / "load_data.py"
     args = ["-v"] if verbose else []
     env = os.environ.copy()
@@ -35,7 +35,7 @@ def load_data(run_id: str, verbose: bool = False):
 @task
 def profile_data(run_id: str, verbose: bool = False):
     logger = get_run_logger()
-    logger.info("[PHASE 2/9] Profiling datasets (complexity + fairness)")
+    logger.info("[PHASE 2/10] Profiling datasets (complexity + fairness)")
     script = ROOT_DIR / "scripts" / "cardiac" / "profile_data.py"
     args = ["-v"] if verbose else []
     env = os.environ.copy()
@@ -44,9 +44,23 @@ def profile_data(run_id: str, verbose: bool = False):
 
 
 @task
+def generate_recommendations(run_id: str, verbose: bool = False):
+    """Generate fairness triage recommendations (Phase 3)."""
+    logger = get_run_logger()
+    logger.info("[PHASE 3/10] Generating fairness triage recommendations")
+    script = ROOT_DIR / "scripts" / "cardiac" / "generate_recommendations.py"
+    args = ["--run-id", run_id]
+    if verbose:
+        args.append("-v")
+    env = os.environ.copy()
+    env["RUN_ID"] = run_id
+    _run_script(script, args, env)
+
+
+@task
 def preprocess_data(run_id: str, all_binnings: bool = False, verbose: bool = False):
     logger = get_run_logger()
-    logger.info("[PHASE 3/9] Preprocessing datasets (split + scale + fairness profiles)")
+    logger.info("[PHASE 4/10] Preprocessing datasets (split + scale + fairness profiles)")
     script = ROOT_DIR / "scripts" / "cardiac" / "preprocess.py"
     args = []
     if all_binnings:
@@ -61,7 +75,7 @@ def preprocess_data(run_id: str, all_binnings: bool = False, verbose: bool = Fal
 @task
 def train_baseline_model(run_id: str, verbose: bool = False):
     logger = get_run_logger()
-    logger.info("[PHASE 4/9] Training baseline model(s)")
+    logger.info("[PHASE 5/10] Training baseline model(s)")
     script = ROOT_DIR / "scripts" / "cardiac" / "train_baseline.py"
     args = ["-v"] if verbose else []
     env = os.environ.copy()
@@ -72,7 +86,7 @@ def train_baseline_model(run_id: str, verbose: bool = False):
 @task
 def assess_predictions(run_id: str, verbose: bool = False):
     logger = get_run_logger()
-    logger.info("[PHASE 5/9] Assessing post-prediction fairness")
+    logger.info("[PHASE 6/10] Assessing post-prediction fairness")
     script = ROOT_DIR / "scripts" / "cardiac" / "assess_predictions.py"
     args = ["-v"] if verbose else []
     env = os.environ.copy()
@@ -84,7 +98,7 @@ def assess_predictions(run_id: str, verbose: bool = False):
 def analyze_age_binning(run_id: str, verbose: bool = False):
     """Analyzes age binning strategies."""
     logger = get_run_logger()
-    logger.info("[PHASE 6/9] Age binning strategies analysis")
+    logger.info("[PHASE 7/10] Age binning strategies analysis")
     script = ROOT_DIR / "scripts" / "cardiac" / "age_binning.py"
     args = ["--config", "configs/experiments/age_binning.yaml", "--run-mode", "full", "--run-id", run_id]
     if verbose:
@@ -96,7 +110,7 @@ def analyze_age_binning(run_id: str, verbose: bool = False):
 def compare_mitigation_techniques(run_id: str, verbose: bool = False):
     """Compares mitigation techniques."""
     logger = get_run_logger()
-    logger.info("[PHASE 7/9] Mitigation techniques comparison")
+    logger.info("[PHASE 8/10] Mitigation techniques comparison")
     script = ROOT_DIR / "scripts" / "cardiac" / "mitigation.py"
     args = ["--config", "configs/experiments/mitigation.yaml", "--run-mode", "full", "--run-id", run_id]
     if verbose:
@@ -108,7 +122,7 @@ def compare_mitigation_techniques(run_id: str, verbose: bool = False):
 def run_combinatorial_experiments(run_id: str, verbose: bool = False):
     """Runs combinatorial experiments."""
     logger = get_run_logger()
-    logger.info("[PHASE 8/9] Combinatorial experiments")
+    logger.info("[PHASE 9/10] Combinatorial experiments")
     script = ROOT_DIR / "scripts" / "cardiac" / "combinatorial.py"
     args = ["--config", "configs/experiments/combinatorial.yaml", "--run-id", run_id]
     if verbose:
@@ -120,7 +134,7 @@ def run_combinatorial_experiments(run_id: str, verbose: bool = False):
 def compare_experiments(run_id: str, verbose: bool = False):
     """Compares experiments."""
     logger = get_run_logger()
-    logger.info("[PHASE 9/9] Experiment comparison")
+    logger.info("[PHASE 10/10] Experiment comparison")
     script = ROOT_DIR / "scripts" / "cardiac" / "compare.py"
     args = ["--pipeline", "cardiac", "--run-id", run_id]
     if verbose:
@@ -154,6 +168,7 @@ def cardiac_pipeline(
 
     load_data_task = load_data.submit(run_id, verbose)
     profile_task = profile_data.submit(run_id, verbose, wait_for=[load_data_task])
+    recommendations_task = generate_recommendations.submit(run_id, verbose, wait_for=[profile_task])
     preprocess_data_task = preprocess_data.submit(run_id, run_combinatorial, verbose, wait_for=[profile_task])
     train_baseline_model_task = train_baseline_model.submit(run_id, verbose, wait_for=[preprocess_data_task])
     assess_predictions_task = assess_predictions.submit(run_id, verbose, wait_for=[train_baseline_model_task])
@@ -178,6 +193,7 @@ def cardiac_pipeline(
 
     load_data_task.result()
     profile_task.result()
+    recommendations_task.result()
     preprocess_data_task.result()
     train_baseline_model_task.result()
     assess_predictions_task.result()
@@ -197,6 +213,7 @@ def cardiac_pipeline(
     logger.info(f"  - Raw data:           {ROOT_DIR}/data/raw/cardiac")
     logger.info(f"  - Processed data:     {ROOT_DIR}/data/processed/cardiac")
     logger.info(f"  - Profiling results:  {ROOT_DIR}/results/cardiac/profiling")
+    logger.info(f"  - Recommendations:    {ROOT_DIR}/results/cardiac/recommendations")
     logger.info(f"  - Baseline results:   {ROOT_DIR}/results/cardiac/baseline")
     logger.info(f"  - Baseline models:    {ROOT_DIR}/results/cardiac/baseline/models")
     if run_age_binning:
