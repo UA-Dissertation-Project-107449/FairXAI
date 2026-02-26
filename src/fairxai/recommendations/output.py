@@ -1,0 +1,140 @@
+"""Dual output serialisation for triage reports: JSON + Markdown."""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime
+from typing import Any, Dict
+
+from .models import Priority, ReadinessStatus, TriageReport
+
+
+# ===================================================================
+# JSON output
+# ===================================================================
+
+def to_json(report: TriageReport) -> Dict[str, Any]:
+    """Serialise a ``TriageReport`` to a JSON-compatible dict.
+
+    This follows the payload structure described in TRIAGE_PLAN §6.
+    """
+    return report.to_dict()
+
+
+def to_json_string(report: TriageReport, indent: int = 2) -> str:
+    """Return a pretty-printed JSON string."""
+    return json.dumps(to_json(report), indent=indent, default=str)
+
+
+# ===================================================================
+# Markdown output
+# ===================================================================
+
+_READINESS_ICON = {
+    ReadinessStatus.READY: "🟢",
+    ReadinessStatus.READY_WITH_CAVEATS: "🟡",
+    ReadinessStatus.NOT_READY: "🔴",
+}
+
+_PRIORITY_LABEL = {
+    Priority.P0: "**P0 Critical**",
+    Priority.P1: "**P1 High**",
+    Priority.P2: "P2 Medium",
+    Priority.P3: "P3 Info",
+}
+
+
+def to_markdown(report: TriageReport) -> str:
+    """Render a human-readable Markdown document from a ``TriageReport``."""
+    lines: list[str] = []
+
+    # --- Header ---
+    lines.append("# Fairness Triage Report")
+    lines.append("")
+    ds = report.dataset_summary
+    lines.append(f"**Dataset:** {ds.get('name', 'unknown')}  ")
+    lines.append(f"**Generated:** {report.generated_at}  ")
+    lines.append(f"**Rows × Columns:** {ds.get('n_rows', '?')} × {ds.get('n_cols', '?')}  ")
+    lines.append(f"**Label column:** `{ds.get('label_column', '-')}`  ")
+    sens = ds.get("sensitive_columns", [])
+    lines.append(f"**Sensitive attributes:** {', '.join(f'`{s}`' for s in sens) if sens else 'none declared'}  ")
+    lines.append(f"**Classes:** {ds.get('n_classes', '?')}  ")
+    lines.append("")
+
+    # --- Readiness gauge ---
+    icon = _READINESS_ICON.get(report.readiness_status, "⚪")
+    lines.append(f"## {icon} Readiness: {report.readiness_status.value}")
+    lines.append("")
+    lines.append(f"- **P0 (critical):** {report.critical_count}")
+    lines.append(f"- **P1 (high):** {report.high_count}")
+    lines.append(f"- **Total recommendations:** {len(report.recommendations)}")
+    lines.append("")
+
+    # --- Scorecard table ---
+    lines.append("## Triage Scorecard")
+    lines.append("")
+    lines.append("| # | Priority | Category | Title | Action |")
+    lines.append("|---|----------|----------|-------|--------|")
+    for i, rec in enumerate(report.recommendations, 1):
+        prio = _PRIORITY_LABEL.get(rec.priority, rec.priority.value)
+        cat = rec.category.value
+        title = rec.title or f"Category {cat}"
+        # Truncate action for table readability
+        action = rec.action.split("\n")[0]
+        if len(action) > 80:
+            action = action[:77] + "…"
+        lines.append(f"| {i} | {prio} | {cat} | {title} | {action} |")
+    lines.append("")
+
+    # --- Detailed recommendations ---
+    lines.append("## Detailed Recommendations")
+    lines.append("")
+
+    for i, rec in enumerate(report.recommendations, 1):
+        prio = _PRIORITY_LABEL.get(rec.priority, rec.priority.value)
+        lines.append(f"### {i}. [{rec.category.value}] {rec.title or 'Recommendation'}")
+        lines.append("")
+        lines.append(f"**Priority:** {prio}  ")
+        lines.append(f"**Confidence:** {rec.confidence.value}  ")
+        lines.append("")
+        lines.append(f"**Fairness relevance:** {rec.fairness_relevance}")
+        lines.append("")
+        lines.append(f"**Explainability relevance:** {rec.explainability_relevance}")
+        lines.append("")
+        lines.append(f"**Action:** {rec.action}")
+        lines.append("")
+        lines.append(f"**Expected outcome:** {rec.expected_outcome}")
+        lines.append("")
+
+        # Evidence block
+        lines.append("<details><summary>Evidence (click to expand)</summary>")
+        lines.append("")
+        lines.append("```json")
+        lines.append(json.dumps(rec.evidence, indent=2, default=str))
+        lines.append("```")
+        lines.append("")
+        lines.append("</details>")
+        lines.append("")
+
+    # --- Limitations ---
+    if report.limitations:
+        lines.append("## Limitations")
+        lines.append("")
+        for lim in report.limitations:
+            lines.append(f"- {lim}")
+        lines.append("")
+
+    # --- Visual panels reference ---
+    if report.visual_panels:
+        lines.append("## Suggested Visualisations")
+        lines.append("")
+        for vp in report.visual_panels:
+            lines.append(f"- **{vp.get('id', '?')}** ({vp.get('type', '?')}): {vp.get('description', '')}")
+        lines.append("")
+
+    # --- Footer ---
+    lines.append("---")
+    lines.append(f"*Report generated by FairXAI Recommendation Engine v0.1.0*")
+    lines.append("")
+
+    return "\n".join(lines)

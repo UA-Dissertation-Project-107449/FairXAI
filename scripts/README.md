@@ -14,19 +14,31 @@ scripts/
 
 ## Run order (cardiac)
 
-1. Load data
-2. Profile data
-3. Preprocess data (use all binnings for combinatorial)
-4. Train baseline
-5. Assess baseline fairness
-6. Age binning analysis
-7. Mitigation comparison
-8. Combinatorial experiments
-9. Compare experiments
+| Phase | Script | Description |
+|-------|--------|-------------|
+| 1 | `load_data.py` | Download / locate raw CSVs |
+| 2 | `profile_data.py` | Generate profiling JSONs (complexity, imbalance, …) |
+| 3 | `generate_recommendations.py` | Pre-model fairness triage (see `src/fairxai/recommendations/README.md`) |
+| 4 | `preprocess_data.py` | Clean, encode, bin — all binning variants for combinatorial |
+| 5 | `train_baseline.py` | Train baseline models |
+| 6 | `assess_baseline_fairness.py` | Compute fairness metrics on baselines |
+| 7 | `age_binning_analysis.py` | Age-binning sensitivity analysis |
+| 8 | `mitigation_comparison.py` | Pre-/in-/post-processing mitigation comparison |
+| 9 | `run_combinatorial.py` | Combinatorial experiment matrix |
+| 10 | `compare_experiments.py` | Cross-experiment comparison |
+
+Phase 3 is controlled by the `RUN_RECOMMENDATIONS` env var (default `true`).
 
 ## Outputs
 
 All outputs are written under `results/<pipeline>/runs/<run_id>/` when `RUN_ID` is set. If not set, outputs go to the default pipeline folders under `results/<pipeline>/`.
+
+## Utility scripts
+
+Two helper scripts live at the **project root** (not inside `scripts/`):
+
+- **`setup.sh`** — bootstraps the virtual environment, checks Python ≥ 3.10, installs `requirements.txt`.
+- **`cleanup.sh`** — removes generated outputs (`results/`, `data/processed/`, `data/raw/`, `logs/`). Flags: `--results-only`, `--keep-latest`, `--nuke-env`, `--dry-run`, `-y`.
 
 ## Notes
 

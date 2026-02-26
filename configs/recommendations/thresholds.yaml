@@ -1,0 +1,57 @@
+# Fairness Triage Recommendation Thresholds
+# -------------------------------------------
+# All numeric thresholds used by the recommendation rules live here.
+# This mirrors existing heuristics from the codebase and extends them
+# for the triage categories defined in TRIAGE_PLAN.md.
+
+representation:
+  size_ratio_warning: 3.0            # group max/min ratio  (from profile_data.py heuristic)
+  min_group_samples: 50              # minimum per-subgroup  (from DataProfiler default)
+  statistical_parity_warning: 0.15   # max_difference  (from profile_data.py heuristic)
+  intersectional_min_samples: 30     # minimum for intersectional slices
+
+complexity:
+  high_overlap_percentile: 75        # flag metric if above 75th percentile of reference
+  elevated_metrics:                  # metrics that indicate overlap / ambiguity
+    - F2
+    - F3
+    - F4
+    - N2
+    - N3
+    - N4
+    - Raug
+    - T1
+  group_divergence_threshold: 0.20   # relative diff between worst-group and global complexity
+
+explainability:
+  linear_complexity_metrics:         # metrics indicating linear explanation instability
+    - L1
+    - L2
+    - L3
+  structural_overlap_metric: T1
+  high_threshold: 0.5                # above this, warn linear explanations may be unstable
+
+readiness:
+  p0_makes_not_ready: true           # any P0 → NOT_READY
+  p1_caveat_threshold: 1             # ≥ N P1 recommendations → READY_WITH_CAVEATS
+
+fairness:
+  max_fairness_violation: 0.10       # demographic parity threshold  (from mitigation.yaml)
+  min_recall: 0.70                   # healthcare safety floor  (from mitigation.yaml)
+
+task_framing:
+  multiclass_minority_support: 20    # minimum support per class in sensitive slices
+  complexity_warning_metrics:        # high values here suggest multiclass instability
+    - N3
+    - N4
+    - T1
+    - F4
+  complexity_high_threshold: 0.5     # metric value above this triggers framing concern
+
+sensitive_adequacy:
+  max_null_fraction: 0.10            # >10 % nulls in a sensitive column → flag
+  min_unique_groups: 2               # need at least 2 groups for any fairness analysis
+
+reference:
+  use_historical: true               # use past runs for comparison when available
+  fallback_to_defaults: true         # use literature-based defaults when no history
