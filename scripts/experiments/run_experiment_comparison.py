@@ -16,10 +16,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 from fairxai.experiments.versioning import ExperimentVersioning
 from fairxai.cli.runner_base import get_project_root, setup_phase_logging
 from fairxai.cli.runner_utils import resolve_latest_run_dir, resolve_run_id
-from fairxai.visualization.plots import (
+from fairxai.viz.experiment_plots import (
     save_comparison_heatmap,
     save_tradeoff_scatter,
-    save_pareto_frontier
+    save_pareto_frontier,
 )
 
 # Composite score weights (must sum to 1.0)

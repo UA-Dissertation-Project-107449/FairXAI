@@ -53,6 +53,12 @@ from .constants import (
     normalize_cardiac_category_series,
 )
 
+from .experiment_plots import (
+    save_comparison_heatmap,
+    save_tradeoff_scatter,
+    save_pareto_frontier,
+)
+
 __all__ = [
     "plot_categorical_distribution_grid",
     "plot_numeric_distribution_comparison",
@@ -80,4 +86,7 @@ __all__ = [
     "CARDIAC_CATEGORY_VALUE_LABEL_MAPPING",
     "CARDIAC_CATEGORY_DISPLAY_ORDER",
     "normalize_cardiac_category_series",
+    "save_comparison_heatmap",
+    "save_tradeoff_scatter",
+    "save_pareto_frontier",
 ]
