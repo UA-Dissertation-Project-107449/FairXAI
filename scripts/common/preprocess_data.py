@@ -105,7 +105,7 @@ def main():
         action='store_true',
         help='Process with all binning strategies'
     )
-    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose console output')
+    parser.add_argument('-v', '--verbose', action='count', default=0, help='Verbosity: -v=info, -vv=debug')
     args = parser.parse_args()
 
     pipeline = args.pipeline

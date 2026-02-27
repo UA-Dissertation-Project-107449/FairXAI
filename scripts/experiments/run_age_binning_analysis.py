@@ -126,7 +126,7 @@ def run_analysis(
     archive_previous: bool = True,
     run_id: str = None,
     results_root: str = None,
-    verbose: bool = False
+    verbose: int = 0
 ):
     """
     Runs the age binning analysis experiment.
@@ -371,7 +371,7 @@ def main():
                        help='Run identifier (optional, enables run-scoped outputs)')
     parser.add_argument('--results-root', type=str, default=None,
                        help='Base results directory for run outputs')
-    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose console output')
+    parser.add_argument('-v', '--verbose', action='count', default=0, help='Verbosity: -v=info, -vv=debug')
     args = parser.parse_args()
     
     run_analysis(

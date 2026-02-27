@@ -46,7 +46,7 @@ def main():
         choices=["cardiac", "dermatology"],
         help="Pipeline name (e.g., cardiac, dermatology)"
     )
-    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose console output")
+    parser.add_argument("-v", "--verbose", action="count", default=0, help="Verbosity: -v=info, -vv=debug")
     parser.add_argument(
         "--run-id",
         type=str,

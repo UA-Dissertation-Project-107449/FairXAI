@@ -361,7 +361,7 @@ def run_comparison_analysis(
     fairness_threshold: float = 0.10,
     performance_threshold: float = 0.15,
     no_plots: bool = False,
-    verbose: bool = False,
+    verbose: int = 0,
     run_id: str = None,
     results_root: str = None
 ):
@@ -673,8 +673,9 @@ def main():
     )
     parser.add_argument(
         '-v', '--verbose',
-        action='store_true',
-        help='Verbose console output'
+        action='count',
+        default=0,
+        help='Verbosity: -v=info, -vv=debug'
     )
     
     args = parser.parse_args()

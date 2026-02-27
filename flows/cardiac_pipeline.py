@@ -38,124 +38,126 @@ def _run_script(script_path: Path, args: list, env: dict) -> None:
     subprocess.run(cmd, env=env, check=True, cwd=str(ROOT_DIR))
 
 
+def _verbose_flags(level: int) -> list[str]:
+    """Convert a verbosity int (0/1/2) into CLI flags."""
+    if level >= 2:
+        return ["-vv"]
+    if level >= 1:
+        return ["-v"]
+    return []
+
+
 @task
-def load_data(run_id: str, verbose: bool = False):
+def load_data(run_id: str, verbose: int = 0):
     logger = get_run_logger()
     logger.info("[PHASE 1/10] Loading cardiac datasets (standardization)")
     script = ROOT_DIR / "scripts" / "cardiac" / "load_data.py"
-    args = ["-v"] if verbose else []
+    args = _verbose_flags(verbose)
     env = os.environ.copy()
     env["RUN_ID"] = run_id
     _run_script(script, args, env)
 
 
 @task
-def profile_data(run_id: str, verbose: bool = False):
+def profile_data(run_id: str, verbose: int = 0):
     logger = get_run_logger()
     logger.info("[PHASE 2/10] Profiling datasets (complexity + fairness)")
     script = ROOT_DIR / "scripts" / "cardiac" / "profile_data.py"
-    args = ["-v"] if verbose else []
+    args = _verbose_flags(verbose)
     env = os.environ.copy()
     env["RUN_ID"] = run_id
     _run_script(script, args, env)
 
 
 @task
-def generate_recommendations(run_id: str, verbose: bool = False):
+def generate_recommendations(run_id: str, verbose: int = 0):
     """Generate fairness triage recommendations (Phase 3)."""
     logger = get_run_logger()
     logger.info("[PHASE 3/10] Generating fairness triage recommendations")
     script = ROOT_DIR / "scripts" / "cardiac" / "generate_recommendations.py"
-    args = ["--run-id", run_id]
-    if verbose:
-        args.append("-v")
+    args = ["--run-id", run_id] + _verbose_flags(verbose)
     env = os.environ.copy()
     env["RUN_ID"] = run_id
     _run_script(script, args, env)
 
 
 @task
-def preprocess_data(run_id: str, all_binnings: bool = False, verbose: bool = False):
+def preprocess_data(run_id: str, all_binnings: bool = False, verbose: int = 0):
     logger = get_run_logger()
     logger.info("[PHASE 4/10] Preprocessing datasets (split + scale + fairness profiles)")
     script = ROOT_DIR / "scripts" / "cardiac" / "preprocess.py"
     args = []
     if all_binnings:
         args.append("--all-binnings")
-    if verbose:
-        args.append("-v")
+    args.extend(_verbose_flags(verbose))
     env = os.environ.copy()
     env["RUN_ID"] = run_id
     _run_script(script, args, env)
 
 
 @task
-def train_baseline_model(run_id: str, verbose: bool = False):
+def train_baseline_model(run_id: str, verbose: int = 0):
     logger = get_run_logger()
     logger.info("[PHASE 5/10] Training baseline model(s)")
     script = ROOT_DIR / "scripts" / "cardiac" / "train_baseline.py"
-    args = ["-v"] if verbose else []
+    args = _verbose_flags(verbose)
     env = os.environ.copy()
     env["RUN_ID"] = run_id
     _run_script(script, args, env)
 
 
 @task
-def assess_predictions(run_id: str, verbose: bool = False):
+def assess_predictions(run_id: str, verbose: int = 0):
     logger = get_run_logger()
     logger.info("[PHASE 6/10] Assessing post-prediction fairness")
     script = ROOT_DIR / "scripts" / "cardiac" / "assess_predictions.py"
-    args = ["-v"] if verbose else []
+    args = _verbose_flags(verbose)
     env = os.environ.copy()
     env["RUN_ID"] = run_id
     _run_script(script, args, env)
 
 
 @task
-def analyze_age_binning(run_id: str, verbose: bool = False):
+def analyze_age_binning(run_id: str, verbose: int = 0):
     """Analyzes age binning strategies."""
     logger = get_run_logger()
     logger.info("[PHASE 7/10] Age binning strategies analysis")
     script = ROOT_DIR / "scripts" / "cardiac" / "age_binning.py"
     args = ["--config", "configs/experiments/age_binning.yaml", "--run-mode", "full", "--run-id", run_id]
-    if verbose:
-        args.append("-v")
+    args.extend(_verbose_flags(verbose))
     _run_script(script, args, os.environ.copy())
 
 
 @task
-def compare_mitigation_techniques(run_id: str, verbose: bool = False):
+def compare_mitigation_techniques(run_id: str, verbose: int = 0):
     """Compares mitigation techniques."""
     logger = get_run_logger()
     logger.info("[PHASE 8/10] Mitigation techniques comparison")
     script = ROOT_DIR / "scripts" / "cardiac" / "mitigation.py"
     args = ["--config", "configs/experiments/mitigation.yaml", "--run-mode", "full", "--run-id", run_id]
-    if verbose:
-        args.append("-v")
+    args.extend(_verbose_flags(verbose))
     _run_script(script, args, os.environ.copy())
 
 
 @task
-def run_combinatorial_experiments(run_id: str, verbose: bool = False):
+def run_combinatorial_experiments(run_id: str, verbose: int = 0):
     """Runs combinatorial experiments."""
     logger = get_run_logger()
     logger.info("[PHASE 9/10] Combinatorial experiments")
     script = ROOT_DIR / "scripts" / "cardiac" / "combinatorial.py"
     args = ["--config", "configs/experiments/combinatorial.yaml", "--run-id", run_id]
-    if verbose:
-        args.append("-v")
+    args.extend(_verbose_flags(verbose))
     _run_script(script, args, os.environ.copy())
 
 
 @task
-def compare_experiments(run_id: str, verbose: bool = False):
+def compare_experiments(run_id: str, verbose: int = 0):
     """Compares experiments."""
     logger = get_run_logger()
     logger.info("[PHASE 10/10] Experiment comparison")
     script = ROOT_DIR / "scripts" / "cardiac" / "compare.py"
     args = ["--pipeline", "cardiac", "--run-id", run_id]
-    if verbose:
-        args.append("-v")
+    args.extend(_verbose_flags(verbose))
     _run_script(script, args, os.environ.copy())
 
 
@@ -165,7 +167,7 @@ def cardiac_pipeline(
     run_mitigation: bool = True,
     run_combinatorial: bool = True,
     run_comparison: bool = True,
-    verbose: bool = False,
+    verbose: int = 0,
     resume_from: Optional[str] = None,
     go_until: Optional[str] = None,
     run_id_override: Optional[str] = None,
@@ -415,7 +417,8 @@ Examples:
     p.add_argument("--no-mitigation", action="store_true", help="Skip mitigation stage.")
     p.add_argument("--no-combinatorial", action="store_true", help="Skip combinatorial stage.")
     p.add_argument("--no-comparison", action="store_true", help="Skip comparison stage.")
-    p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("-v", "--verbose", action="count", default=0,
+                    help="Verbosity: -v=info, -vv=debug")
     return p
 
 

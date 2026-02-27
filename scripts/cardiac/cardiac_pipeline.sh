@@ -48,7 +48,7 @@ RUN_MITIGATION=${RUN_MITIGATION:-true}
 RUN_COMBINATORIAL=${RUN_COMBINATORIAL:-true}
 RUN_COMPARISON=${RUN_COMPARISON:-true}
 RUN_RECOMMENDATIONS=${RUN_RECOMMENDATIONS:-true}
-VERBOSE=${VERBOSE:-false}
+VERBOSE=${VERBOSE:-0}
 RESUME_FROM=${RESUME_FROM:-""}
 GO_UNTIL=${GO_UNTIL:-""}
 AGE_BINNING_CONFIG="$ROOT_DIR/configs/experiments/age_binning.yaml"
@@ -173,8 +173,17 @@ echo "Comparison:       $RUN_COMPARISON"
 echo "Recommendations:  $RUN_RECOMMENDATIONS"
 echo ""
 
+# Normalise VERBOSE: accept legacy true/false or numeric 0/1/2
+case "$VERBOSE" in
+    true)  VERBOSE=1 ;;
+    false) VERBOSE=0 ;;
+esac
+VERBOSE=${VERBOSE:-0}
+
 VERBOSE_FLAG=""
-if [[ "$VERBOSE" == "true" ]]; then
+if (( VERBOSE >= 2 )); then
+    VERBOSE_FLAG="-vv"
+elif (( VERBOSE >= 1 )); then
     VERBOSE_FLAG="-v"
 fi
 

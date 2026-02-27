@@ -29,6 +29,33 @@ scripts/
 
 Phase 3 is controlled by the `RUN_RECOMMENDATIONS` env var (default `true`).
 
+## Verbosity
+
+All scripts accept a `-v` / `-vv` flag (stacks with `action='count'`):
+
+| Level | Flag | Console output |
+|-------|------|----------------|
+| 0 (default) | — | `[PHASE]`/`[SUCCESS]`/`[ERROR]` tags + WARNING and above |
+| 1 | `-v` | All INFO+ messages |
+| 2 | `-vv` | All DEBUG+ messages |
+
+File logs always capture **DEBUG+** regardless of verbosity.  
+Dedicated `*_warnings.log` and `*_errors.log` files are always written alongside the main log.
+
+**Bash pipeline** — set `VERBOSE=0`, `1`, or `2` (legacy `true`/`false` still accepted):
+
+```bash
+VERBOSE=2 bash scripts/cardiac/cardiac_pipeline.sh   # debug output
+```
+
+**Prefect flow:**
+
+```bash
+python3 flows/cardiac_pipeline.py -vv   # debug
+python3 flows/cardiac_pipeline.py -v    # info
+python3 flows/cardiac_pipeline.py       # quiet (default)
+```
+
 ## Outputs
 
 All outputs are written under `results/<pipeline>/runs/<run_id>/` when `RUN_ID` is set. If not set, outputs go to the default pipeline folders under `results/<pipeline>/`.

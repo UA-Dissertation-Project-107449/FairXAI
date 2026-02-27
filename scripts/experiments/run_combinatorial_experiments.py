@@ -703,7 +703,7 @@ def run_combinatorial_analysis(
     config_path: str,
     pipeline: str = 'cardiac',
     n_jobs: int = 1,
-    verbose: bool = False,
+    verbose: int = 0,
     archive_previous: bool = True,
     run_id: Optional[str] = None,
     results_root: Optional[str] = None
@@ -897,9 +897,10 @@ def main():
         help='Number of parallel jobs (-1 for all cores)'
     )
     parser.add_argument(
-        '--verbose',
-        action='store_true',
-        help='Enable verbose logging'
+        '-v', '--verbose',
+        action='count',
+        default=0,
+        help='Verbosity: -v=info, -vv=debug'
     )
     parser.add_argument(
         '--archive-previous',

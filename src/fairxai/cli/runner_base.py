@@ -1,7 +1,7 @@
 """Shared helpers for script runners."""
 
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 from fairxai.utils.config import load_yaml_config
 from fairxai.utils.logging_utils import setup_logging
@@ -19,7 +19,7 @@ def load_pipeline_config(root: Path, pipeline: str = "cardiac") -> Dict:
 def setup_phase_logging(
     root: Path,
     log_name: str,
-    verbose: bool = False,
+    verbose: Union[bool, int] = 0,
     log_subdir: str = "cardiac",
 ) -> Path:
     log_dir = root / "logs" / log_subdir
