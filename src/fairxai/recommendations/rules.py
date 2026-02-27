@@ -308,6 +308,46 @@ def check_representation_risk(
                 confidence=Confidence.HIGH,
             ))
 
+    # --- Binning sensitivity (multi-group attributes with extreme imbalance) ---
+    for attr in ev.get_sensitive_attrs(profile):
+        counts = ev.get_group_counts(profile, attr)
+        ratio = ev.get_size_ratio(profile, attr)
+        if counts is not None and len(counts) > 2 and ratio is not None:
+            if ratio > config.binning_size_ratio_warning:
+                recs.append(Recommendation(
+                    category=TriageCategory.C_REPRESENTATION,
+                    priority=Priority.P2,
+                    title=f"Binning imbalance in '{attr}' — consider rebinning",
+                    evidence={
+                        "attribute": attr,
+                        "n_groups": len(counts),
+                        "size_ratio": round(ratio, 2),
+                        "threshold": config.binning_size_ratio_warning,
+                        "group_counts": counts,
+                    },
+                    fairness_relevance=(
+                        f"Attribute '{attr}' has {len(counts)} groups with a "
+                        f"max/min size ratio of {ratio:.1f}x (threshold: "
+                        f"{config.binning_size_ratio_warning:.1f}x). "
+                        "Extremely unequal bins reduce statistical power for "
+                        "the smallest groups and may distort fairness metrics."
+                    ),
+                    explainability_relevance=(
+                        "Explanations for tiny bins may be unreliable; dominant bins "
+                        "can overshadow minority-bin effects in feature-importance."
+                    ),
+                    action=(
+                        "Try alternative binning strategies (quantile, equal-width, or "
+                        "fewer bins) to improve group balance. Compare fairness metrics "
+                        "across strategies using the age-binning experiment module."
+                    ),
+                    expected_outcome=(
+                        "More balanced group sizes leading to more reliable and "
+                        "comparable per-group fairness estimates."
+                    ),
+                    confidence=Confidence.MEDIUM,
+                ))
+
     # --- Intersectional low-support slices ---
     low_intersections = ev.get_low_support_intersections(
         profile, min_samples=config.intersectional_min_samples

@@ -78,14 +78,20 @@ def load_dataset_for_binning(dataset_name: str, data_dir: Path, sensitive_col: s
     return df
 
 
-def run_strategy_analysis(df, strategy_name, dataset_name, sensitive_col, target_col):
+def run_strategy_analysis(
+    df, strategy_name, dataset_name, sensitive_cols, target_col,
+    strategy_config=None,
+):
     """
     Analyze a single binning strategy on a dataset.
     
     Args:
-        df: DataFrame with age_raw, sex, heart_disease
+        df: DataFrame with age_raw and required columns
         strategy_name: Strategy to test
         dataset_name: Dataset identifier
+        sensitive_cols: List of sensitive attribute columns
+        target_col: Target variable column
+        strategy_config: Config dict for this strategy (from YAML)
         
     Returns:
         Analysis result dictionary
@@ -93,10 +99,13 @@ def run_strategy_analysis(df, strategy_name, dataset_name, sensitive_col, target
     logging.info(f"\nAnalyzing strategy: {strategy_name}")
     
     try:
-        # Create binning strategy
-        bins, labels = create_binning_strategy(df, strategy_name, age_col='age_raw')
+        # Create binning strategy (config-driven)
+        bins, labels = create_binning_strategy(
+            df, strategy_name, age_col='age_raw',
+            strategy_config=strategy_config,
+        )
         
-        # Comprehensive analysis
+        # Comprehensive analysis (all sensitive attrs)
         result = analyze_strategy_comprehensive(
             df=df,
             strategy_name=strategy_name,
@@ -104,7 +113,7 @@ def run_strategy_analysis(df, strategy_name, dataset_name, sensitive_col, target
             labels=labels,
             dataset_name=dataset_name,
             age_col='age_raw',
-            sensitive_col=sensitive_col,
+            sensitive_col=sensitive_cols,
             target_col=target_col
         )
         
@@ -154,13 +163,18 @@ def run_analysis(
     # Determine datasets and strategies to process
     datasets = datasets if datasets else experiment_cfg['data']['datasets']
     sensitive_attrs = experiment_cfg.get('data', {}).get('sensitive_attributes', ['sex'])
-    sensitive_col = sensitive_attrs[0] if sensitive_attrs else 'sex'
     target_col = experiment_cfg.get('data', {}).get('target', 'heart_disease')
+
+    # Keep single primary attr for backward-compat helpers (e.g. load_dataset)
+    primary_sensitive_col = sensitive_attrs[0] if sensitive_attrs else 'sex'
     
     if strategies:
         strategies = strategies
     else:
         strategies = list(experiment_cfg['binning_strategies'].keys())
+
+    # Strategy config lookup for config-driven binning
+    strategy_configs = experiment_cfg.get('binning_strategies', {})
     
     use_run_id = bool(run_id or os.getenv('RUN_ID') or os.getenv('PREFECT__RUNTIME__FLOW_RUN_ID'))
     run_id = resolve_run_id(run_id) if use_run_id else None
@@ -247,7 +261,7 @@ def run_analysis(
         
         try:
             # Load dataset
-            df = load_dataset_for_binning(dataset_name, data_dir, sensitive_col, target_col)
+            df = load_dataset_for_binning(dataset_name, data_dir, primary_sensitive_col, target_col)
         except Exception as e:
             logging.error(f"Failed to load {dataset_name}: {e}")
             logging.exception(e)
@@ -255,7 +269,13 @@ def run_analysis(
         
         # Test each strategy (errors handled within run_strategy_analysis)
         for strategy_name in strategies:
-            result = run_strategy_analysis(df, strategy_name, dataset_name, sensitive_col, target_col)
+            strategy_cfg = strategy_configs.get(strategy_name)
+            result = run_strategy_analysis(
+                df, strategy_name, dataset_name,
+                sensitive_cols=sensitive_attrs,
+                target_col=target_col,
+                strategy_config=strategy_cfg,
+            )
             if result:
                 all_results.append(result)
     
