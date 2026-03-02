@@ -29,6 +29,76 @@ scripts/
 
 Phase 3 is controlled by the `RUN_RECOMMENDATIONS` env var (default `true`).
 
+## Explainability (XAI) configuration
+
+XAI settings live in the pipeline config (`configs/pipelines/cardiac.yaml`) and
+the combinatorial config (`configs/experiments/combinatorial.yaml`):
+
+**Pipeline config** (`cardiac.yaml`):
+
+```yaml
+xai:
+  enabled: true              # Master switch for all XAI (SHAP + LIME)
+  cv_enabled: true           # Enable cross-validated XAI
+  lime_instances: 3          # Holdout LIME: number of instances to explain
+  cv_lime_instances: 3       # CV LIME: near-threshold instances to track
+  global_max_samples: 1000   # SHAP background subsample cap
+```
+
+**Combinatorial config** (`combinatorial.yaml`):
+
+```yaml
+xai:
+  enabled: true
+  max_samples: 200
+  lime_instances: 2
+```
+
+**XAI output layout** (baseline training):
+
+```
+xai/
+└── {dataset}/
+    ├── holdout/
+    │   ├── shap/
+    │   │   └── summary.csv       # mean, std, p25/p50/p75 per feature
+    │   └── lime/
+    │       └── examples.csv      # instance-level LIME weights
+    └── cv/
+        ├── shap/
+        │   └── summary.csv       # aggregated across all CV folds
+        └── lime/
+            └── tracked.csv       # near-threshold instance explanations
+```
+
+**Combinatorial experiment output layout**:
+
+All combinatorial outputs use `holdout/` and `cv/` sub-folders for
+predictions, results, manifests, and XAI:
+
+```
+{experiment_root}/
+├── predictions/{dataset}/
+│   ├── holdout/predictions_{exp_id}.csv
+│   └── cv/predictions_{exp_id}.csv
+├── results/{dataset}/
+│   ├── holdout/results_{exp_id}.json
+│   └── cv/results_{exp_id}.json
+├── manifests/{dataset}/
+│   ├── holdout/experiment_{exp_id}.yaml
+│   └── cv/experiment_{exp_id}.yaml
+└── xai/{dataset}/holdout/
+    ├── shap/{exp_id}_global.csv
+    ├── shap/{exp_id}_local.csv
+    ├── shap/global_summary.csv
+    ├── shap/local_summary.csv
+    └── lime/{exp_id}_examples.csv
+```
+
+CV LIME tracks **near-threshold** predictions (probability within ±0.1 of the
+decision boundary) — these are the instances where explanations matter most
+clinically.
+
 ## Verbosity
 
 All scripts accept a `-v` / `-vv` flag (stacks with `action='count'`):

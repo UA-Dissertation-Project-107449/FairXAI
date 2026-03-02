@@ -29,6 +29,7 @@ import argparse
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 
 from fairxai.models.baseline import BaselineLogisticRegression, generate_predictions_with_metadata
+from fairxai.models.cv_trainer import CVTrainer
 from fairxai.explainability.tabular import shap_explain_tabular, lime_explain_instance
 from fairxai.cli.runner_base import get_project_root, load_pipeline_config, setup_phase_logging
 from fairxai.experiments.data_io import build_schema_excludes, resolve_base_dataset
@@ -41,18 +42,33 @@ def save_xai_outputs(
     X_lime: pd.DataFrame,
     output_dir: Path,
     dataset_name: str,
-    X_global: Optional[pd.DataFrame] = None
+    X_global: Optional[pd.DataFrame] = None,
+    xai_cfg: Optional[dict] = None
 ) -> None:
-    xai_enabled = os.getenv('XAI_ENABLED', 'true').lower() == 'true'
-    if not xai_enabled:
-        logging.info("XAI disabled via XAI_ENABLED=false")
+    """Save holdout-based SHAP and LIME outputs.
+
+    Outputs are placed under::
+
+        output_dir/{dataset_name}/holdout/shap/summary.csv
+        output_dir/{dataset_name}/holdout/lime/examples.csv
+
+    SHAP global summary includes ``std_abs_shap`` and percentile columns
+    (p25, p50, p75) alongside the original ``mean_abs_shap``.
+    """
+    if xai_cfg is None:
+        xai_cfg = {}
+    if not xai_cfg.get('enabled', True):
+        logging.info("XAI disabled via config xai.enabled=false")
         return
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    lime_instances = int(os.getenv('XAI_LIME_INSTANCES', '3'))
-    global_max = int(os.getenv('XAI_GLOBAL_MAX_SAMPLES', '1000'))
+    holdout_shap_dir = output_dir / dataset_name / 'holdout' / 'shap'
+    holdout_lime_dir = output_dir / dataset_name / 'holdout' / 'lime'
+    holdout_shap_dir.mkdir(parents=True, exist_ok=True)
+    holdout_lime_dir.mkdir(parents=True, exist_ok=True)
+    lime_instances = int(xai_cfg.get('lime_instances', 3))
+    global_max = int(xai_cfg.get('global_max_samples', 1000))
 
-    # Global SHAP summary (dataset-level)
+    # Global SHAP summary (dataset-level) with percentiles
     if X_global is not None:
         try:
             df_global = X_global.copy()
@@ -60,14 +76,17 @@ def save_xai_outputs(
                 df_global = df_global.sample(n=global_max, random_state=42)
             shap_global = shap_explain_tabular(model.model, df_global, max_samples=global_max)
             shap_vals_global = np.abs(shap_global.shap_values)
-            mean_abs_global = np.mean(shap_vals_global, axis=0)
             shap_global_summary = pd.DataFrame({
                 'feature': shap_global.feature_names,
-                'mean_abs_shap': mean_abs_global
+                'mean_abs_shap': np.mean(shap_vals_global, axis=0),
+                'std_abs_shap': np.std(shap_vals_global, axis=0),
+                'p25': np.percentile(shap_vals_global, 25, axis=0),
+                'p50': np.percentile(shap_vals_global, 50, axis=0),
+                'p75': np.percentile(shap_vals_global, 75, axis=0),
             }).sort_values('mean_abs_shap', ascending=False)
-            shap_global_file = output_dir / f"{dataset_name}_shap_global.csv"
+            shap_global_file = holdout_shap_dir / "summary.csv"
             shap_global_summary.to_csv(shap_global_file, index=False)
-            logging.info(f"[SUCCESS] SHAP global summary saved: {shap_global_file}")
+            logging.info(f"[SUCCESS] Holdout SHAP summary saved: {shap_global_file}")
         except Exception as exc:
             logging.warning(f"Global SHAP failed for {dataset_name}: {exc}")
 
@@ -123,9 +142,9 @@ def save_xai_outputs(
                         'local_pred': exp.local_pred
                     })
             lime_df = pd.DataFrame(lime_results)
-            lime_file = output_dir / f"{dataset_name}_lime_examples.csv"
+            lime_file = holdout_lime_dir / "examples.csv"
             lime_df.to_csv(lime_file, index=False)
-            logging.info(f"[SUCCESS] LIME examples saved: {lime_file}")
+            logging.info(f"[SUCCESS] Holdout LIME examples saved: {lime_file}")
         elif lime_instances > 0:
             logging.warning(f"LIME skipped for {dataset_name}: no predict_proba/decision_function")
     except Exception as exc:
@@ -339,9 +358,107 @@ def main():
         feature_importance.to_csv(importance_file, index=False)
         logging.info(f"  Feature importance: {importance_file}")
 
-        # XAI outputs
+        # XAI outputs (holdout)
+        xai_cfg = pipeline_cfg.get('xai', {})
         xai_dir = experiments_dir / 'xai'
-        save_xai_outputs(model, X_train, X_test, xai_dir, dataset_name, X_global=X_train)
+        save_xai_outputs(model, X_train, X_test, xai_dir, dataset_name, X_global=X_train, xai_cfg=xai_cfg)
+
+        # --- Cross-validated XAI ---
+        if xai_cfg.get('cv_enabled', True) and xai_cfg.get('enabled', True):
+            logging.info(f"\n--- Cross-Validated XAI ---")
+            try:
+                cv_lime_n = int(xai_cfg.get('cv_lime_instances', 3))
+                cv_shap_max = int(xai_cfg.get('global_max_samples', 1000))
+
+                # Combine train + test for CV (same approach as combinatorial)
+                X_full = pd.concat([X_train, X_test], ignore_index=True)
+                y_full = pd.concat([y_train, y_test], ignore_index=True)
+                sensitive_full = pd.concat(
+                    [sensitive_train, sensitive_test], ignore_index=True
+                )
+
+                # Select near-threshold instances for LIME tracking
+                full_predictions = generate_predictions_with_metadata(
+                    model, X_full, y_full, sensitive_full, threshold=0.5
+                )
+                near_mask = full_predictions['near_threshold']
+                if near_mask.sum() > 0:
+                    tracked = (
+                        full_predictions[near_mask]
+                        .sample(n=min(cv_lime_n, int(near_mask.sum())), random_state=42)
+                        .index.tolist()
+                    )
+                else:
+                    # Fall back to random sample if no near-threshold instances
+                    tracked = (
+                        full_predictions
+                        .sample(n=min(cv_lime_n, len(full_predictions)), random_state=42)
+                        .index.tolist()
+                    )
+                logging.info(f"  Tracked LIME instances: {tracked}")
+
+                cv_trainer = CVTrainer(
+                    n_folds=training_cfg.get('cv_folds', 5),
+                    random_state=random_state,
+                )
+                cv_xai_results = cv_trainer.run_cv_experiment(
+                    model_class=BaselineLogisticRegression,
+                    X=X_full,
+                    y=y_full,
+                    sensitive_attrs=sensitive_full,
+                    model_params={
+                        'C': training_cfg.get('C', 1.0),
+                        'max_iter': training_cfg.get('max_iter', 1000),
+                        'random_state': random_state,
+                        'class_weight': 'balanced',
+                    },
+                    xai_enabled=True,
+                    tracked_indices=tracked,
+                    feature_names=list(X_full.columns),
+                    shap_max_samples=cv_shap_max,
+                )
+
+                # Save CV SHAP summary
+                cv_shap_dir = xai_dir / dataset_name / 'cv' / 'shap'
+                cv_lime_dir = xai_dir / dataset_name / 'cv' / 'lime'
+                cv_shap_dir.mkdir(parents=True, exist_ok=True)
+                cv_lime_dir.mkdir(parents=True, exist_ok=True)
+
+                cv_shap_global = CVTrainer.aggregate_cv_shap(
+                    cv_xai_results['fold_results'], scope='global'
+                )
+                if cv_shap_global is not None:
+                    cv_shap_file = cv_shap_dir / "global_summary.csv"
+                    cv_shap_global.to_csv(cv_shap_file, index=False)
+                    logging.info(f"[SUCCESS] CV SHAP global summary saved: {cv_shap_file}")
+
+                cv_shap_local = CVTrainer.aggregate_cv_shap(
+                    cv_xai_results['fold_results'], scope='local'
+                )
+                if cv_shap_local is not None:
+                    cv_shap_file = cv_shap_dir / "local_summary.csv"
+                    cv_shap_local.to_csv(cv_shap_file, index=False)
+                    logging.info(f"[SUCCESS] CV SHAP local summary saved: {cv_shap_file}")
+
+                # Save CV LIME tracked instances
+                cv_lime_df = CVTrainer.aggregate_cv_lime(
+                    cv_xai_results['fold_results']
+                )
+                if cv_lime_df is not None:
+                    cv_lime_file = cv_lime_dir / "tracked.csv"
+                    cv_lime_df.to_csv(cv_lime_file, index=False)
+                    logging.info(f"[SUCCESS] CV LIME tracked saved: {cv_lime_file}")
+
+                # Log CV XAI metrics summary
+                agg = cv_xai_results['aggregated_metrics']
+                logging.info(
+                    f"  CV performance: "
+                    f"F1={agg['f1_score']['mean']:.3f}±{agg['f1_score']['std']:.3f}, "
+                    f"AUC={agg['auc_roc']['mean']:.3f}±{agg['auc_roc']['std']:.3f}"
+                )
+            except Exception as exc:
+                logging.warning(f"CV XAI failed for {dataset_name}: {exc}")
+                logging.debug(f"CV XAI traceback:", exc_info=True)
         
         # Save metrics
         results_summary[dataset_name] = {

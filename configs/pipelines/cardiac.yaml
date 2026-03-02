@@ -26,3 +26,10 @@ training:
 
 fairness:
   sensitive_attributes: [age_group, sex, ethnicity, group_cluster]
+
+xai:
+  enabled: true
+  cv_enabled: true
+  lime_instances: 3
+  cv_lime_instances: 3
+  global_max_samples: 1000

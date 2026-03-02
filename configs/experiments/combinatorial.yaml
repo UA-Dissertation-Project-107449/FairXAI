@@ -60,6 +60,12 @@ fairness_thresholds:
   max_performance_drop_pct: 15  # Maximum allowed performance drop (%)
   min_recall: 0.70  # Minimum clinical safety threshold
 
+# XAI settings
+xai:
+  enabled: true
+  max_samples: 200
+  lime_instances: 2
+
 # Paths
 paths:
   processed_dir: data/processed/cardiac

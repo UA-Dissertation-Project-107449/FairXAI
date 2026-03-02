@@ -109,7 +109,8 @@ class ExperimentVersioning:
         self,
         exp_id: str,
         config: Dict[str, Any],
-        execution_metadata: Optional[Dict[str, Any]] = None
+        execution_metadata: Optional[Dict[str, Any]] = None,
+        split_method: Optional[str] = None
     ) -> Path:
         """
         Save experiment manifest with full configuration.
@@ -118,6 +119,8 @@ class ExperimentVersioning:
             exp_id: Experiment ID
             config: Experiment configuration dictionary
             execution_metadata: Optional execution metadata
+            split_method: Optional split method (e.g. 'holdout', 'cv')
+                          for sub-directory grouping.
             
         Returns:
             Path to saved manifest file
@@ -134,6 +137,8 @@ class ExperimentVersioning:
         
         dataset = config.get('dataset', 'unknown')
         manifest_dir = self.latest_dir / "manifests" / dataset
+        if split_method:
+            manifest_dir = manifest_dir / split_method
         manifest_dir.mkdir(parents=True, exist_ok=True)
         manifest_path = manifest_dir / f"experiment_{exp_id}.yaml"
         with open(manifest_path, 'w') as f:
@@ -146,7 +151,8 @@ class ExperimentVersioning:
         self,
         exp_id: str,
         results: Dict[str, Any],
-        format: str = 'json'
+        format: str = 'json',
+        split_method: Optional[str] = None
     ) -> Path:
         """
         Save experiment results.
@@ -155,12 +161,16 @@ class ExperimentVersioning:
             exp_id: Experiment ID
             results: Results dictionary
             format: Output format ('json' or 'yaml')
+            split_method: Optional split method (e.g. 'holdout', 'cv')
+                          for sub-directory grouping.
             
         Returns:
             Path to saved results file
         """
         dataset = results.get('configuration', {}).get('dataset', 'unknown')
         results_dir = self.latest_dir / "results" / dataset
+        if split_method:
+            results_dir = results_dir / split_method
         results_dir.mkdir(parents=True, exist_ok=True)
         results_path = results_dir / f"results_{exp_id}.{format}"
         
@@ -181,7 +191,8 @@ class ExperimentVersioning:
         exp_id: str,
         predictions: Any,
         filename: Optional[str] = None,
-        dataset: Optional[str] = None
+        dataset: Optional[str] = None,
+        split_method: Optional[str] = None
     ) -> Path:
         """
         Save model predictions.
@@ -190,6 +201,9 @@ class ExperimentVersioning:
             exp_id: Experiment ID
             predictions: Predictions (DataFrame or dict)
             filename: Optional custom filename
+            dataset: Dataset name for sub-directory grouping
+            split_method: Optional split method (e.g. 'holdout', 'cv')
+                          for sub-directory grouping.
             
         Returns:
             Path to saved predictions file
@@ -199,6 +213,8 @@ class ExperimentVersioning:
         
         dataset_name = dataset or 'unknown'
         pred_dir = self.latest_dir / "predictions" / dataset_name
+        if split_method:
+            pred_dir = pred_dir / split_method
         pred_dir.mkdir(parents=True, exist_ok=True)
         pred_path = pred_dir / filename
         
