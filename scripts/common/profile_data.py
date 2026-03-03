@@ -56,9 +56,9 @@ def main():
     log_dir = setup_phase_logging(project_root, 'data_profiling.log', verbose=args.verbose)
     run_id = resolve_run_id(args.run_id) if args.run_id else None
     if run_id:
-        results_profiling = get_run_root(project_root / f'results/{pipeline}', run_id) / 'profiling'
+        results_profiling = get_run_root(project_root / f'output/{pipeline}', run_id) / 'profiling'
     else:
-        results_profiling = project_root / f'results/{pipeline}/profiling'
+        results_profiling = project_root / f'output/{pipeline}/profiling'
     
     # Setup
     logging.info("[PHASE] Data profiling started")

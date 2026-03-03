@@ -81,7 +81,7 @@ scoring:
   min_group_size_threshold: 30  # Minimum for statistical validity
 
 output:
-  results_dir: "results/cardiac/experiments/full/latest_run/age_binning"
+  results_dir: "output/cardiac/experiments/full/latest_run/age_binning"
   artifacts:
     - comparison_table_csv
     - stability_analysis_csv

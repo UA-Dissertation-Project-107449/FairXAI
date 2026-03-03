@@ -69,7 +69,7 @@ xai:
 # Paths
 paths:
   processed_dir: data/processed/cardiac
-  results_dir: results/cardiac/experiments/full
+  results_dir: output/cardiac/experiments/full
 
 # Parallel execution
 enable_parallelization: true

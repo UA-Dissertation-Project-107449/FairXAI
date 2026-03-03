@@ -176,7 +176,7 @@ def main():
     data_processed = project_root / pipeline_cfg['paths']['processed_dir']
     run_id = os.getenv('RUN_ID')
     if run_id:
-        baseline_root = project_root / f"results/{pipeline}/runs/{run_id}/baseline"
+        baseline_root = project_root / f"output/{pipeline}/runs/{run_id}/baseline"
         experiments_dir = baseline_root / "results"
         models_dir = baseline_root / "models"
     else:
@@ -184,7 +184,7 @@ def main():
         models_dir = project_root / pipeline_cfg['paths']['models_dir']
     log_dir = setup_phase_logging(project_root, 'training_baseline.log', verbose=args.verbose)
     if not run_id:
-        baseline_root = project_root / f'results/{pipeline}/baseline'
+        baseline_root = project_root / f'output/{pipeline}/baseline'
     
     # Setup
     logging.info("[PHASE] Baseline training started")

@@ -370,7 +370,7 @@ def run_analysis(
     run_mode: str = 'partial',
     archive_previous: bool = True,
     run_id: str = None,
-    results_root: str = None,
+    output_root: str = None,
     verbose: int = 0
 ):
     """
@@ -402,20 +402,20 @@ def run_analysis(
 
     default_output_dir = experiment_cfg.get('output', {}).get('results_dir')
     if run_id:
-        base_results = Path(results_root) if results_root else (project_root / f"results/{pipeline}")
-    elif results_root:
-        base_results = Path(results_root)
+        base_output = Path(output_root) if output_root else (project_root / f"output/{pipeline}")
+    elif output_root:
+        base_output = Path(output_root)
     elif default_output_dir:
-        base_results = Path(default_output_dir)
-        if base_results.parts and base_results.name == 'mitigation':
-            base_results = base_results.parents[1]
-        if run_mode == 'partial' and 'full' in base_results.parts:
-            parts = list(base_results.parts)
+        base_output = Path(default_output_dir)
+        if base_output.parts and base_output.name == 'mitigation':
+            base_output = base_output.parents[1]
+        if run_mode == 'partial' and 'full' in base_output.parts:
+            parts = list(base_output.parts)
             idx = len(parts) - 1 - parts[::-1].index('full')
             parts[idx] = 'partial'
-            base_results = Path(*parts)
+            base_output = Path(*parts)
     else:
-        base_results = project_root / f"results/{pipeline}/experiments/{run_mode}"
+        base_output = project_root / f"output/{pipeline}/experiments/{run_mode}"
     log_subdir = f"experiments/{run_id}" if run_id else 'experiments/latest_run'
 
     # Setup logging
@@ -424,15 +424,15 @@ def run_analysis(
     logging.info("[PHASE] Mitigation comparison started")
 
     if run_id:
-        run_dir = get_run_root(base_results, run_id)
+        run_dir = get_run_root(base_output, run_id)
         run_dir.mkdir(parents=True, exist_ok=True)
         output_dir = Path(output_dir) if output_dir else run_dir / 'experiments' / run_mode / 'mitigation'
     else:
-        latest_dir = base_results / 'latest_run'
+        latest_dir = base_output / 'latest_run'
         if run_mode == 'partial':
-            archive_latest_run(base_results, enabled=True, logger=logger)
+            archive_latest_run(base_output, enabled=True, logger=logger)
         else:
-            archive_latest_run(base_results, enabled=archive_previous, logger=logger)
+            archive_latest_run(base_output, enabled=archive_previous, logger=logger)
         output_dir = Path(output_dir) if output_dir else latest_dir / 'mitigation'
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -445,7 +445,7 @@ def run_analysis(
     logging.info(f"  Timestamp: {timestamp}")
     if run_id:
         logging.info(f"  Run ID: {run_id}")
-        append_run_history(base_results, {
+        append_run_history(base_output, {
             'run_id': run_id,
             'pipeline': pipeline,
             'mode': run_mode,
@@ -572,8 +572,8 @@ def run_analysis(
     logging.info("[PHASE] Mitigation comparison complete")
 
     if run_id:
-        update_latest_pointer(base_results, run_dir, logger)
-        append_run_history(base_results, {
+        update_latest_pointer(base_output, run_dir, logger)
+        append_run_history(base_output, {
             'run_id': run_id,
             'pipeline': pipeline,
             'mode': run_mode,
@@ -591,7 +591,7 @@ def main():
     parser.add_argument('--datasets', type=str, nargs='+',
                         help='Datasets to process (default: from config)')
     parser.add_argument('--output-dir', type=str,
-                       help='Output directory (default: from config or results/{pipeline}/experiments/{run_mode}/latest_run/mitigation)')
+                       help='Output directory (default: from config or output/{pipeline}/experiments/{run_mode}/latest_run/mitigation)')
     parser.add_argument('--pipeline', type=str, default='cardiac',
                        help='Pipeline name (e.g., cardiac, dermatology)')
     parser.add_argument('--run-mode', type=str, choices=['full', 'partial'],
@@ -602,8 +602,8 @@ def main():
                        help='Archive previous latest_run (full runs only)')
     parser.add_argument('--run-id', type=str, default=os.getenv('RUN_ID'),
                        help='Run identifier (optional, enables run-scoped outputs)')
-    parser.add_argument('--results-root', type=str, default=None,
-                       help='Base results directory for run outputs')
+    parser.add_argument('--output-root', type=str, default=None,
+                       help='Base output directory for run outputs')
     parser.add_argument('-v', '--verbose', action='count', default=0, help='Verbosity: -v=info, -vv=debug')
     args = parser.parse_args()
     
@@ -615,7 +615,7 @@ def main():
         run_mode=args.run_mode,
         archive_previous=args.archive_previous,
         run_id=args.run_id,
-        results_root=args.results_root,
+        output_root=args.output_root,
         verbose=args.verbose
     )
 

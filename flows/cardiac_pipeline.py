@@ -191,7 +191,7 @@ def cardiac_pipeline(
         return stage_number in active_nums
 
     # --- Resolve run ID -----------------------------------------------------
-    base_results = ROOT_DIR / "results" / "cardiac"
+    base_results = ROOT_DIR / "output" / "cardiac"
     if resume_from:
         # Re-use an existing run
         if run_id_override:
@@ -361,18 +361,18 @@ def cardiac_pipeline(
     logger.info("PIPELINE COMPLETE")
     logger.info("======================================================================")
     logger.info(f"Stages executed: {first.name} → {last.name}")
-    logger.info("Results saved to:")
+    logger.info("Output saved to:")
     logger.info(f"  - Run root:           {run_root}")
     if _should_run(1):
         logger.info(f"  - Raw data:           {ROOT_DIR}/data/raw/cardiac")
     if _should_run(4):
         logger.info(f"  - Processed data:     {ROOT_DIR}/data/processed/cardiac")
     if _should_run(2):
-        logger.info(f"  - Profiling results:  {run_root}/profiling")
+        logger.info(f"  - Profiling:          {run_root}/profiling")
     if _should_run(3):
         logger.info(f"  - Recommendations:    {run_root}/recommendations")
     if _should_run(5):
-        logger.info(f"  - Baseline results:   {run_root}/baseline")
+        logger.info(f"  - Baseline:           {run_root}/baseline")
     if age_task:
         logger.info(f"  - Age binning:        {run_root}/experiments/full/age_binning")
     if mitigation_task:

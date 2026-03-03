@@ -287,7 +287,7 @@ def main():
     pipeline_cfg = load_pipeline_config(project_root, pipeline)
     run_id = os.getenv('RUN_ID')
     if run_id:
-        baseline_root = project_root / f"results/{pipeline}/runs/{run_id}/baseline"
+        baseline_root = project_root / f"output/{pipeline}/runs/{run_id}/baseline"
         experiments_dir = baseline_root / "results"
         results_dir = baseline_root / "fairness"
     else:

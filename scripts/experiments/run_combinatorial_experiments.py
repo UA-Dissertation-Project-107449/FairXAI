@@ -852,7 +852,7 @@ def run_combinatorial_analysis(
     verbose: int = 0,
     archive_previous: bool = True,
     run_id: Optional[str] = None,
-    results_root: Optional[str] = None
+    output_root: Optional[str] = None
 ):
     """Main orchestration for combinatorial experiments."""
     project_root = get_project_root(Path(__file__))
@@ -888,20 +888,20 @@ def run_combinatorial_analysis(
     target_col = pipeline_cfg.get('training', {}).get('target', 'heart_disease')
 
     # Initialize versioning
-    base_results_dir = Path(results_root) if results_root else Path(config['paths']['results_dir'])
+    base_output_dir = Path(output_root) if output_root else Path(config['paths']['results_dir'])
     if run_id:
-        base_results_dir = Path(results_root) if results_root else (project_root / f"results/{pipeline}")
-        run_dir = get_run_root(base_results_dir, run_id) / 'experiments' / 'full'
+        base_output_dir = Path(output_root) if output_root else (project_root / f"output/{pipeline}")
+        run_dir = get_run_root(base_output_dir, run_id) / 'experiments' / 'full'
         run_dir.mkdir(parents=True, exist_ok=True)
-        versioning = ExperimentVersioning(base_results_dir, run_dir=run_dir)
+        versioning = ExperimentVersioning(base_output_dir, run_dir=run_dir)
     else:
-        versioning = ExperimentVersioning(base_results_dir)
+        versioning = ExperimentVersioning(base_output_dir)
         # Archive previous run if requested
         if archive_previous:
             versioning.archive_previous_run()
 
     if run_id:
-        append_run_history(base_results_dir, {
+        append_run_history(base_output_dir, {
             'run_id': run_id,
             'pipeline': pipeline,
             'mode': 'full',
@@ -1004,8 +1004,8 @@ def run_combinatorial_analysis(
     logger.info("[PHASE] Combinatorial experiments complete")
 
     if run_id:
-        update_latest_pointer(base_results_dir, versioning.latest_dir, logger)
-        append_run_history(base_results_dir, {
+        update_latest_pointer(base_output_dir, versioning.latest_dir, logger)
+        append_run_history(base_output_dir, {
             'run_id': run_id,
             'pipeline': pipeline,
             'mode': 'full',
@@ -1069,10 +1069,10 @@ def main():
         help='Run identifier (optional, enables run-scoped outputs)'
     )
     parser.add_argument(
-        '--results-root',
+        '--output-root',
         type=str,
         default=None,
-        help='Base results directory for run outputs'
+        help='Base output directory for run outputs'
     )
     
     args = parser.parse_args()
@@ -1084,7 +1084,7 @@ def main():
         verbose=args.verbose,
         archive_previous=args.archive_previous,
         run_id=args.run_id,
-        results_root=args.results_root
+        output_root=args.output_root
     )
 
 

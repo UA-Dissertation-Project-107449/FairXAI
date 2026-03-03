@@ -363,7 +363,7 @@ def run_comparison_analysis(
     no_plots: bool = False,
     verbose: int = 0,
     run_id: str = None,
-    results_root: str = None
+    output_root: str = None
 ):
     """Main comparison script."""
     project_root = get_project_root(Path(__file__))
@@ -377,19 +377,19 @@ def run_comparison_analysis(
     logging.info("="*80)
     logging.info("[PHASE] Comparison started")
     
-    base_results_dir = Path(results_root) if results_root else (project_root / f"results/{pipeline}")
+    base_output_dir = Path(output_root) if output_root else (project_root / f"output/{pipeline}")
     if results_dir:
         candidate = Path(results_dir)
         if (candidate / 'manifests').exists() or (candidate / 'results').exists():
             run_dir = candidate
-            base_results_dir = candidate.parent
+            base_output_dir = candidate.parent
         else:
-            base_results_dir = candidate
-            run_dir = resolve_latest_run_dir(base_results_dir)
+            base_output_dir = candidate
+            run_dir = resolve_latest_run_dir(base_output_dir)
     elif run_id:
-        run_dir = base_results_dir / 'runs' / run_id / 'experiments' / 'full'
+        run_dir = base_output_dir / 'runs' / run_id / 'experiments' / 'full'
     else:
-        run_dir = resolve_latest_run_dir(base_results_dir)
+        run_dir = resolve_latest_run_dir(base_output_dir)
 
     if run_dir is not None and not (run_dir / 'manifests').exists():
         candidate = run_dir / 'experiments' / 'full'
@@ -397,12 +397,12 @@ def run_comparison_analysis(
             run_dir = candidate
 
     if run_dir is None or not run_dir.exists():
-        logging.error(f"No run directory found under {base_results_dir}")
+        logging.error(f"No run directory found under {base_output_dir}")
         logging.error("Run combinatorial experiments first")
         return
 
     # Initialize versioning
-    versioning = ExperimentVersioning(base_results_dir, run_dir=run_dir)
+    versioning = ExperimentVersioning(base_output_dir, run_dir=run_dir)
     
     # Load all results
     logging.info("\nLoading experiment results...")
@@ -643,10 +643,10 @@ def main():
         help='Run identifier to compare'
     )
     parser.add_argument(
-        '--results-root',
+        '--output-root',
         type=str,
         default=None,
-        help='Base results directory for run outputs'
+        help='Base output directory for run outputs'
     )
     parser.add_argument(
         '--pipeline',
@@ -688,7 +688,7 @@ def main():
         no_plots=args.no_plots,
         verbose=args.verbose,
         run_id=args.run_id,
-        results_root=args.results_root
+        output_root=args.output_root
     )
 
 

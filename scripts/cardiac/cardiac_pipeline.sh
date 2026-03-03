@@ -81,7 +81,7 @@ should_run() {
 # ======================================================================
 # Resolve run ID
 # ======================================================================
-BASE_RESULTS="$ROOT_DIR/results/cardiac"
+BASE_RESULTS="$ROOT_DIR/output/cardiac"
 
 if [[ -n "$RESUME_FROM" ]] && [[ -z "${RUN_ID:-}" ]]; then
     # Auto-resolve from latest_run pointer
@@ -332,9 +332,9 @@ echo "Results saved to:"
 echo "  - Run root:           $RUN_ROOT"
 should_run 1 && echo "  - Raw data:           $ROOT_DIR/data/raw/cardiac"
 should_run 4 && echo "  - Processed data:     $ROOT_DIR/data/processed/cardiac"
-should_run 2 && echo "  - Profiling results:  $RUN_ROOT/profiling"
+should_run 2 && echo "  - Profiling:          $RUN_ROOT/profiling"
 should_run 3 && [[ "$RUN_RECOMMENDATIONS" == "true" ]] && echo "  - Recommendations:    $RUN_ROOT/recommendations"
-should_run 5 && echo "  - Baseline results:   $RUN_ROOT/baseline"
+should_run 5 && echo "  - Baseline:           $RUN_ROOT/baseline"
 should_run 7 && [[ "$RUN_AGE_BINNING" == "true" ]] && echo "  - Age binning:        $RUN_ROOT/experiments/full/age_binning"
 should_run 8 && [[ "$RUN_MITIGATION" == "true" ]] && echo "  - Mitigation:         $RUN_ROOT/experiments/full/mitigation"
 should_run 9 && [[ "$RUN_COMBINATORIAL" == "true" ]] && echo "  - Combinatorial:      $RUN_ROOT/experiments/full"

@@ -683,7 +683,7 @@ def generate_summary_report(
         scoring_weights: Optional dict with 'sample_size', 'balance', 'fairness' weights
     
     Example:
-        >>> generate_summary_report(results, Path('results/age_binning_report.md'))
+        >>> generate_summary_report(results, Path('output/age_binning_report.md'))
     """
     logger.info(f"Generating summary report: {output_file}")
     

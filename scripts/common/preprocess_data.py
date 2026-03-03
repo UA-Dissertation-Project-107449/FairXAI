@@ -118,9 +118,9 @@ def main():
     log_dir = setup_phase_logging(project_root, 'preprocessing.log', verbose=args.verbose)
     run_id = os.getenv('RUN_ID')
     if run_id:
-        results_fairness = project_root / f"results/{pipeline}/runs/{run_id}/profiling/fairness"
+        results_fairness = project_root / f"output/{pipeline}/runs/{run_id}/profiling/fairness"
     else:
-        results_fairness = project_root / f"results/{pipeline}/profiling/fairness"
+        results_fairness = project_root / f"output/{pipeline}/profiling/fairness"
 
     # Setup
     logging.info("[PHASE] Preprocessing started")
