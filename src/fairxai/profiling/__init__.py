@@ -1,4 +1,8 @@
-"""Profiling utilities."""
+"""Profiling package public API.
+
+Exports dataset complexity metric utilities used by profiling and
+recommendation workflows.
+"""
 
 from .complexity import (
     compute_complexity_metrics,
