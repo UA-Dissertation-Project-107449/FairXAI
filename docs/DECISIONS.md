@@ -30,7 +30,7 @@
 
 - **`models/`**: Trained model checkpoints (gitignored)
 
-- **`results/`**: All outputs and analysis results
+- **`output/`**: All outputs and analysis results
   - `fairness/`, `explainability/`: Metric results by domain
   - `plots/`: Generated visualizations
   - `reports/`: Summary reports

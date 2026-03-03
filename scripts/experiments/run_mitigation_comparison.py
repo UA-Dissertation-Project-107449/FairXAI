@@ -416,10 +416,11 @@ def run_analysis(
             base_output = Path(*parts)
     else:
         base_output = project_root / f"output/{pipeline}/experiments/{run_mode}"
-    log_subdir = f"experiments/{run_id}" if run_id else 'experiments/latest_run'
-
     # Setup logging
-    setup_phase_logging(project_root, 'mitigation_comparison.log', verbose=verbose, log_subdir=log_subdir)
+    setup_phase_logging(
+        project_root, 'mitigation_comparison.log', verbose=verbose,
+        run_id=run_id, stage_name='mitigation',
+    )
     logger = logging.getLogger(__name__)
     logging.info("[PHASE] Mitigation comparison started")
 

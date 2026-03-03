@@ -293,10 +293,11 @@ def main():
     else:
         experiments_dir = project_root / pipeline_cfg['paths']['experiments_dir']
         results_dir = project_root / pipeline_cfg['paths']['results_fairness_dir']
-    log_dir = project_root / f'logs/{pipeline}'
-    
     # Setup
-    log_dir = setup_phase_logging(project_root, 'fairness_assessment.log', verbose=args.verbose)
+    log_dir = setup_phase_logging(
+        project_root, 'fairness_assessment.log', verbose=args.verbose,
+        run_id=run_id, stage_name='assess',
+    )
     logging.info("[PHASE] Fairness assessment started")
     results_dir.mkdir(parents=True, exist_ok=True)
     

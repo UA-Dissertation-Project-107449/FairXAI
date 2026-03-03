@@ -115,8 +115,11 @@ def main():
     pipeline_cfg = load_pipeline_config(project_root, pipeline)
     data_raw = project_root / pipeline_cfg['paths']['raw_dir']
     data_processed_base = project_root / pipeline_cfg['paths']['processed_dir']
-    log_dir = setup_phase_logging(project_root, 'preprocessing.log', verbose=args.verbose)
     run_id = os.getenv('RUN_ID')
+    log_dir = setup_phase_logging(
+        project_root, 'preprocessing.log', verbose=args.verbose,
+        run_id=run_id, stage_name='preprocess',
+    )
     if run_id:
         results_fairness = project_root / f"output/{pipeline}/runs/{run_id}/profiling/fairness"
     else:

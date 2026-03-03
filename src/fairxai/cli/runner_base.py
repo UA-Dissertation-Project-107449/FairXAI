@@ -1,5 +1,7 @@
 """Shared helpers for script runners."""
 
+from __future__ import annotations
+
 from pathlib import Path
 from typing import Dict, Optional, Union
 
@@ -21,7 +23,36 @@ def setup_phase_logging(
     log_name: str,
     verbose: Union[bool, int] = 0,
     log_subdir: str = "cardiac",
+    *,
+    run_id: Optional[str] = None,
+    stage_name: Optional[str] = None,
 ) -> Path:
-    log_dir = root / "logs" / log_subdir
-    setup_logging(log_dir / log_name, verbose=verbose)
+    """Configure per-phase logging.
+
+    When *run_id* **and** *stage_name* are both supplied, logs are written to a
+    numbered phase directory under the run::
+
+        logs/{log_subdir}/runs/{run_id}/{NN}_{stage_name}/{stage_name}.log
+
+    Otherwise the legacy flat layout is used::
+
+        logs/{log_subdir}/{log_name}
+    """
+    if run_id and stage_name:
+        from fairxai.pipeline.stages import STAGE_BY_NAME  # local to avoid circular
+
+        stage = STAGE_BY_NAME.get(stage_name.lower())
+        if stage:
+            phase_dir = f"{stage.number:02d}_{stage.name}"
+            log_dir = root / "logs" / log_subdir / "runs" / run_id / phase_dir
+            log_file = log_dir / f"{stage.name}.log"
+        else:
+            # Unknown stage — fall back to named directory
+            log_dir = root / "logs" / log_subdir / "runs" / run_id / stage_name
+            log_file = log_dir / f"{stage_name}.log"
+    else:
+        log_dir = root / "logs" / log_subdir
+        log_file = log_dir / log_name
+
+    setup_logging(log_file, verbose=verbose)
     return log_dir

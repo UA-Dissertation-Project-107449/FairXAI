@@ -2,21 +2,21 @@
 # cleanup.sh — Remove generated outputs from the FairXAI workspace.
 #
 # Default targets (all enabled unless flags say otherwise):
-#   results/      — experiment runs, recommendations, …
+#   output/       — experiment runs, recommendations, …
 #   data/processed/ — pre-processed CSVs
 #   data/raw/       — downloaded raw data  (data/external/ is NEVER touched)
 #   logs/           — execution logs
 #
 # Flags:
-#   --results-only   Only remove results/ (skip data/ and logs/)
-#   --keep-latest    Preserve the run pointed to by results/*/latest_run
+#   --output-only    Only remove output/ (skip data/ and logs/)
+#   --keep-latest    Preserve the run pointed to by output/*/latest_run
 #   --nuke-env       Also remove the virtual environment (.venv)
 #   --dry-run        Show what would be deleted without deleting anything
 #   -y / --yes       Skip confirmation prompt
 #
 # Usage examples:
 #   ./cleanup.sh                     # default — remove all four targets
-#   ./cleanup.sh --results-only      # only results/
+#   ./cleanup.sh --output-only       # only output/
 #   ./cleanup.sh --keep-latest       # keep latest run per pipeline
 #   ./cleanup.sh --dry-run           # preview only
 #   ./cleanup.sh --nuke-env -y       # scorched earth, no prompt
@@ -28,7 +28,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ------------------------------------------------------------------
 # Defaults
 # ------------------------------------------------------------------
-RESULTS_ONLY=false
+OUTPUT_ONLY=false
 KEEP_LATEST=false
 NUKE_ENV=false
 DRY_RUN=false
@@ -39,14 +39,14 @@ AUTO_YES=false
 # ------------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --results-only) RESULTS_ONLY=true ;;
+        --output-only)  OUTPUT_ONLY=true  ;;
         --keep-latest)  KEEP_LATEST=true  ;;
         --nuke-env)     NUKE_ENV=true     ;;
         --dry-run)      DRY_RUN=true      ;;
         -y|--yes)       AUTO_YES=true     ;;
         *)
             echo "Unknown flag: $1" >&2
-            echo "Usage: $0 [--results-only] [--keep-latest] [--nuke-env] [--dry-run] [-y]" >&2
+            echo "Usage: $0 [--output-only] [--keep-latest] [--nuke-env] [--dry-run] [-y]" >&2
             exit 1
             ;;
     esac
@@ -80,11 +80,11 @@ nuke() {
 # ------------------------------------------------------------------
 TARGETS=()
 
-# results/ — always included
-if [[ -d "${SCRIPT_DIR}/results" ]]; then
+# output/ — always included
+if [[ -d "${SCRIPT_DIR}/output" ]]; then
     if $KEEP_LATEST; then
         # Remove everything inside each pipeline's runs/ EXCEPT the latest
-        for pipeline_dir in "${SCRIPT_DIR}"/results/*/; do
+        for pipeline_dir in "${SCRIPT_DIR}"/output/*/; do
             [[ -d "$pipeline_dir" ]] || continue
             pipeline_name="$(basename "$pipeline_dir")"
 
@@ -127,19 +127,43 @@ if [[ -d "${SCRIPT_DIR}/results" ]]; then
             fi
         done
     else
-        TARGETS+=("${SCRIPT_DIR}/results")
+        TARGETS+=("${SCRIPT_DIR}/output")
     fi
 fi
 
-if ! $RESULTS_ONLY; then
+if ! $OUTPUT_ONLY; then
     # data/processed/
     [[ -d "${SCRIPT_DIR}/data/processed" ]] && TARGETS+=("${SCRIPT_DIR}/data/processed")
 
     # data/raw/
     [[ -d "${SCRIPT_DIR}/data/raw" ]] && TARGETS+=("${SCRIPT_DIR}/data/raw")
 
-    # logs/
-    [[ -d "${SCRIPT_DIR}/logs" ]] && TARGETS+=("${SCRIPT_DIR}/logs")
+    # logs/ — honour --keep-latest for per-run log dirs
+    if [[ -d "${SCRIPT_DIR}/logs" ]]; then
+        if $KEEP_LATEST; then
+            for pipeline_log_dir in "${SCRIPT_DIR}"/logs/*/; do
+                [[ -d "$pipeline_log_dir" ]] || continue
+                latest_link="${pipeline_log_dir}latest_run"
+                latest_target=""
+                if [[ -L "$latest_link" ]]; then
+                    latest_target="$(readlink -f "$latest_link")"
+                fi
+                runs_dir="${pipeline_log_dir}runs"
+                if [[ -d "$runs_dir" ]]; then
+                    for run in "${runs_dir}"/*/; do
+                        run_real="$(readlink -f "$run")"
+                        if [[ -n "$latest_target" && "$run_real" == "$latest_target" ]]; then
+                            info "Keeping latest log run: ${run}"
+                        else
+                            TARGETS+=("$run")
+                        fi
+                    done
+                fi
+            done
+        else
+            TARGETS+=("${SCRIPT_DIR}/logs")
+        fi
+    fi
 fi
 
 # Optional: virtual environment
@@ -182,8 +206,8 @@ done
 
 # Recreate empty directories so the project layout stays intact
 if ! $DRY_RUN; then
-    mkdir -p "${SCRIPT_DIR}/results"
-    if ! $RESULTS_ONLY; then
+    mkdir -p "${SCRIPT_DIR}/output"
+    if ! $OUTPUT_ONLY; then
         mkdir -p "${SCRIPT_DIR}/data/processed"
         mkdir -p "${SCRIPT_DIR}/data/raw"
         mkdir -p "${SCRIPT_DIR}/logs"

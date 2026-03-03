@@ -22,6 +22,7 @@ from fairxai.cli.runner_utils import (
     resolve_run_id,
     get_run_root,
     resolve_latest_run_dir,
+    update_log_latest_pointer,
 )
 from fairxai.pipeline.stages import (
     STAGES,
@@ -31,6 +32,7 @@ from fairxai.pipeline.stages import (
     validate_prior_stages,
     mark_stage_complete,
 )
+from fairxai.utils.logging_utils import summarize_run_logs
 
 
 def _run_script(script_path: Path, args: list, env: dict) -> None:
@@ -211,6 +213,10 @@ def cardiac_pipeline(
     os.environ["RUN_ID"] = run_id
     run_root = get_run_root(base_results, run_id)
 
+    # Point logs/cardiac/latest_run at this run's log directory
+    import logging as _logging
+    update_log_latest_pointer(ROOT_DIR, run_id, _logging.getLogger(__name__))
+
     # --- Validate prior stages on resume ------------------------------------
     if resume_from:
         first_stage = resolve_stage(resume_from)
@@ -355,6 +361,15 @@ def cardiac_pipeline(
         future = task_map[stage_num]
         if future is not None:
             _checkpoint(stage_num, future)
+
+    # --- Log summary --------------------------------------------------------
+    run_log_dir = ROOT_DIR / "logs" / "cardiac" / "runs" / run_id
+    log_summary = summarize_run_logs(run_log_dir)
+    if log_summary["total_warnings"] or log_summary["total_errors"]:
+        logger.info(
+            f"Log summary: {log_summary['total_warnings']} warning(s), "
+            f"{log_summary['total_errors']} error(s) — see {run_log_dir / 'run_summary.json'}"
+        )
 
     # --- Summary ------------------------------------------------------------
     logger.info("======================================================================")

@@ -114,7 +114,7 @@ python flows/cardiac_pipeline.py --resume-from recommend --go-until recommend
 Each stage writes a completion marker on success to:
 
 ```
-results/cardiac/runs/<run_id>/.checkpoints/<number>_<name>.done
+output/cardiac/runs/<run_id>/.checkpoints/<number>_<name>.done
 ```
 
 Example after a full run:

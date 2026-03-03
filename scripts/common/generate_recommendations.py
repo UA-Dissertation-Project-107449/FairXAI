@@ -123,9 +123,11 @@ def main():
 
     # Paths
     project_root = get_project_root(Path(__file__))
-    setup_phase_logging(project_root, 'recommendations.log', verbose=args.verbose)
-
     run_id = resolve_run_id(args.run_id) if args.run_id else None
+    setup_phase_logging(
+        project_root, 'recommendations.log', verbose=args.verbose,
+        run_id=run_id, stage_name='recommend',
+    )
 
     # Determine output directory
     if args.output_dir:

@@ -112,6 +112,16 @@ export RUN_ID
 RUN_ROOT="$BASE_RESULTS/runs/$RUN_ID"
 CHECKPOINT_DIR="$RUN_ROOT/.checkpoints"
 
+# Point logs/cardiac/latest_run at this run
+LOG_RUN_DIR="$ROOT_DIR/logs/cardiac/runs/$RUN_ID"
+mkdir -p "$LOG_RUN_DIR"
+_LOG_BASE="$ROOT_DIR/logs/cardiac"
+_LOG_LINK="$_LOG_BASE/latest_run"
+_LOG_TXT="$_LOG_BASE/latest_run.txt"
+[[ -L "$_LOG_LINK" ]] && rm -f "$_LOG_LINK"
+ln -s "runs/$RUN_ID" "$_LOG_LINK" 2>/dev/null || true
+echo "$RUN_ID" > "$_LOG_TXT"
+
 # ======================================================================
 # Checkpoint helpers
 # ======================================================================
@@ -320,6 +330,21 @@ if should_run 10; then
 else
     echo "[10/10] compare — SKIPPED (outside active range)"
 fi
+
+# ======================================================================
+# Log summary
+# ======================================================================
+python3 -c "
+import sys, pathlib
+sys.path.insert(0, str(pathlib.Path('$ROOT_DIR') / 'src'))
+from fairxai.utils.logging_utils import summarize_run_logs
+s = summarize_run_logs(pathlib.Path('$LOG_RUN_DIR'))
+tw, te = s['total_warnings'], s['total_errors']
+if tw or te:
+    print(f'Log summary: {tw} warning(s), {te} error(s) — see $LOG_RUN_DIR/run_summary.json')
+else:
+    print('Log summary: no warnings or errors recorded.')
+"
 
 # ======================================================================
 # Summary

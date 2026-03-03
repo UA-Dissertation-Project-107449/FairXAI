@@ -112,6 +112,29 @@ All scripts accept a `-v` / `-vv` flag (stacks with `action='count'`):
 File logs always capture **DEBUG+** regardless of verbosity.  
 Dedicated `*_warnings.log` and `*_errors.log` files are always written alongside the main log.
 
+### Log directory layout
+
+When a `run_id` is active, logs are written to numbered phase directories that
+mirror the pipeline stages:
+
+```text
+logs/cardiac/
+├── latest_run → runs/<run_id>
+└── runs/<run_id>/
+    ├── 01_load/
+    │   ├── load.log
+    │   ├── load_warnings.log
+    │   └── load_errors.log
+    ├── 02_profile/
+    │   ├── profile.log
+    │   ├── profile_warnings.log
+    │   └── profile_errors.log
+    ├── …
+    └── run_summary.json        # auto-generated at end of pipeline
+```
+
+Standalone (no `run_id`) runs still write to the flat `logs/cardiac/` directory.
+
 **Bash pipeline** — set `VERBOSE=0`, `1`, or `2` (legacy `true`/`false` still accepted):
 
 ```bash
@@ -128,14 +151,14 @@ python3 flows/cardiac_pipeline.py       # quiet (default)
 
 ## Outputs
 
-All outputs are written under `results/<pipeline>/runs/<run_id>/` when `RUN_ID` is set. If not set, outputs go to the default pipeline folders under `results/<pipeline>/`.
+All outputs are written under `output/<pipeline>/runs/<run_id>/` when `RUN_ID` is set. If not set, outputs go to the default pipeline folders under `output/<pipeline>/`.
 
 ## Utility scripts
 
 Two helper scripts live at the **project root** (not inside `scripts/`):
 
 - **`setup.sh`** — bootstraps the virtual environment, checks Python ≥ 3.10, installs `requirements.txt`.
-- **`cleanup.sh`** — removes generated outputs (`results/`, `data/processed/`, `data/raw/`, `logs/`). Flags: `--results-only`, `--keep-latest`, `--nuke-env`, `--dry-run`, `-y`.
+- **`cleanup.sh`** — removes generated outputs (`output/`, `data/processed/`, `data/raw/`, `logs/`). Flags: `--output-only`, `--keep-latest`, `--nuke-env`, `--dry-run`, `-y`.
 
 ## Notes
 

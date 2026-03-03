@@ -6,8 +6,8 @@ This folder contains exploratory and profiling notebooks for the FairXAI cardiac
 
 Primary artifacts are written under:
 
-- `results/<pipeline>/profiling/` (standalone, no `--run-id`)
-- `results/<pipeline>/runs/<run_id>/profiling/` (when `--run-id` is passed or `RUN_ID` env is set)
+- `output/<pipeline>/profiling/` (standalone, no `--run-id`)
+- `output/<pipeline>/runs/<run_id>/profiling/` (when `--run-id` is passed or `RUN_ID` env is set)
 
 Files:
 
@@ -70,6 +70,6 @@ Each `<dataset>_complexity.json` contains the `complexity_metrics` block only, t
 - Sensitive attributes are configured via `configs/pipelines/<pipeline>.yaml` under `fairness.sensitive_attributes`.
 - Profiling relies on standardized raw datasets (`*_standardized.csv`).
 - If profile files are missing, rerun the profiling step or the full pipeline.
-- Profiling notebook loaders prefer `results/<pipeline>/latest_run/profiling/` when available, and fall back to `results/<pipeline>/profiling/`.
+- Profiling notebook loaders prefer `output/<pipeline>/latest_run/profiling/` when available, and fall back to `output/<pipeline>/profiling/`.
 - Notebook helpers prefer `<dataset>_data_profile.json` as source of truth and fall back to `<dataset>_complexity.json` only when primary profile complexity fields are missing.
 - Notebook-exported tables are saved to `notebooks/tables/<pipeline>/` with a `profiling_` prefix (e.g., `profiling_dataset_overview.csv`).

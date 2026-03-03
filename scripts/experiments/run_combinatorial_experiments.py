@@ -858,8 +858,10 @@ def run_combinatorial_analysis(
     project_root = get_project_root(Path(__file__))
     use_run_id = bool(run_id or os.getenv('RUN_ID') or os.getenv('PREFECT__RUNTIME__FLOW_RUN_ID'))
     run_id = resolve_run_id(run_id) if use_run_id else None
-    log_subdir = f"experiments/{run_id}" if run_id else 'experiments/latest_run'
-    setup_phase_logging(project_root, 'combinatorial_experiments.log', verbose=verbose, log_subdir=log_subdir)
+    setup_phase_logging(
+        project_root, 'combinatorial_experiments.log', verbose=verbose,
+        run_id=run_id, stage_name='combinatorial',
+    )
     logger = logging.getLogger(__name__)
     
     logger.info("="*80)

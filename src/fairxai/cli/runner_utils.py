@@ -168,3 +168,20 @@ def append_run_history(base_results: Path, record: Dict[str, Any]) -> None:
     with open(history_path, 'a', encoding='utf-8') as handle:
         handle.write(json.dumps(record, default=str))
         handle.write('\n')
+
+
+def update_log_latest_pointer(
+    project_root: Path,
+    run_id: str,
+    logger: logging.Logger,
+    log_subdir: str = "cardiac",
+) -> None:
+    """Point ``logs/{log_subdir}/latest_run`` at the current run's log dir.
+
+    Re-uses the same atomic-symlink + .txt fallback logic as
+    :func:`update_latest_pointer`.
+    """
+    base_logs = project_root / "logs" / log_subdir
+    run_log_dir = base_logs / "runs" / run_id
+    run_log_dir.mkdir(parents=True, exist_ok=True)
+    update_latest_pointer(base_logs, run_log_dir, logger)

@@ -8,8 +8,11 @@ Verbosity levels
 2 (-vv)     — debug: console shows all DEBUG+ messages.
 """
 
+from __future__ import annotations
+
+import json
 from pathlib import Path
-from typing import Union
+from typing import Any, Dict, Union
 import logging
 import warnings
 
@@ -99,3 +102,64 @@ def setup_logging(
     logging.captureWarnings(True)
     warnings.simplefilter("default")
     return logger
+
+
+# ---------------------------------------------------------------------------
+# Post-run summary
+# ---------------------------------------------------------------------------
+
+def _count_log_lines(path: Path) -> int:
+    """Count non-empty lines in a log file — one line ≈ one record."""
+    if not path.exists():
+        return 0
+    return sum(1 for line in path.read_text().splitlines() if line.strip())
+
+
+def summarize_run_logs(run_log_dir: Path) -> Dict[str, Any]:
+    """Produce a per-phase warning/error tally for a structured run log dir.
+
+    Parameters
+    ----------
+    run_log_dir : Path
+        E.g. ``logs/cardiac/runs/<run_id>``.  Expected to contain numbered
+        phase directories such as ``01_load/``, ``02_profile/``, etc.
+
+    Returns
+    -------
+    dict
+        ``{"phases": {<dir_name>: {"warnings": N, "errors": N}}, ...}``
+        plus ``total_warnings`` and ``total_errors`` roll-ups.
+        The dict is also written as ``run_summary.json`` inside *run_log_dir*.
+    """
+    summary: Dict[str, Any] = {
+        "phases": {},
+        "total_warnings": 0,
+        "total_errors": 0,
+    }
+
+    if not run_log_dir.is_dir():
+        return summary
+
+    for phase_dir in sorted(run_log_dir.iterdir()):
+        if not phase_dir.is_dir():
+            continue
+
+        warn_count = sum(
+            _count_log_lines(f) for f in phase_dir.glob("*_warnings.log")
+        )
+        err_count = sum(
+            _count_log_lines(f) for f in phase_dir.glob("*_errors.log")
+        )
+
+        summary["phases"][phase_dir.name] = {
+            "warnings": warn_count,
+            "errors": err_count,
+        }
+        summary["total_warnings"] += warn_count
+        summary["total_errors"] += err_count
+
+    # Persist alongside the phase directories
+    out_path = run_log_dir / "run_summary.json"
+    out_path.write_text(json.dumps(summary, indent=2) + "\n")
+
+    return summary

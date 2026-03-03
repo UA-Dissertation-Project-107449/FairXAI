@@ -182,7 +182,10 @@ def main():
     else:
         experiments_dir = project_root / pipeline_cfg['paths']['experiments_dir']
         models_dir = project_root / pipeline_cfg['paths']['models_dir']
-    log_dir = setup_phase_logging(project_root, 'training_baseline.log', verbose=args.verbose)
+    log_dir = setup_phase_logging(
+        project_root, 'training_baseline.log', verbose=args.verbose,
+        run_id=run_id, stage_name='train',
+    )
     if not run_id:
         baseline_root = project_root / f'output/{pipeline}/baseline'
     
