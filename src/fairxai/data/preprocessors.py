@@ -1,12 +1,14 @@
 """Data preprocessing utilities for cardiac datasets."""
 
-import pandas as pd
-import numpy as np
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.model_selection import train_test_split
-from typing import Dict, List, Tuple, Optional
+from __future__ import annotations
+
 import json
 import logging
+
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 from .schemas import available_sensitive, preferred_sensitive
 
@@ -14,7 +16,7 @@ from .schemas import available_sensitive, preferred_sensitive
 class CardiacPreprocessor:
     """Preprocess cardiac datasets for modeling."""
     
-    def __init__(self, sensitive_attrs: Optional[List[str]] = None):
+    def __init__(self, sensitive_attrs: list[str] | None = None):
         """
         Initialize preprocessor.
         
@@ -26,7 +28,7 @@ class CardiacPreprocessor:
         self.encoders = {}
         self.metadata = {}
         
-    def analyze_missing_values(self, df: pd.DataFrame) -> Dict:
+    def analyze_missing_values(self, df: pd.DataFrame) -> dict[str, object]:
         """
         Analyze missing values in dataset.
         
@@ -73,7 +75,7 @@ class CardiacPreprocessor:
         self, 
         df: pd.DataFrame, 
         strategy: str = 'analyze_only'
-    ) -> Tuple[pd.DataFrame, Dict]:
+    ) -> tuple[pd.DataFrame, dict[str, object]]:
         """
         Handle missing values according to strategy.
         
@@ -108,53 +110,17 @@ class CardiacPreprocessor:
         
         return df_processed, actions
     
-    def prepare_features(
-        self,
-        df: pd.DataFrame,
-        target: str = 'heart_disease',
-        exclude_cols: List[str] = None
-    ) -> Tuple[pd.DataFrame, pd.Series, List[str]]:
-        """
-        Prepare feature matrix and target vector.
-        
+    def _impute_missing(self, X: pd.DataFrame) -> pd.DataFrame:
+        """Fill missing values: median for numeric columns, mode for categoricals.
+
         Args:
-            df: Input DataFrame
-            target: Target column name
-            exclude_cols: Columns to exclude from features
-            
+            X: Feature matrix (modified in-place and returned).
+
         Returns:
-            Tuple of (X, y, feature_names)
+            The same DataFrame with NaNs filled.
         """
-        if exclude_cols is None:
-            exclude_cols = [
-                target,
-                '_dataset_source',
-                '_dataset_file',
-                'age_raw',  # Keep age_group instead
-            ]
-
-        # Exclude raw/original aliases to avoid duplicate semantics in training
-        exclude_cols = list(dict.fromkeys(exclude_cols + [
-            'age', 'Age',
-            'Sex', 'gender',
-            'condition', 'HeartDisease', 'cardio',
-            'id'
-        ]))
-
-        # Always exclude sensitive/group columns from model features to avoid leakage
-        exclude_cols = list(dict.fromkeys(exclude_cols + self.sensitive_attrs + [
-            'sex_extended', 'sex_bin'
-        ]))
-        
-        # Exclude target and metadata columns
-        feature_cols = [col for col in df.columns if col not in exclude_cols]
-        
-        X = df[feature_cols].copy()
-        y = df[target].copy()
-
-        # Handle missing values in features before encoding/scaling
         numeric_cols = X.select_dtypes(include=[np.number]).columns
-        categorical_cols = X.select_dtypes(include=['object', 'category']).columns
+        categorical_cols = X.select_dtypes(include=["object", "category"]).columns
 
         for col in numeric_cols:
             if X[col].isnull().any():
@@ -163,17 +129,84 @@ class CardiacPreprocessor:
         for col in categorical_cols:
             if X[col].isnull().any():
                 mode = X[col].mode(dropna=True)
-                fill_value = mode.iloc[0] if not mode.empty else 'unknown'
+                fill_value = mode.iloc[0] if not mode.empty else "unknown"
                 X[col] = X[col].fillna(fill_value)
-        
-        # Encode categorical variables
+
+        return X
+
+    def _encode_categoricals(self, X: pd.DataFrame) -> pd.DataFrame:
+        """Label-encode all object/category columns.
+
+        Encoders are cached in ``self.encoders`` so that test data can be
+        transformed with the same mapping.
+
+        Args:
+            X: Feature matrix (modified in-place and returned).
+
+        Returns:
+            The same DataFrame with categorical columns integer-encoded.
+        """
+        categorical_cols = X.select_dtypes(include=["object", "category"]).columns
+
         for col in categorical_cols:
             if col not in self.encoders:
                 self.encoders[col] = LabelEncoder()
                 X[col] = self.encoders[col].fit_transform(X[col].astype(str))
             else:
                 X[col] = self.encoders[col].transform(X[col].astype(str))
-        
+
+        return X
+
+    def prepare_features(
+        self,
+        df: pd.DataFrame,
+        target: str = 'heart_disease',
+        exclude_cols: list[str] | None = None
+    ) -> tuple[pd.DataFrame, pd.Series, list[str]]:
+        """Prepare feature matrix and target vector.
+
+        Orchestrates column exclusion, missing-value imputation, and
+        categorical encoding via :meth:`_impute_missing` and
+        :meth:`_encode_categoricals`.
+
+        Args:
+            df: Input DataFrame
+            target: Target column name
+            exclude_cols: Columns to exclude from features
+
+        Returns:
+            Tuple of (X, y, feature_names)
+        """
+        if exclude_cols is None:
+            # Pipeline metadata and the raw age column (age_group is kept)
+            exclude_cols = [
+                target,
+                '_dataset_source',
+                '_dataset_file',
+                'age_raw',
+            ]
+
+        # Raw / original-name aliases that duplicate harmonized columns
+        exclude_cols = list(dict.fromkeys(exclude_cols + [
+            'age', 'Age',           # raw age aliases
+            'Sex', 'gender',        # raw sex aliases
+            'condition', 'HeartDisease', 'cardio',  # raw target aliases
+            'id',                   # row identifier
+        ]))
+
+        # Sensitive / demographic columns — excluded to prevent leakage
+        exclude_cols = list(dict.fromkeys(exclude_cols + self.sensitive_attrs + [
+            'sex_extended', 'sex_bin',
+        ]))
+
+        feature_cols = [col for col in df.columns if col not in exclude_cols]
+
+        X = df[feature_cols].copy()
+        y = df[target].copy()
+
+        X = self._impute_missing(X)
+        X = self._encode_categoricals(X)
+
         return X, y, list(feature_cols)
     
     def scale_features(
@@ -181,7 +214,7 @@ class CardiacPreprocessor:
         X_train: pd.DataFrame,
         X_test: pd.DataFrame,
         method: str = 'standard'
-    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Scale numerical features.
         
@@ -217,7 +250,7 @@ class CardiacPreprocessor:
         target: str = 'heart_disease',
         test_size: float = 0.3,
         random_state: int = 42
-    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Perform stratified train/test split.
         
@@ -292,7 +325,7 @@ class CardiacPreprocessor:
         train_df = train_df.drop(columns=['_strat_key'])
         test_df = test_df.drop(columns=['_strat_key'])
         
-        logging.info(f"✓ Split: {len(train_df)} train, {len(test_df)} test")
+        logging.info(f"[SUCCESS] Split: {len(train_df)} train, {len(test_df)} test")
         logging.info(f"  Test size: {test_size:.1%}")
         
         return train_df, test_df
@@ -302,7 +335,7 @@ class CardiacPreprocessor:
         train_df: pd.DataFrame,
         test_df: pd.DataFrame,
         target: str = 'heart_disease'
-    ) -> Dict:
+    ) -> dict[str, object]:
         """
         Verify that train/test split maintains group distributions.
         
@@ -335,7 +368,7 @@ class CardiacPreprocessor:
         
         # Check sensitive attribute distributions
         for attr in available_sensitive(train_df, self.sensitive_attrs):
-            
+            logging.info(f"[INFO] Checking distribution for attribute: {attr}")
             train_dist = train_df[attr].value_counts(normalize=True).to_dict()
             test_dist = test_df[attr].value_counts(normalize=True).to_dict()
             
@@ -346,7 +379,7 @@ class CardiacPreprocessor:
         
         return verification
     
-    def save_metadata(self, filepath: str):
+    def save_metadata(self, filepath: str) -> None:
         """Save preprocessing metadata to JSON."""
         scaler_params = {}
         for name, scaler in self.scalers.items():
@@ -366,4 +399,4 @@ class CardiacPreprocessor:
         with open(filepath, 'w') as f:
             json.dump(metadata, f, indent=2, default=str)
         
-        logging.info(f"✓ Saved preprocessing metadata to: {filepath}")
+        logging.info(f"[SUCCESS] Saved preprocessing metadata to: {filepath}")

@@ -11,6 +11,7 @@ configs/
 ├── experiments/            # Experiment configs (age binning, mitigation, combinatorial)
 ├── models/                 # Model defaults and hyperparameters
 ├── pipelines/              # Pipeline runtime settings
+├── profiling/              # Profiling tunables (complexity metrics)
 └── schema/                 # Unified schema definitions
 ```
 
@@ -20,6 +21,7 @@ configs/
 - Dataset registry lives in `datasets/registry.yaml`.
 - Feature/target mappings are under `domain/`.
 - Experiments consume files in `experiments/`.
+- Profiling tunables (max samples, random seed, solver) live in `profiling/complexity.yaml`.
 
 ## Notes
 

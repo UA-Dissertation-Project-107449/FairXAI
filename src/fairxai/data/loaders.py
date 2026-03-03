@@ -1,20 +1,22 @@
 """Data loading utilities for cardiac datasets."""
 
-import os
+from __future__ import annotations
+
 import json
 import logging
+import os
 from pathlib import Path
-from typing import Dict, Tuple, Optional
+
 import pandas as pd
 import yaml
 
-from .schemas import harmonize_cardiac_schema
+from .schemas import harmonize_cardiac_schema, get_sex_mapping
 
 
 class CardiacDataLoader:
     """Loader for cardiac disease datasets with schema mapping."""
 
-    def __init__(self, config_path: str, feature_map_path: Optional[str] = None):
+    def __init__(self, config_path: str, feature_map_path: str | None = None):
         with open(config_path, 'r') as f:
             self.config = json.load(f)
         self.datasets = self.config.get('datasets', {})
@@ -58,14 +60,14 @@ class CardiacDataLoader:
         df = self._apply_feature_rules(df, dataset_name)
         return df
 
-    def load_all_cardiac_datasets(self, data_dir: str) -> Dict[str, pd.DataFrame]:
-        datasets: Dict[str, pd.DataFrame] = {}
+    def load_all_cardiac_datasets(self, data_dir: str) -> dict[str, pd.DataFrame]:
+        datasets: dict[str, pd.DataFrame] = {}
         for name in self.cardiac_datasets:
             try:
                 datasets[name] = self.load_dataset(name, data_dir)
-                logging.info(f"✓ Loaded {name}: {len(datasets[name])} rows")
+                logging.info(f"[SUCCESS] Loaded {name}: {len(datasets[name])} rows")
             except Exception as e:
-                logging.error(f"✗ Failed to load {name}: {e}")
+                logging.error(f"[ERROR] Failed to load {name}: {e}")
         return datasets
 
     def _apply_sensitive_standardization(self, df: pd.DataFrame, dataset_name: str) -> pd.DataFrame:
@@ -79,6 +81,9 @@ class CardiacDataLoader:
             df['age_group'] = pd.cut(df['age_raw'], bins=bins, labels=labels, include_lowest=True)
 
         # Sex mapping (normalize to 0/1 in `sex`, keep labels in `sex_extended`)
+        # Canonical fallback mappings come from configs/domain/cardiac.yaml via
+        # schemas.get_sex_mapping(); per-dataset overrides in the schema JSON
+        # take precedence when present.
         sex_key = (
             'sex' if 'sex' in sens else
             'Sex' if 'Sex' in sens else
@@ -94,24 +99,18 @@ class CardiacDataLoader:
                     mapping_num = {int(k): v for k, v in mapping_cfg.items()}
                     sex_label = raw_num.map(mapping_num)
                 else:
-                    sex_label = raw_num.map({0: 'Female', 1: 'Male', 2: 'Male'})
+                    sex_label = raw_num.map(get_sex_mapping("numeric"))
             else:
                 raw_str = raw.astype(str).str.strip()
                 if mapping_cfg:
                     mapping_str = {str(k): v for k, v in mapping_cfg.items()}
                     sex_label = raw_str.map(mapping_str)
                 else:
-                    sex_label = raw_str.map({
-                        'F': 'Female', 'Female': 'Female', '0': 'Female',
-                        'M': 'Male', 'Male': 'Male', '1': 'Male'
-                    })
+                    sex_label = raw_str.map(get_sex_mapping("string"))
 
             if sex_label.isna().all():
                 raw_str = raw.astype(str).str.strip()
-                sex_label = raw_str.map({
-                    'F': 'Female', 'Female': 'Female', '0': 'Female',
-                    'M': 'Male', 'Male': 'Male', '1': 'Male', '2': 'Male'
-                })
+                sex_label = raw_str.map(get_sex_mapping("string"))
 
             df['sex_extended'] = sex_label
             df['sex'] = sex_label.map({'Female': 0, 'Male': 1})
@@ -164,8 +163,8 @@ class CardiacDataLoader:
         if not self.feature_map:
             return df
 
-        def _extract_mappings(section: dict) -> Dict[str, list]:
-            mappings: Dict[str, list] = {}
+        def _extract_mappings(section: dict) -> dict[str, list]:
+            mappings: dict[str, list] = {}
             for entry in section.values():
                 canonical = entry.get('canonical')
                 aliases = entry.get('aliases') or []
@@ -247,7 +246,7 @@ class CardiacDataLoader:
             logging.warning(f"{dataset_name}: missing core columns after mapping: {missing}")
 
 
-def get_dataset_summary(df: pd.DataFrame, dataset_name: str) -> Dict:
+def get_dataset_summary(df: pd.DataFrame, dataset_name: str) -> dict[str, object]:
     """Basic summary used by loading script."""
     return {
         'dataset_name': dataset_name,
@@ -268,7 +267,7 @@ def load_standardized_raw(dataset: str, root: str) -> pd.DataFrame:
     return harmonize_cardiac_schema(df, dataset)
 
 
-def load_processed_splits(dataset: str, root: str, scaled: bool = True) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def load_processed_splits(dataset: str, root: str, scaled: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Load processed train/test splits for a cardiac dataset.
     scaled=True loads *_train_scaled.csv and *_test_scaled.csv; otherwise loads *_train.csv and *_test.csv
@@ -289,9 +288,9 @@ def load_processed_dataset(
     dataset: str,
     root: str,
     area: str = "cardiac",
-    binning: Optional[str] = None,
+    binning: str | None = None,
     scaled: bool = True,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Load processed splits, supporting per-binning subdirectories.
 
     Paths: {root}/data/processed/{area}/{dataset}_{binning}/{dataset}_train[_scaled].csv

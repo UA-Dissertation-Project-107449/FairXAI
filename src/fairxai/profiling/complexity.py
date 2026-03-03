@@ -1,15 +1,26 @@
-"""Complexity and overlap metrics for profiling."""
+"""Complexity and overlap metrics for profiling.
+
+Runtime tunables (max_samples, random seed, solver, etc.) are loaded from
+``configs/profiling/complexity.yaml`` via :class:`~.config.ComplexityConfig`.
+Individual metric functions still accept keyword overrides for standalone use.
+"""
 
 from __future__ import annotations
 
+import logging
+from itertools import combinations
+
 import numpy as np
 import pandas as pd
-from itertools import combinations
+
+from .config import ComplexityConfig, load_complexity_config
 
 try:
     from sklearn.linear_model import LogisticRegression
 except Exception:  # pragma: no cover - optional dependency
     LogisticRegression = None
+
+logger = logging.getLogger(__name__)
 
 
 SUPPORTED_COMPLEXITY_METRICS = [
@@ -200,11 +211,11 @@ def _sample_indices(n: int, max_samples: int, rng: np.random.Generator) -> np.nd
     return rng.choice(n, size=max_samples, replace=False)
 
 
-def n3_error(X: np.ndarray, y: np.ndarray, max_samples: int = 1000) -> float | None:
+def n3_error(X: np.ndarray, y: np.ndarray, max_samples: int = 1000, random_seed: int = 42) -> float | None:
     n = X.shape[0]
     if n < 2:
         return None
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(random_seed)
     idx = _sample_indices(n, max_samples, rng)
     Xs = X[idx]
     ys = y[idx]
@@ -215,11 +226,11 @@ def n3_error(X: np.ndarray, y: np.ndarray, max_samples: int = 1000) -> float | N
     return float(np.mean(opp))
 
 
-def n2_ratio(X: np.ndarray, y: np.ndarray, max_samples: int = 1000) -> float | None:
+def n2_ratio(X: np.ndarray, y: np.ndarray, max_samples: int = 1000, random_seed: int = 42) -> float | None:
     n = X.shape[0]
     if n < 3:
         return None
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(random_seed)
     idx = _sample_indices(n, max_samples, rng)
     Xs = X[idx]
     ys = y[idx]
@@ -244,11 +255,11 @@ def n2_ratio(X: np.ndarray, y: np.ndarray, max_samples: int = 1000) -> float | N
     return float(np.mean(ratios))
 
 
-def raug_overlap(X: np.ndarray, y: np.ndarray, k: int = 5, max_samples: int = 1000) -> float | None:
+def raug_overlap(X: np.ndarray, y: np.ndarray, k: int = 5, max_samples: int = 1000, random_seed: int = 42) -> float | None:
     n = X.shape[0]
     if n <= 1:
         return None
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(random_seed)
     idx = _sample_indices(n, max_samples, rng)
     Xs = X[idx]
     ys = y[idx]
@@ -307,8 +318,8 @@ def _nearest_label(train_X: np.ndarray, train_y: np.ndarray, test_X: np.ndarray)
     return train_y[nn]
 
 
-def n4_error(X: np.ndarray, y: np.ndarray, max_samples: int = 1000) -> float | None:
-    rng = np.random.default_rng(42)
+def n4_error(X: np.ndarray, y: np.ndarray, max_samples: int = 1000, random_seed: int = 42) -> float | None:
+    rng = np.random.default_rng(random_seed)
     synth_X, synth_y = _synthetic_interpolation(X, y, rng=rng, max_samples=max_samples)
     if synth_X is None or synth_y is None:
         return None
@@ -317,11 +328,11 @@ def n4_error(X: np.ndarray, y: np.ndarray, max_samples: int = 1000) -> float | N
     return float(np.mean(pred != synth_y))
 
 
-def l2_linear_error(X: np.ndarray, y: np.ndarray) -> float | None:
+def l2_linear_error(X: np.ndarray, y: np.ndarray, lr_solver: str = "liblinear", lr_max_iter: int = 1000) -> float | None:
     if LogisticRegression is None:
         return None
     try:
-        model = LogisticRegression(max_iter=1000, solver="liblinear")
+        model = LogisticRegression(max_iter=lr_max_iter, solver=lr_solver)
         model.fit(X, y)
         acc = model.score(X, y)
         return float(1.0 - acc)
@@ -329,11 +340,11 @@ def l2_linear_error(X: np.ndarray, y: np.ndarray) -> float | None:
         return None
 
 
-def l1_linear_boundary_error(X: np.ndarray, y: np.ndarray) -> float | None:
+def l1_linear_boundary_error(X: np.ndarray, y: np.ndarray, lr_solver: str = "liblinear", lr_max_iter: int = 1000) -> float | None:
     if LogisticRegression is None:
         return None
     try:
-        model = LogisticRegression(max_iter=1000, solver="liblinear")
+        model = LogisticRegression(max_iter=lr_max_iter, solver=lr_solver)
         model.fit(X, y)
         pred = model.predict(X)
         misclassified = pred != y
@@ -350,16 +361,22 @@ def l1_linear_boundary_error(X: np.ndarray, y: np.ndarray) -> float | None:
         return None
 
 
-def l3_linear_synth_error(X: np.ndarray, y: np.ndarray, max_samples: int = 1000) -> float | None:
+def l3_linear_synth_error(
+    X: np.ndarray, y: np.ndarray,
+    max_samples: int = 1000,
+    random_seed: int = 42,
+    lr_solver: str = "liblinear",
+    lr_max_iter: int = 1000,
+) -> float | None:
     if LogisticRegression is None:
         return None
     try:
-        model = LogisticRegression(max_iter=1000, solver="liblinear")
+        model = LogisticRegression(max_iter=lr_max_iter, solver=lr_solver)
         model.fit(X, y)
     except Exception:
         return None
 
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(random_seed)
     synth_X, synth_y = _synthetic_interpolation(X, y, rng=rng, max_samples=max_samples)
     if synth_X is None or synth_y is None:
         return None
@@ -368,10 +385,10 @@ def l3_linear_synth_error(X: np.ndarray, y: np.ndarray, max_samples: int = 1000)
     return float(np.mean(pred != synth_y))
 
 
-def t1_structural_overlap(X: np.ndarray, y: np.ndarray, max_samples: int = 600) -> float | None:
+def t1_structural_overlap(X: np.ndarray, y: np.ndarray, max_samples: int = 600, random_seed: int = 42) -> float | None:
     if X.shape[0] < 3:
         return None
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(random_seed)
     idx = _sample_indices(X.shape[0], max_samples, rng)
     Xs = X[idx]
     ys = y[idx]
@@ -418,9 +435,34 @@ def _with_aliases(metrics: dict[str, float | None]) -> dict[str, float | None]:
 
 def compute_complexity_metrics(
     df: pd.DataFrame,
-    target: str = "heart_disease",
-    max_samples: int = 1000,
-) -> dict:
+    target: str | None = None,
+    max_samples: int | None = None,
+    config: ComplexityConfig | None = None,
+) -> dict[str, float | None]:
+    """Compute all supported complexity metrics for *df*.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input data containing numeric features and a binary target.
+    target : str, optional
+        Target column name.  Falls back to ``config.default_target``.
+    max_samples : int, optional
+        Override the default sampling budget.  Falls back to ``config.max_samples``.
+    config : ComplexityConfig, optional
+        Explicit config object.  When *None*, built-in defaults are used
+        (equivalent to loading ``configs/profiling/complexity.yaml``).
+    """
+    if config is None:
+        config = ComplexityConfig()  # built-in defaults
+
+    target = target or config.default_target
+    max_samples = max_samples if max_samples is not None else config.max_samples
+    seed = config.random_seed
+    lr_solver = config.lr_solver
+    lr_max_iter = config.lr_max_iter
+    raug_k = config.raug_k
+    t1_max = config.t1_max_samples
     X, y = _select_numeric(df, target)
     if X is None or y is None:
         return {}
@@ -431,14 +473,14 @@ def compute_complexity_metrics(
         "F2": f2_overlap(X, y),
         "F3": f3_overlap(X, y),
         "F4": f4_overlap(X, y),
-        "N2": n2_ratio(X, y, max_samples=max_samples),
-        "N3": n3_error(X, y, max_samples=max_samples),
-        "N4": n4_error(X, y, max_samples=max_samples),
-        "Raug": raug_overlap(X, y, k=5, max_samples=max_samples),
-        "L1": l1_linear_boundary_error(X, y),
-        "L2": l2_linear_error(X, y),
-        "L3": l3_linear_synth_error(X, y, max_samples=max_samples),
-        "T1": t1_structural_overlap(X, y, max_samples=max_samples),
+        "N2": n2_ratio(X, y, max_samples=max_samples, random_seed=seed),
+        "N3": n3_error(X, y, max_samples=max_samples, random_seed=seed),
+        "N4": n4_error(X, y, max_samples=max_samples, random_seed=seed),
+        "Raug": raug_overlap(X, y, k=raug_k, max_samples=max_samples, random_seed=seed),
+        "L1": l1_linear_boundary_error(X, y, lr_solver=lr_solver, lr_max_iter=lr_max_iter),
+        "L2": l2_linear_error(X, y, lr_solver=lr_solver, lr_max_iter=lr_max_iter),
+        "L3": l3_linear_synth_error(X, y, max_samples=max_samples, random_seed=seed, lr_solver=lr_solver, lr_max_iter=lr_max_iter),
+        "T1": t1_structural_overlap(X, y, max_samples=t1_max, random_seed=seed),
         "BayesImbalance": bayes_imbalance(y),
     }
     output = _with_aliases(metrics)

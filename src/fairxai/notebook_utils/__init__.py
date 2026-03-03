@@ -7,6 +7,7 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 from fairxai.viz.style import PALETTE_DATASET, PALETTE_SEX, PALETTE_TARGET, UNITS
+from fairxai.data.schemas import get_sex_mapping
 from .context import resolve_root_dir, load_domain_config, get_relevant_datasets, make_figure_path_builder
 from .data import (
     load_external_datasets,
@@ -15,6 +16,38 @@ from .data import (
     summarize_stage,
     canonical_features_for_columns,
 )
+
+__all__ = [
+    # Palettes & style re-exports
+    "PALETTE_DATASET",
+    "PALETTE_SEX",
+    "PALETTE_TARGET",
+    "UNITS",
+    # Context helpers
+    "resolve_root_dir",
+    "load_domain_config",
+    "get_relevant_datasets",
+    "make_figure_path_builder",
+    # Data helpers
+    "load_external_datasets",
+    "load_raw_datasets",
+    "load_processed_scaled_datasets",
+    "summarize_stage",
+    "canonical_features_for_columns",
+    # Local helpers
+    "set_schema_cfg",
+    "resolve_project_root",
+    "detect_csv_sep",
+    "dataset_age_unit",
+    "age_group_order",
+    "apply_age_group_order",
+    "age_to_years",
+    "resolve_sex_series",
+    "add_bar_labels",
+    "add_bar_labels_with_counts",
+    "add_grouped_bar_labels",
+    "add_point_labels",
+]
 
 _SCHEMA_CFG = None
 
@@ -82,20 +115,20 @@ def age_to_years(series: pd.Series, unit: str) -> pd.Series:
 
 
 def resolve_sex_series(df: pd.DataFrame) -> pd.Series | None:
+    """Resolve a sex column to canonical Female/Male string labels.
+
+    Uses the centralized sex mapping from ``configs/domain/cardiac.yaml``
+    via :func:`fairxai.data.schemas.get_sex_mapping`.
+    """
+    sex_num = get_sex_mapping("numeric")
+    sex_str = get_sex_mapping("string")
+
     if "sex_extended" in df.columns:
         return df["sex_extended"].astype("object")
     if "sex" in df.columns:
         if pd.api.types.is_numeric_dtype(df["sex"]):
-            return df["sex"].map({0: "Female", 1: "Male", 2: "Male"}).astype("object")
-        return df["sex"].astype(str).str.strip().map({
-            "F": "Female",
-            "M": "Male",
-            "Female": "Female",
-            "Male": "Male",
-            "0": "Female",
-            "1": "Male",
-            "2": "Male",
-        })
+            return df["sex"].map(sex_num).astype("object")
+        return df["sex"].astype(str).str.strip().map(sex_str)
     if "gender" in df.columns:
         if pd.api.types.is_numeric_dtype(df["gender"]):
             return df["gender"].map({1: "Female", 2: "Male", 0: "Female"}).astype("object")

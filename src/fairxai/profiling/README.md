@@ -11,6 +11,7 @@ signals that feed downstream fairness analysis and recommendation workflows.
 | File | Purpose |
 |------|---------|
 | `complexity.py` | Complexity metric implementations and metric registry helpers |
+| `config.py` | `ComplexityConfig` dataclass and `load_complexity_config()` loader (reads `configs/profiling/complexity.yaml`) |
 | `__init__.py` | Public re-exports for profiling APIs |
 
 ## Public API
@@ -23,6 +24,10 @@ signals that feed downstream fairness analysis and recommendation workflows.
   - Validates whether a key is a primary metric or alias.
 - `is_primary_complexity_metric(metric_name)`
   - Checks canonical metric membership.
+- `ComplexityConfig`
+  - Typed configuration for tunables (max samples, random seed, solver, etc.).
+- `load_complexity_config(path=None)`
+  - Loads `ComplexityConfig` from YAML (defaults to `configs/profiling/complexity.yaml`).
 
 ## Supported Metrics
 
@@ -51,12 +56,6 @@ from fairxai.profiling import compute_complexity_metrics
 profile = compute_complexity_metrics(df, target="heart_disease")
 print(profile.get("F2"), profile.get("N3"))
 ```
-
-## Roadmap
-
-- Move tunable thresholds/constants to YAML configuration once profiling
-  parameterization is formalized (planned module-hardening follow-up).
-- Keep metric keys backward-compatible for existing result consumers.
 
 ## Dependencies
 
