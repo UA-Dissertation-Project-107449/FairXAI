@@ -2,6 +2,9 @@
 
 These wrappers are thin and defer heavy lifting to third-party libs. They keep
 inputs/output formats consistent so pipeline callers can swap explainers.
+
+Runtime behavior (sample caps, enable/disable toggles, CV usage) is configured
+by caller scripts via YAML `xai` sections.
 """
 
 from dataclasses import dataclass
@@ -146,5 +149,9 @@ def lime_explain_instance(
 
 
 def counterfactual_stub(*_: Any, **__: Any) -> None:
-    """Placeholder for future counterfactual implementations (tabular)."""
+    """Placeholder for future counterfactual implementations (tabular).
+
+    Roadmap:
+        Planned implementation target: Q2 2026.
+    """
     raise NotImplementedError("Counterfactual explanations not implemented yet for tabular data.")
