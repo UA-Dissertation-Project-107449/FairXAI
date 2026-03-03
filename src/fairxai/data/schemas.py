@@ -1,3 +1,9 @@
+"""Schema harmonization and sensitive-column helpers for data workflows.
+
+This module defines canonical sensitive/group attributes and provides utility
+functions to normalize incoming cardiac datasets into a consistent schema.
+"""
+
 from typing import Iterable, List, Sequence, Tuple
 import pandas as pd
 
