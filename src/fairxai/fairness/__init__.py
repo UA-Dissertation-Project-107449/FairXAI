@@ -1,4 +1,8 @@
-"""Fairness metrics, analysis, and mitigation techniques"""
+"""Fairness package public API.
+
+Exports fairness metrics and mitigation entry points used by scripts and
+experiments.
+"""
 
 from .metrics import FairnessMetrics
 from .mitigation import (
