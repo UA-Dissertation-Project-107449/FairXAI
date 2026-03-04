@@ -22,6 +22,7 @@ from fairxai.cli.runner_utils import (
     resolve_run_id,
     get_run_root,
     resolve_latest_run_dir,
+    update_log_latest_pointer,
 )
 from fairxai.pipeline.stages import (
     STAGES,
@@ -31,6 +32,7 @@ from fairxai.pipeline.stages import (
     validate_prior_stages,
     mark_stage_complete,
 )
+from fairxai.utils.logging_utils import summarize_run_logs
 
 
 def _run_script(script_path: Path, args: list, env: dict) -> None:
@@ -38,124 +40,126 @@ def _run_script(script_path: Path, args: list, env: dict) -> None:
     subprocess.run(cmd, env=env, check=True, cwd=str(ROOT_DIR))
 
 
+def _verbose_flags(level: int) -> list[str]:
+    """Convert a verbosity int (0/1/2) into CLI flags."""
+    if level >= 2:
+        return ["-vv"]
+    if level >= 1:
+        return ["-v"]
+    return []
+
+
 @task
-def load_data(run_id: str, verbose: bool = False):
+def load_data(run_id: str, verbose: int = 0):
     logger = get_run_logger()
     logger.info("[PHASE 1/10] Loading cardiac datasets (standardization)")
     script = ROOT_DIR / "scripts" / "cardiac" / "load_data.py"
-    args = ["-v"] if verbose else []
+    args = _verbose_flags(verbose)
     env = os.environ.copy()
     env["RUN_ID"] = run_id
     _run_script(script, args, env)
 
 
 @task
-def profile_data(run_id: str, verbose: bool = False):
+def profile_data(run_id: str, verbose: int = 0):
     logger = get_run_logger()
     logger.info("[PHASE 2/10] Profiling datasets (complexity + fairness)")
     script = ROOT_DIR / "scripts" / "cardiac" / "profile_data.py"
-    args = ["-v"] if verbose else []
+    args = _verbose_flags(verbose)
     env = os.environ.copy()
     env["RUN_ID"] = run_id
     _run_script(script, args, env)
 
 
 @task
-def generate_recommendations(run_id: str, verbose: bool = False):
+def generate_recommendations(run_id: str, verbose: int = 0):
     """Generate fairness triage recommendations (Phase 3)."""
     logger = get_run_logger()
     logger.info("[PHASE 3/10] Generating fairness triage recommendations")
     script = ROOT_DIR / "scripts" / "cardiac" / "generate_recommendations.py"
-    args = ["--run-id", run_id]
-    if verbose:
-        args.append("-v")
+    args = ["--run-id", run_id] + _verbose_flags(verbose)
     env = os.environ.copy()
     env["RUN_ID"] = run_id
     _run_script(script, args, env)
 
 
 @task
-def preprocess_data(run_id: str, all_binnings: bool = False, verbose: bool = False):
+def preprocess_data(run_id: str, all_binnings: bool = False, verbose: int = 0):
     logger = get_run_logger()
     logger.info("[PHASE 4/10] Preprocessing datasets (split + scale + fairness profiles)")
     script = ROOT_DIR / "scripts" / "cardiac" / "preprocess.py"
     args = []
     if all_binnings:
         args.append("--all-binnings")
-    if verbose:
-        args.append("-v")
+    args.extend(_verbose_flags(verbose))
     env = os.environ.copy()
     env["RUN_ID"] = run_id
     _run_script(script, args, env)
 
 
 @task
-def train_baseline_model(run_id: str, verbose: bool = False):
+def train_baseline_model(run_id: str, verbose: int = 0):
     logger = get_run_logger()
     logger.info("[PHASE 5/10] Training baseline model(s)")
     script = ROOT_DIR / "scripts" / "cardiac" / "train_baseline.py"
-    args = ["-v"] if verbose else []
+    args = _verbose_flags(verbose)
     env = os.environ.copy()
     env["RUN_ID"] = run_id
     _run_script(script, args, env)
 
 
 @task
-def assess_predictions(run_id: str, verbose: bool = False):
+def assess_predictions(run_id: str, verbose: int = 0):
     logger = get_run_logger()
     logger.info("[PHASE 6/10] Assessing post-prediction fairness")
     script = ROOT_DIR / "scripts" / "cardiac" / "assess_predictions.py"
-    args = ["-v"] if verbose else []
+    args = _verbose_flags(verbose)
     env = os.environ.copy()
     env["RUN_ID"] = run_id
     _run_script(script, args, env)
 
 
 @task
-def analyze_age_binning(run_id: str, verbose: bool = False):
+def analyze_age_binning(run_id: str, verbose: int = 0):
     """Analyzes age binning strategies."""
     logger = get_run_logger()
     logger.info("[PHASE 7/10] Age binning strategies analysis")
     script = ROOT_DIR / "scripts" / "cardiac" / "age_binning.py"
     args = ["--config", "configs/experiments/age_binning.yaml", "--run-mode", "full", "--run-id", run_id]
-    if verbose:
-        args.append("-v")
+    args.extend(_verbose_flags(verbose))
     _run_script(script, args, os.environ.copy())
 
 
 @task
-def compare_mitigation_techniques(run_id: str, verbose: bool = False):
+def compare_mitigation_techniques(run_id: str, verbose: int = 0):
     """Compares mitigation techniques."""
     logger = get_run_logger()
     logger.info("[PHASE 8/10] Mitigation techniques comparison")
     script = ROOT_DIR / "scripts" / "cardiac" / "mitigation.py"
     args = ["--config", "configs/experiments/mitigation.yaml", "--run-mode", "full", "--run-id", run_id]
-    if verbose:
-        args.append("-v")
+    args.extend(_verbose_flags(verbose))
     _run_script(script, args, os.environ.copy())
 
 
 @task
-def run_combinatorial_experiments(run_id: str, verbose: bool = False):
+def run_combinatorial_experiments(run_id: str, verbose: int = 0):
     """Runs combinatorial experiments."""
     logger = get_run_logger()
     logger.info("[PHASE 9/10] Combinatorial experiments")
     script = ROOT_DIR / "scripts" / "cardiac" / "combinatorial.py"
     args = ["--config", "configs/experiments/combinatorial.yaml", "--run-id", run_id]
-    if verbose:
-        args.append("-v")
+    args.extend(_verbose_flags(verbose))
     _run_script(script, args, os.environ.copy())
 
 
 @task
-def compare_experiments(run_id: str, verbose: bool = False):
+def compare_experiments(run_id: str, verbose: int = 0):
     """Compares experiments."""
     logger = get_run_logger()
     logger.info("[PHASE 10/10] Experiment comparison")
     script = ROOT_DIR / "scripts" / "cardiac" / "compare.py"
     args = ["--pipeline", "cardiac", "--run-id", run_id]
-    if verbose:
-        args.append("-v")
+    args.extend(_verbose_flags(verbose))
     _run_script(script, args, os.environ.copy())
 
 
@@ -165,7 +169,7 @@ def cardiac_pipeline(
     run_mitigation: bool = True,
     run_combinatorial: bool = True,
     run_comparison: bool = True,
-    verbose: bool = False,
+    verbose: int = 0,
     resume_from: Optional[str] = None,
     go_until: Optional[str] = None,
     run_id_override: Optional[str] = None,
@@ -189,7 +193,7 @@ def cardiac_pipeline(
         return stage_number in active_nums
 
     # --- Resolve run ID -----------------------------------------------------
-    base_results = ROOT_DIR / "results" / "cardiac"
+    base_results = ROOT_DIR / "output" / "cardiac"
     if resume_from:
         # Re-use an existing run
         if run_id_override:
@@ -208,6 +212,10 @@ def cardiac_pipeline(
 
     os.environ["RUN_ID"] = run_id
     run_root = get_run_root(base_results, run_id)
+
+    # Point logs/cardiac/latest_run at this run's log directory
+    import logging as _logging
+    update_log_latest_pointer(ROOT_DIR, run_id, _logging.getLogger(__name__))
 
     # --- Validate prior stages on resume ------------------------------------
     if resume_from:
@@ -354,23 +362,32 @@ def cardiac_pipeline(
         if future is not None:
             _checkpoint(stage_num, future)
 
+    # --- Log summary --------------------------------------------------------
+    run_log_dir = ROOT_DIR / "logs" / "cardiac" / "runs" / run_id
+    log_summary = summarize_run_logs(run_log_dir)
+    if log_summary["total_warnings"] or log_summary["total_errors"]:
+        logger.info(
+            f"Log summary: {log_summary['total_warnings']} warning(s), "
+            f"{log_summary['total_errors']} error(s) — see {run_log_dir / 'run_summary.json'}"
+        )
+
     # --- Summary ------------------------------------------------------------
     logger.info("======================================================================")
     logger.info("PIPELINE COMPLETE")
     logger.info("======================================================================")
     logger.info(f"Stages executed: {first.name} → {last.name}")
-    logger.info("Results saved to:")
+    logger.info("Output saved to:")
     logger.info(f"  - Run root:           {run_root}")
     if _should_run(1):
         logger.info(f"  - Raw data:           {ROOT_DIR}/data/raw/cardiac")
     if _should_run(4):
         logger.info(f"  - Processed data:     {ROOT_DIR}/data/processed/cardiac")
     if _should_run(2):
-        logger.info(f"  - Profiling results:  {run_root}/profiling")
+        logger.info(f"  - Profiling:          {run_root}/profiling")
     if _should_run(3):
         logger.info(f"  - Recommendations:    {run_root}/recommendations")
     if _should_run(5):
-        logger.info(f"  - Baseline results:   {run_root}/baseline")
+        logger.info(f"  - Baseline:           {run_root}/baseline")
     if age_task:
         logger.info(f"  - Age binning:        {run_root}/experiments/full/age_binning")
     if mitigation_task:
@@ -415,7 +432,8 @@ Examples:
     p.add_argument("--no-mitigation", action="store_true", help="Skip mitigation stage.")
     p.add_argument("--no-combinatorial", action="store_true", help="Skip combinatorial stage.")
     p.add_argument("--no-comparison", action="store_true", help="Skip comparison stage.")
-    p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("-v", "--verbose", action="count", default=0,
+                    help="Verbosity: -v=info, -vv=debug")
     return p
 
 

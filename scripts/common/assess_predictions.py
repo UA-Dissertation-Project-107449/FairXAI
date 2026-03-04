@@ -278,7 +278,7 @@ def main():
         choices=['cardiac', 'dermatology'],
         help='Pipeline name (e.g., cardiac, dermatology)'
     )
-    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose console output')
+    parser.add_argument('-v', '--verbose', action='count', default=0, help='Verbosity: -v=info, -vv=debug')
     args = parser.parse_args()
 
     pipeline = args.pipeline
@@ -287,16 +287,17 @@ def main():
     pipeline_cfg = load_pipeline_config(project_root, pipeline)
     run_id = os.getenv('RUN_ID')
     if run_id:
-        baseline_root = project_root / f"results/{pipeline}/runs/{run_id}/baseline"
+        baseline_root = project_root / f"output/{pipeline}/runs/{run_id}/baseline"
         experiments_dir = baseline_root / "results"
         results_dir = baseline_root / "fairness"
     else:
         experiments_dir = project_root / pipeline_cfg['paths']['experiments_dir']
         results_dir = project_root / pipeline_cfg['paths']['results_fairness_dir']
-    log_dir = project_root / f'logs/{pipeline}'
-    
     # Setup
-    log_dir = setup_phase_logging(project_root, 'fairness_assessment.log', verbose=args.verbose)
+    log_dir = setup_phase_logging(
+        project_root, 'fairness_assessment.log', verbose=args.verbose,
+        run_id=run_id, stage_name='assess',
+    )
     logging.info("[PHASE] Fairness assessment started")
     results_dir.mkdir(parents=True, exist_ok=True)
     

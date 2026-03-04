@@ -48,7 +48,7 @@ def main():
         choices=['cardiac', 'dermatology'],
         help='Pipeline name (e.g., cardiac, dermatology)',
     )
-    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose console output')
+    parser.add_argument('-v', '--verbose', action='count', default=0, help='Verbosity: -v=info, -vv=debug')
     parser.add_argument(
         '--run-id',
         type=str,
@@ -93,7 +93,7 @@ def main():
     parser.add_argument(
         '--output-dir',
         type=str,
-        help='Output directory (default: results/{pipeline}/recommendations/)',
+        help='Output directory (default: output/{pipeline}/recommendations/)',
     )
     parser.add_argument(
         '--format',
@@ -123,22 +123,24 @@ def main():
 
     # Paths
     project_root = get_project_root(Path(__file__))
-    setup_phase_logging(project_root, 'recommendations.log', verbose=args.verbose)
-
     run_id = resolve_run_id(args.run_id) if args.run_id else None
+    setup_phase_logging(
+        project_root, 'recommendations.log', verbose=args.verbose,
+        run_id=run_id, stage_name='recommend',
+    )
 
     # Determine output directory
     if args.output_dir:
         output_dir = Path(args.output_dir)
     elif run_id:
-        output_dir = get_run_root(project_root / f'results/{pipeline}', run_id) / 'recommendations'
+        output_dir = get_run_root(project_root / f'output/{pipeline}', run_id) / 'recommendations'
     else:
-        output_dir = project_root / f'results/{pipeline}/recommendations'
+        output_dir = project_root / f'output/{pipeline}/recommendations'
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Initialize engine
     config_path = args.config or str(project_root / 'configs/recommendations/thresholds.yaml')
-    history_path = args.history_path or str(project_root / f'results/{pipeline}')
+    history_path = args.history_path or str(project_root / f'output/{pipeline}')
 
     engine = RecommendationEngine(
         config_path=config_path,

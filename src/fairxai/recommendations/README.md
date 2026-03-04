@@ -77,10 +77,10 @@ Key functions: `get_n_samples`, `get_size_ratio`, `get_complexity_metric`,
 ### history.py
 
 `HistoricalReference` scans completed experiment runs under:
-- `results/<pipeline>/runs/`
-- `results/<pipeline>/archived_runs/`
-- `results/<pipeline>/profiling/`
-- `results/<pipeline>/baseline/fairness/`
+- `output/<pipeline>/runs/`
+- `output/<pipeline>/archived_runs/`
+- `output/<pipeline>/profiling/`
+- `output/<pipeline>/baseline/fairness/`
 
 It builds reference distributions (median, IQR, min, max) per complexity and
 fairness metric, exposed through `ReferenceStats`.
@@ -178,7 +178,7 @@ The engine produces two output files per dataset:
   - Detailed sections per recommendation with collapsible evidence
   - Limitations note
 
-Both are written to `results/<pipeline>/recommendations/`.
+Both are written to `output/<pipeline>/recommendations/`.
 
 ## Pipeline Integration
 

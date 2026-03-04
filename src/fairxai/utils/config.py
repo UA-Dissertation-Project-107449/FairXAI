@@ -1,9 +1,11 @@
-import yaml
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Any, Dict
+
+import yaml
 
 
-def load_yaml_config(path: str) -> Dict[str, Any]:
+def load_yaml_config(path: str) -> dict[str, object]:
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"Config YAML not found: {p}")

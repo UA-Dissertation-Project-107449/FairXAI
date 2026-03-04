@@ -52,6 +52,11 @@ binning_strategies:
     method: "quantile"
     n_bins: 5
 
+  equal_width_5:
+    description: "5 equal-width bins spanning the data range"
+    method: "equal_width"
+    n_bins: 5
+
 metrics:
   fairness:
     - statistical_parity_difference  # Max difference in positive rates across bins
@@ -76,7 +81,7 @@ scoring:
   min_group_size_threshold: 30  # Minimum for statistical validity
 
 output:
-  results_dir: "results/cardiac/experiments/full/latest_run/age_binning"
+  results_dir: "output/cardiac/experiments/full/latest_run/age_binning"
   artifacts:
     - comparison_table_csv
     - stability_analysis_csv

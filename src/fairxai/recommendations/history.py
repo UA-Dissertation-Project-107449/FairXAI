@@ -82,7 +82,7 @@ class ReferenceStats:
 class HistoricalReference:
     """Load and query historical run data for metric reference distributions.
 
-    Typical base_path: ``results/cardiac/`` (contains ``run_history.jsonl``,
+    Typical base_path: ``output/cardiac/`` (contains ``run_history.jsonl``,
     ``archived_runs/``, ``runs/``).
     """
 

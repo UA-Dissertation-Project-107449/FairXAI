@@ -55,7 +55,7 @@ class RecommendationEngine:
         self.history: Optional[HistoricalReference] = None
         if self.config.use_historical:
             h_path = history_base_path or (
-                str(root / "results" / "cardiac") if root else None
+                str(root / "output" / "cardiac") if root else None
             )
             if h_path and Path(h_path).exists():
                 self.history = HistoricalReference(

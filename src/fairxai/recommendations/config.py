@@ -23,6 +23,7 @@ class TriageConfig:
         # Representation
         rep = raw.get("representation", {})
         self.size_ratio_warning: float = rep.get("size_ratio_warning", 3.0)
+        self.binning_size_ratio_warning: float = rep.get("binning_size_ratio_warning", 5.0)
         self.min_group_samples: int = rep.get("min_group_samples", 50)
         self.statistical_parity_warning: float = rep.get("statistical_parity_warning", 0.15)
         self.intersectional_min_samples: int = rep.get("intersectional_min_samples", 30)

@@ -4,10 +4,10 @@ paths:
   external_dir: data/external/cardiac
   raw_dir: data/raw/cardiac
   processed_dir: data/processed/cardiac
-  experiments_dir: results/cardiac/baseline/latest_run/results
-  models_dir: results/cardiac/baseline/latest_run/models
-  results_fairness_dir: results/cardiac/baseline/latest_run/fairness
-  results_binning_dir: results/cardiac/experiments/full/latest_run/binning
+  experiments_dir: output/cardiac/baseline/latest_run/results
+  models_dir: output/cardiac/baseline/latest_run/models
+  results_fairness_dir: output/cardiac/baseline/latest_run/fairness
+  results_binning_dir: output/cardiac/experiments/full/latest_run/binning
 
 runtime:
   datasets: [cleveland, kaggle_heart]
@@ -26,3 +26,10 @@ training:
 
 fairness:
   sensitive_attributes: [age_group, sex, ethnicity, group_cluster]
+
+xai:
+  enabled: true
+  cv_enabled: true
+  lime_instances: 3
+  cv_lime_instances: 3
+  global_max_samples: 1000

@@ -48,7 +48,7 @@ RUN_MITIGATION=${RUN_MITIGATION:-true}
 RUN_COMBINATORIAL=${RUN_COMBINATORIAL:-true}
 RUN_COMPARISON=${RUN_COMPARISON:-true}
 RUN_RECOMMENDATIONS=${RUN_RECOMMENDATIONS:-true}
-VERBOSE=${VERBOSE:-false}
+VERBOSE=${VERBOSE:-0}
 RESUME_FROM=${RESUME_FROM:-""}
 GO_UNTIL=${GO_UNTIL:-""}
 AGE_BINNING_CONFIG="$ROOT_DIR/configs/experiments/age_binning.yaml"
@@ -81,7 +81,7 @@ should_run() {
 # ======================================================================
 # Resolve run ID
 # ======================================================================
-BASE_RESULTS="$ROOT_DIR/results/cardiac"
+BASE_RESULTS="$ROOT_DIR/output/cardiac"
 
 if [[ -n "$RESUME_FROM" ]] && [[ -z "${RUN_ID:-}" ]]; then
     # Auto-resolve from latest_run pointer
@@ -111,6 +111,16 @@ export RUN_ID
 
 RUN_ROOT="$BASE_RESULTS/runs/$RUN_ID"
 CHECKPOINT_DIR="$RUN_ROOT/.checkpoints"
+
+# Point logs/cardiac/latest_run at this run
+LOG_RUN_DIR="$ROOT_DIR/logs/cardiac/runs/$RUN_ID"
+mkdir -p "$LOG_RUN_DIR"
+_LOG_BASE="$ROOT_DIR/logs/cardiac"
+_LOG_LINK="$_LOG_BASE/latest_run"
+_LOG_TXT="$_LOG_BASE/latest_run.txt"
+[[ -L "$_LOG_LINK" ]] && rm -f "$_LOG_LINK"
+ln -s "runs/$RUN_ID" "$_LOG_LINK" 2>/dev/null || true
+echo "$RUN_ID" > "$_LOG_TXT"
 
 # ======================================================================
 # Checkpoint helpers
@@ -173,8 +183,17 @@ echo "Comparison:       $RUN_COMPARISON"
 echo "Recommendations:  $RUN_RECOMMENDATIONS"
 echo ""
 
+# Normalise VERBOSE: accept legacy true/false or numeric 0/1/2
+case "$VERBOSE" in
+    true)  VERBOSE=1 ;;
+    false) VERBOSE=0 ;;
+esac
+VERBOSE=${VERBOSE:-0}
+
 VERBOSE_FLAG=""
-if [[ "$VERBOSE" == "true" ]]; then
+if (( VERBOSE >= 2 )); then
+    VERBOSE_FLAG="-vv"
+elif (( VERBOSE >= 1 )); then
     VERBOSE_FLAG="-v"
 fi
 
@@ -313,6 +332,21 @@ else
 fi
 
 # ======================================================================
+# Log summary
+# ======================================================================
+python3 -c "
+import sys, pathlib
+sys.path.insert(0, str(pathlib.Path('$ROOT_DIR') / 'src'))
+from fairxai.utils.logging_utils import summarize_run_logs
+s = summarize_run_logs(pathlib.Path('$LOG_RUN_DIR'))
+tw, te = s['total_warnings'], s['total_errors']
+if tw or te:
+    print(f'Log summary: {tw} warning(s), {te} error(s) — see $LOG_RUN_DIR/run_summary.json')
+else:
+    print('Log summary: no warnings or errors recorded.')
+"
+
+# ======================================================================
 # Summary
 # ======================================================================
 echo "======================================================================"
@@ -323,9 +357,9 @@ echo "Results saved to:"
 echo "  - Run root:           $RUN_ROOT"
 should_run 1 && echo "  - Raw data:           $ROOT_DIR/data/raw/cardiac"
 should_run 4 && echo "  - Processed data:     $ROOT_DIR/data/processed/cardiac"
-should_run 2 && echo "  - Profiling results:  $RUN_ROOT/profiling"
+should_run 2 && echo "  - Profiling:          $RUN_ROOT/profiling"
 should_run 3 && [[ "$RUN_RECOMMENDATIONS" == "true" ]] && echo "  - Recommendations:    $RUN_ROOT/recommendations"
-should_run 5 && echo "  - Baseline results:   $RUN_ROOT/baseline"
+should_run 5 && echo "  - Baseline:           $RUN_ROOT/baseline"
 should_run 7 && [[ "$RUN_AGE_BINNING" == "true" ]] && echo "  - Age binning:        $RUN_ROOT/experiments/full/age_binning"
 should_run 8 && [[ "$RUN_MITIGATION" == "true" ]] && echo "  - Mitigation:         $RUN_ROOT/experiments/full/mitigation"
 should_run 9 && [[ "$RUN_COMBINATORIAL" == "true" ]] && echo "  - Combinatorial:      $RUN_ROOT/experiments/full"

@@ -78,14 +78,20 @@ def load_dataset_for_binning(dataset_name: str, data_dir: Path, sensitive_col: s
     return df
 
 
-def run_strategy_analysis(df, strategy_name, dataset_name, sensitive_col, target_col):
+def run_strategy_analysis(
+    df, strategy_name, dataset_name, sensitive_cols, target_col,
+    strategy_config=None,
+):
     """
     Analyze a single binning strategy on a dataset.
     
     Args:
-        df: DataFrame with age_raw, sex, heart_disease
+        df: DataFrame with age_raw and required columns
         strategy_name: Strategy to test
         dataset_name: Dataset identifier
+        sensitive_cols: List of sensitive attribute columns
+        target_col: Target variable column
+        strategy_config: Config dict for this strategy (from YAML)
         
     Returns:
         Analysis result dictionary
@@ -93,10 +99,13 @@ def run_strategy_analysis(df, strategy_name, dataset_name, sensitive_col, target
     logging.info(f"\nAnalyzing strategy: {strategy_name}")
     
     try:
-        # Create binning strategy
-        bins, labels = create_binning_strategy(df, strategy_name, age_col='age_raw')
+        # Create binning strategy (config-driven)
+        bins, labels = create_binning_strategy(
+            df, strategy_name, age_col='age_raw',
+            strategy_config=strategy_config,
+        )
         
-        # Comprehensive analysis
+        # Comprehensive analysis (all sensitive attrs)
         result = analyze_strategy_comprehensive(
             df=df,
             strategy_name=strategy_name,
@@ -104,7 +113,7 @@ def run_strategy_analysis(df, strategy_name, dataset_name, sensitive_col, target
             labels=labels,
             dataset_name=dataset_name,
             age_col='age_raw',
-            sensitive_col=sensitive_col,
+            sensitive_col=sensitive_cols,
             target_col=target_col
         )
         
@@ -125,8 +134,8 @@ def run_analysis(
     run_mode: str = 'partial',
     archive_previous: bool = True,
     run_id: str = None,
-    results_root: str = None,
-    verbose: bool = False
+    output_root: str = None,
+    verbose: int = 0
 ):
     """
     Runs the age binning analysis experiment.
@@ -154,13 +163,18 @@ def run_analysis(
     # Determine datasets and strategies to process
     datasets = datasets if datasets else experiment_cfg['data']['datasets']
     sensitive_attrs = experiment_cfg.get('data', {}).get('sensitive_attributes', ['sex'])
-    sensitive_col = sensitive_attrs[0] if sensitive_attrs else 'sex'
     target_col = experiment_cfg.get('data', {}).get('target', 'heart_disease')
+
+    # Keep single primary attr for backward-compat helpers (e.g. load_dataset)
+    primary_sensitive_col = sensitive_attrs[0] if sensitive_attrs else 'sex'
     
     if strategies:
         strategies = strategies
     else:
         strategies = list(experiment_cfg['binning_strategies'].keys())
+
+    # Strategy config lookup for config-driven binning
+    strategy_configs = experiment_cfg.get('binning_strategies', {})
     
     use_run_id = bool(run_id or os.getenv('RUN_ID') or os.getenv('PREFECT__RUNTIME__FLOW_RUN_ID'))
     run_id = resolve_run_id(run_id) if use_run_id else None
@@ -168,37 +182,38 @@ def run_analysis(
     # Determine output directory
     default_output_dir = experiment_cfg.get('output', {}).get('results_dir')
     if run_id:
-        base_results = Path(results_root) if results_root else (project_root / f"results/{pipeline}")
-    elif results_root:
-        base_results = Path(results_root)
+        base_output = Path(output_root) if output_root else (project_root / f"output/{pipeline}")
+    elif output_root:
+        base_output = Path(output_root)
     elif default_output_dir:
-        base_results = Path(default_output_dir)
-        if base_results.parts and base_results.name == 'age_binning':
-            base_results = base_results.parents[1]
-        if run_mode == 'partial' and 'full' in base_results.parts:
-            parts = list(base_results.parts)
+        base_output = Path(default_output_dir)
+        if base_output.parts and base_output.name == 'age_binning':
+            base_output = base_output.parents[1]
+        if run_mode == 'partial' and 'full' in base_output.parts:
+            parts = list(base_output.parts)
             idx = len(parts) - 1 - parts[::-1].index('full')
             parts[idx] = 'partial'
-            base_results = Path(*parts)
+            base_output = Path(*parts)
     else:
-        base_results = project_root / f"results/{pipeline}/experiments/{run_mode}"
-    log_subdir = f"experiments/{run_id}" if run_id else 'experiments/latest_run'
-
+        base_output = project_root / f"output/{pipeline}/experiments/{run_mode}"
     # Setup logging
-    setup_phase_logging(project_root, 'age_binning_analysis.log', verbose=verbose, log_subdir=log_subdir)
+    setup_phase_logging(
+        project_root, 'age_binning_analysis.log', verbose=verbose,
+        run_id=run_id, stage_name='age_binning',
+    )
     logger = logging.getLogger(__name__)
     logging.info("[PHASE] Age binning analysis started")
 
     if run_id:
-        run_dir = get_run_root(base_results, run_id)
+        run_dir = get_run_root(base_output, run_id)
         run_dir.mkdir(parents=True, exist_ok=True)
         output_dir = Path(output_dir) if output_dir else run_dir / 'experiments' / run_mode / 'age_binning'
     else:
-        latest_dir = base_results / 'latest_run'
+        latest_dir = base_output / 'latest_run'
         if run_mode == 'partial':
-            archive_latest_run(base_results, enabled=True, logger=logger)
+            archive_latest_run(base_output, enabled=True, logger=logger)
         else:
-            archive_latest_run(base_results, enabled=archive_previous, logger=logger)
+            archive_latest_run(base_output, enabled=archive_previous, logger=logger)
         output_dir = Path(output_dir) if output_dir else latest_dir / 'age_binning'
     
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -211,7 +226,7 @@ def run_analysis(
     logging.info(f"  Timestamp: {timestamp}")
     if run_id:
         logging.info(f"  Run ID: {run_id}")
-        append_run_history(base_results, {
+        append_run_history(base_output, {
             'run_id': run_id,
             'pipeline': pipeline,
             'mode': run_mode,
@@ -247,7 +262,7 @@ def run_analysis(
         
         try:
             # Load dataset
-            df = load_dataset_for_binning(dataset_name, data_dir, sensitive_col, target_col)
+            df = load_dataset_for_binning(dataset_name, data_dir, primary_sensitive_col, target_col)
         except Exception as e:
             logging.error(f"Failed to load {dataset_name}: {e}")
             logging.exception(e)
@@ -255,7 +270,13 @@ def run_analysis(
         
         # Test each strategy (errors handled within run_strategy_analysis)
         for strategy_name in strategies:
-            result = run_strategy_analysis(df, strategy_name, dataset_name, sensitive_col, target_col)
+            strategy_cfg = strategy_configs.get(strategy_name)
+            result = run_strategy_analysis(
+                df, strategy_name, dataset_name,
+                sensitive_cols=sensitive_attrs,
+                target_col=target_col,
+                strategy_config=strategy_cfg,
+            )
             if result:
                 all_results.append(result)
     
@@ -336,8 +357,8 @@ def run_analysis(
     logging.info("[PHASE] Age binning analysis complete")
 
     if run_id:
-        update_latest_pointer(base_results, run_dir, logger)
-        append_run_history(base_results, {
+        update_latest_pointer(base_output, run_dir, logger)
+        append_run_history(base_output, {
             'run_id': run_id,
             'pipeline': pipeline,
             'mode': run_mode,
@@ -358,7 +379,7 @@ def main():
     parser.add_argument('--strategies', type=str, nargs='+',
                        help='Strategies to test (default: from config)')
     parser.add_argument('--output-dir', type=str,
-                       help='Output directory (default: from config or results/{pipeline}/experiments/{run_mode}/latest_run/age_binning)')
+                       help='Output directory (default: from config or output/{pipeline}/experiments/{run_mode}/latest_run/age_binning)')
     parser.add_argument('--pipeline', type=str, default='cardiac',
                        help='Pipeline name (e.g., cardiac, dermatology)')
     parser.add_argument('--run-mode', type=str, choices=['full', 'partial'],
@@ -369,9 +390,9 @@ def main():
                        help='Archive previous latest_run (full runs only)')
     parser.add_argument('--run-id', type=str, default=os.getenv('RUN_ID'),
                        help='Run identifier (optional, enables run-scoped outputs)')
-    parser.add_argument('--results-root', type=str, default=None,
-                       help='Base results directory for run outputs')
-    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose console output')
+    parser.add_argument('--output-root', type=str, default=None,
+                       help='Base output directory for run outputs')
+    parser.add_argument('-v', '--verbose', action='count', default=0, help='Verbosity: -v=info, -vv=debug')
     args = parser.parse_args()
     
     run_analysis(
@@ -383,7 +404,7 @@ def main():
         run_mode=args.run_mode,
         archive_previous=args.archive_previous,
         run_id=args.run_id,
-        results_root=args.results_root,
+        output_root=args.output_root,
         verbose=args.verbose
     )
 

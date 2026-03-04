@@ -6,6 +6,7 @@
 
 representation:
   size_ratio_warning: 3.0            # group max/min ratio  (from profile_data.py heuristic)
+  binning_size_ratio_warning: 5.0    # extreme ratio suggesting rebinning needed (multi-group attrs)
   min_group_samples: 50              # minimum per-subgroup  (from DataProfiler default)
   statistical_parity_warning: 0.15   # max_difference  (from profile_data.py heuristic)
   intersectional_min_samples: 30     # minimum for intersectional slices

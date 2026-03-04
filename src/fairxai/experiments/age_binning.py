@@ -2,18 +2,36 @@
 Age binning strategies analysis - Reusable functions for experiments.
 
 This module provides utilities for:
-- Creating various age binning strategies
+- Creating various age binning strategies (config-driven or built-in)
 - Analyzing sensitive attribute distribution within bins
 - Computing fairness metrics per binning strategy
+- Computing cross-attribute fairness impact (how binning one attribute
+  affects statistical parity of other sensitive attributes)
 - Generating comparison reports
 
+Strategies are defined declaratively in YAML (e.g.
+``configs/experiments/age_binning.yaml``) under the ``binning_strategies``
+key.  The code reads method / bins / labels / n_bins from the config dict so
+users can add or modify strategies without touching Python.
+
+Three methods are supported:
+  - ``fixed``      — user supplies ``bins`` (edges) and ``labels``
+  - ``quantile``   — user supplies ``n_bins``; edges from ``pd.qcut``
+  - ``equal_width`` — user supplies ``n_bins``; edges from ``pd.cut``
+
 Designed to be imported by notebooks and experiment scripts.
+
+.. note::
+
+   The module is named ``age_binning`` for historical reasons.  Internally
+   it is already attribute-agnostic — any continuous column can be binned.
+   A full rename to ``attribute_binning`` is planned for a future sprint.
 """
 
 import logging
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 from pathlib import Path
 
 
@@ -24,81 +42,189 @@ MAX_EXPECTED_SP_DIFF = 0.5  # Typical max statistical parity difference for age 
 MAX_EXPECTED_CV = 1.0  # Typical max coefficient of variation for reasonable binnings
 MIN_SAMPLE_SIZE = 30  # Minimum recommended group size for statistical validity
 
+# ---------------------------------------------------------------------------
+# Built-in strategy defaults (mirrors the canonical YAML structure).
+# Used as fallback when no strategy_config dict is passed to
+# ``create_binning_strategy``.
+# ---------------------------------------------------------------------------
+BUILTIN_STRATEGIES: Dict[str, Dict[str, Any]] = {
+    "fixed_10yr": {
+        "description": "Current baseline - 10-year fixed intervals",
+        "method": "fixed",
+        "bins": [0, 40, 50, 60, 70, 100],
+        "labels": ["<40", "40-49", "50-59", "60-69", "70+"],
+    },
+    "fixed_5yr": {
+        "description": "Finer granularity - 5-year fixed intervals",
+        "method": "fixed",
+        "bins": [0, 35, 40, 45, 50, 55, 60, 65, 70, 75, 100],
+        "labels": ["<35", "35-39", "40-44", "45-49", "50-54",
+                    "55-59", "60-64", "65-69", "70-74", "75+"],
+    },
+    "clinical": {
+        "description": "Clinical cardiovascular risk guidelines",
+        "method": "fixed",
+        "bins": [0, 45, 55, 65, 100],
+        "labels": ["<45", "45-54", "55-64", "65+"],
+    },
+    "quantile_3": {
+        "description": "Data-driven terciles (equal sample sizes)",
+        "method": "quantile",
+        "n_bins": 3,
+    },
+    "quantile_5": {
+        "description": "Data-driven quintiles (equal sample sizes)",
+        "method": "quantile",
+        "n_bins": 5,
+    },
+}
+
 
 def create_binning_strategy(
-    df: pd.DataFrame, 
+    df: pd.DataFrame,
     strategy_name: str,
     age_col: str = 'age_raw',
-    **kwargs
+    strategy_config: Optional[Dict[str, Any]] = None,
+    **kwargs,
 ) -> Tuple[List[float], Optional[List[str]]]:
-    """
-    Create bins and labels for a given age binning strategy.
-    
-    Supported strategies:
-    - 'fixed_10yr': Fixed 10-year intervals [<40, 40-49, 50-59, 60-69, 70+]
-    - 'fixed_5yr': Fixed 5-year intervals [<35, 35-39, ..., 75+]
-    - 'clinical': Clinical age groups [<45, 45-54, 55-64, 65+]
-    - 'quantile_N': N quantile-based bins (data-driven)
-    
-    Args:
-        df: DataFrame with age data
-        strategy_name: Name of strategy
-        age_col: Column name containing numeric age
-        **kwargs: Additional parameters (n_bins for quantile strategies)
-    
-    Returns:
-        Tuple of (bins, labels). Labels may be None for auto-generation.
-    
-    Example:
-        >>> bins, labels = create_binning_strategy(df, 'fixed_10yr')
-        >>> df['age_group'] = pd.cut(df['age_raw'], bins=bins, labels=labels)
+    """Create bins and labels for a given binning strategy.
+
+    The strategy is resolved in order:
+
+    1. If *strategy_config* is supplied (a dict with at least ``method``),
+       it is used directly.
+    2. Otherwise, if *strategy_name* matches a key in
+       :data:`BUILTIN_STRATEGIES`, those defaults are used.
+    3. For names like ``quantile_N`` or ``equal_width_N``, the method and
+       *n_bins* are inferred from the name.
+    4. If none of the above match, a ``ValueError`` is raised.
+
+    Parameters
+    ----------
+    df : DataFrame
+        DataFrame that contains the column to bin.
+    strategy_name : str
+        Human-readable strategy identifier.
+    age_col : str
+        Column with continuous values to bin (default ``age_raw``).
+    strategy_config : dict, optional
+        Config dict (typically one entry from the YAML
+        ``binning_strategies`` section).  When provided, *strategy_name*
+        is used only for logging/labelling.
+    **kwargs
+        Legacy pass-through (``n_bins`` etc.).
+
+    Returns
+    -------
+    (bins, labels)
+        *bins* is a list of edge values.  *labels* may be ``None`` for
+        auto-generated interval labels (quantile / equal_width).
     """
     logger.info(f"Creating binning strategy: {strategy_name}")
-    
-    if strategy_name == 'fixed_10yr':
-        bins = [0, 40, 50, 60, 70, 100]
-        labels = ["<40", "40-49", "50-59", "60-69", "70+"]
-    
-    elif strategy_name == 'fixed_5yr':
-        bins = [0, 35, 40, 45, 50, 55, 60, 65, 70, 75, 100]
-        labels = ["<35", "35-39", "40-44", "45-49", "50-54", 
-                  "55-59", "60-64", "65-69", "70-74", "75+"]
-    
-    elif strategy_name == 'clinical':
-        bins = [0, 45, 55, 65, 100]
-        labels = ["<45", "45-54", "55-64", "65+"]
-    
-    elif strategy_name.startswith('quantile'):
-        # Extract number of bins from strategy name (e.g., 'quantile_5' -> 5)
-        if '_' in strategy_name:
-            n_bins = int(strategy_name.split('_')[1])
-        else:
-            n_bins = kwargs.get('n_bins', 5)
-        
-        logger.info(f"  Computing {n_bins} quantile bins from data")
-        
-        try:
-            bins = pd.qcut(df[age_col], q=n_bins, retbins=True, duplicates='drop')[1]
-            actual_bins = len(bins) - 1
-            if actual_bins < n_bins:
-                logger.warning(f"  Only created {actual_bins} bins due to duplicate edges")
-        except ValueError as e:
-            logger.error(f"  Failed to create {n_bins} quantile bins: {e}")
-            logger.info(f"  Falling back to {n_bins-1} bins")
-            try:
-                bins = pd.qcut(df[age_col], q=n_bins-1, retbins=True, duplicates='drop')[1]
-            except ValueError:
-                raise ValueError(f"Cannot create quantile bins for {strategy_name}. "
-                               f"Dataset may be too small or have insufficient unique values.")
-        
-        labels = None  # Auto-generated labels like "(29.0, 45.0]"
-    
+
+    # -- Resolve config dict -------------------------------------------------
+    cfg = strategy_config or BUILTIN_STRATEGIES.get(strategy_name)
+
+    if cfg is None:
+        # Attempt to infer from the name (e.g. "quantile_7", "equal_width_4")
+        cfg = _infer_config_from_name(strategy_name, **kwargs)
+
+    if cfg is None:
+        known = ", ".join(sorted(BUILTIN_STRATEGIES))
+        raise ValueError(
+            f"Unknown strategy '{strategy_name}' and no strategy_config "
+            f"provided.  Built-in strategies: {known}.  "
+            f"Patterns: quantile_N, equal_width_N."
+        )
+
+    method = cfg.get("method", "").lower()
+
+    # -- Fixed edges ---------------------------------------------------------
+    if method == "fixed":
+        bins = list(cfg["bins"])
+        labels = list(cfg["labels"]) if cfg.get("labels") else None
+
+    # -- Quantile (data-driven, equal-frequency) -----------------------------
+    elif method == "quantile":
+        n_bins = int(cfg.get("n_bins", kwargs.get("n_bins", 5)))
+        bins, labels = _quantile_bins(df, age_col, n_bins, strategy_name)
+
+    # -- Equal-width (data-driven, equal-range) ------------------------------
+    elif method == "equal_width":
+        n_bins = int(cfg.get("n_bins", kwargs.get("n_bins", 5)))
+        bins, labels = _equal_width_bins(df, age_col, n_bins, strategy_name)
+
     else:
-        raise ValueError(f"Unknown strategy: {strategy_name}. "
-                        f"Supported: fixed_10yr, fixed_5yr, clinical, quantile_N")
-    
-    logger.info(f"  Created {len(bins)-1} bins")
+        raise ValueError(
+            f"Unknown method '{method}' in strategy '{strategy_name}'.  "
+            f"Supported methods: fixed, quantile, equal_width."
+        )
+
+    logger.info(f"  Created {len(bins) - 1} bins")
     return bins, labels
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers for dynamic bin methods
+# ---------------------------------------------------------------------------
+
+def _infer_config_from_name(
+    name: str, **kwargs
+) -> Optional[Dict[str, Any]]:
+    """Try to build a config dict from a conventionally-named strategy."""
+    for prefix in ("quantile", "equal_width"):
+        if name.startswith(prefix):
+            suffix = name[len(prefix):]
+            if suffix.startswith("_") and suffix[1:].isdigit():
+                n_bins = int(suffix[1:])
+            else:
+                n_bins = kwargs.get("n_bins")
+            if n_bins is not None:
+                return {"method": prefix, "n_bins": n_bins}
+    return None
+
+
+def _quantile_bins(
+    df: pd.DataFrame, col: str, n_bins: int, strategy_name: str
+) -> Tuple[List[float], None]:
+    """Compute quantile-based bin edges."""
+    logger.info(f"  Computing {n_bins} quantile bins from data")
+    try:
+        _, edges = pd.qcut(df[col], q=n_bins, retbins=True, duplicates="drop")
+        actual = len(edges) - 1
+        if actual < n_bins:
+            logger.warning(f"  Only created {actual} bins due to duplicate edges")
+    except ValueError as e:
+        logger.error(f"  Failed to create {n_bins} quantile bins: {e}")
+        logger.info(f"  Falling back to {n_bins - 1} bins")
+        try:
+            _, edges = pd.qcut(
+                df[col], q=n_bins - 1, retbins=True, duplicates="drop"
+            )
+        except ValueError:
+            raise ValueError(
+                f"Cannot create quantile bins for '{strategy_name}'.  "
+                "Dataset may be too small or have insufficient unique values."
+            )
+    return list(edges), None
+
+
+def _equal_width_bins(
+    df: pd.DataFrame, col: str, n_bins: int, strategy_name: str
+) -> Tuple[List[float], None]:
+    """Compute equal-width bin edges spanning the data range."""
+    logger.info(f"  Computing {n_bins} equal-width bins from data")
+    lo, hi = float(df[col].min()), float(df[col].max())
+    if lo == hi:
+        raise ValueError(
+            f"Cannot create equal-width bins for '{strategy_name}': "
+            f"column '{col}' has zero range ({lo})."
+        )
+    edges = np.linspace(lo, hi, n_bins + 1)
+    # Widen endpoints slightly so pd.cut(include_lowest=True) catches all values
+    edges[0] -= 0.001
+    edges[-1] += 0.001
+    return list(edges), None
 
 
 def apply_binning(
@@ -246,6 +372,87 @@ def compute_fairness_metrics(
     return metrics
 
 
+# ---------------------------------------------------------------------------
+# Cross-attribute fairness impact
+# ---------------------------------------------------------------------------
+
+def compute_cross_attribute_impact(
+    df: pd.DataFrame,
+    bin_col: str,
+    sensitive_cols: List[str],
+    target_col: str = 'heart_disease',
+) -> Dict[str, Dict[str, Any]]:
+    """Measure how a binning strategy affects SP of *other* sensitive attrs.
+
+    For every sensitive attribute in *sensitive_cols* that is **not** the
+    binned column itself:
+
+    1. Compute the overall (global) SP difference for that attribute.
+    2. Compute the SP difference for that attribute **within each bin
+       group** and take the max.
+    3. Report the delta (within-bin max − global).
+
+    A large positive delta means the binning amplifies existing disparities
+    for that attribute inside certain groups.
+
+    Parameters
+    ----------
+    df : DataFrame
+        DataFrame that already contains *bin_col* (e.g. after
+        ``apply_binning``).
+    bin_col : str
+        The binned column (e.g. ``age_group_exp``).
+    sensitive_cols : list[str]
+        All sensitive attribute columns to evaluate.
+    target_col : str
+        Binary target variable.
+
+    Returns
+    -------
+    dict
+        Mapping ``{attr: {global_sp, max_within_bin_sp, delta, per_bin}}``
+        where *per_bin* maps bin labels to per-group SP values.
+    """
+    impact: Dict[str, Dict[str, Any]] = {}
+
+    for attr in sensitive_cols:
+        # Skip if the attribute *is* the binned column or not present
+        if attr == bin_col or attr not in df.columns:
+            continue
+        if df[attr].nunique(dropna=True) < 2:
+            continue
+
+        # Global SP for this attr
+        global_rates = df.groupby(attr, observed=True)[target_col].mean()
+        global_sp = float(global_rates.max() - global_rates.min())
+
+        # Within-bin SP: for each bin, compute SP of this attr
+        per_bin: Dict[str, float] = {}
+        for bin_label, group_df in df.groupby(bin_col, observed=True):
+            if group_df[attr].nunique(dropna=True) < 2:
+                per_bin[str(bin_label)] = 0.0
+                continue
+            rates = group_df.groupby(attr, observed=True)[target_col].mean()
+            per_bin[str(bin_label)] = float(rates.max() - rates.min())
+
+        max_within = max(per_bin.values()) if per_bin else 0.0
+        delta = round(max_within - global_sp, 4)
+
+        impact[attr] = {
+            'global_sp': round(global_sp, 4),
+            'max_within_bin_sp': round(max_within, 4),
+            'delta': delta,
+            'per_bin': {k: round(v, 4) for k, v in per_bin.items()},
+        }
+
+        logger.info(
+            f"  Cross-attr impact [{attr}]: global_sp={global_sp:.4f}, "
+            f"max_within_bin_sp={max_within:.4f}, delta={delta:+.4f}"
+        )
+
+    return impact
+
+
 def analyze_strategy_comprehensive(
     df: pd.DataFrame,
     strategy_name: str,
@@ -253,7 +460,7 @@ def analyze_strategy_comprehensive(
     labels: Optional[List[str]],
     dataset_name: str,
     age_col: str = 'age_raw',
-    sensitive_col: str = 'sex',
+    sensitive_col: Union[str, List[str]] = 'sex',
     target_col: str = 'heart_disease'
 ) -> Dict:
     """
@@ -262,30 +469,47 @@ def analyze_strategy_comprehensive(
     Combines:
     - Fairness metrics (group balance, statistical parity)
     - Sensitive attribute distribution within bins
+    - Cross-attribute fairness impact (ΔSP for every other sensitive attr)
     - Overall population statistics
     
-    Args:
-        df: Input DataFrame
-        strategy_name: Name of binning strategy
-        bins: Bin edges
-        labels: Bin labels (or None)
-        dataset_name: Dataset identifier for tracking
-        age_col: Age column name
-        sensitive_col: Sensitive attribute column
-        target_col: Target variable column
+    Parameters
+    ----------
+    df : DataFrame
+        Input DataFrame.
+    strategy_name : str
+        Name of binning strategy.
+    bins : list
+        Bin edges.
+    labels : list or None
+        Bin labels.
+    dataset_name : str
+        Dataset identifier for tracking.
+    age_col : str
+        Column with continuous values.
+    sensitive_col : str or list[str]
+        One or more sensitive attribute columns.  The first element
+        is the "primary" (used for within-bin distribution); all others
+        contribute to the cross-attribute impact matrix.
+        Legacy: a plain ``str`` is accepted and wrapped automatically.
+    target_col : str
+        Binary target variable column.
     
-    Returns:
-        Dictionary with complete analysis results
-        Keys: dataset, strategy, fairness_metrics, sensitive_distribution,
-              overall_sensitive_distribution, bins, labels
-    
-    Example:
-        >>> bins, labels = create_binning_strategy(df, 'clinical')
-        >>> analysis = analyze_strategy_comprehensive(
-        ...     df, 'clinical', bins, labels, 'cleveland'
-        ... )
-        >>> print(analysis['fairness_metrics']['max_sp_difference'])
+    Returns
+    -------
+    dict
+        Complete analysis results with keys: dataset, strategy,
+        fairness_metrics, sensitive_distribution,
+        overall_sensitive_distribution, cross_attribute_impact,
+        bins, labels.
     """
+    # Normalise sensitive_col → list
+    if isinstance(sensitive_col, str):
+        sensitive_cols = [sensitive_col]
+    else:
+        sensitive_cols = list(sensitive_col)
+
+    primary_attr = sensitive_cols[0]
+
     logger.info(f"\n{'='*60}")
     logger.info(f"Analyzing strategy: {strategy_name} on {dataset_name}")
     logger.info(f"{'='*60}")
@@ -296,14 +520,22 @@ def analyze_strategy_comprehensive(
     # Fairness metrics
     fairness = compute_fairness_metrics(df_binned, 'age_group_exp', target_col)
     
-    # Sensitive attribute distribution within bins
+    # Sensitive attribute distribution within bins (primary attr)
     sensitive_dist = sensitive_attribute_distribution(
-        df_binned, 'age_group_exp', sensitive_col
+        df_binned, 'age_group_exp', primary_attr
     )
     
     # Overall sensitive attribute distribution (for context)
-    overall_sensitive = df[sensitive_col].value_counts(normalize=True)
+    overall_sensitive = df[primary_attr].value_counts(normalize=True)
     overall_sensitive_pct = {str(k): round(v*100, 2) for k, v in overall_sensitive.items()}
+
+    # Cross-attribute fairness impact
+    cross_impact = compute_cross_attribute_impact(
+        df_binned,
+        bin_col='age_group_exp',
+        sensitive_cols=sensitive_cols,
+        target_col=target_col,
+    )
     
     result = {
         'dataset': dataset_name,
@@ -311,6 +543,7 @@ def analyze_strategy_comprehensive(
         'fairness_metrics': fairness,
         'sensitive_distribution': sensitive_dist.to_dict(orient='records'),
         'overall_sensitive_distribution': overall_sensitive_pct,
+        'cross_attribute_impact': cross_impact,
         'bins': [float(b) for b in bins],
         'labels': labels if labels else "auto-generated"
     }
@@ -450,7 +683,7 @@ def generate_summary_report(
         scoring_weights: Optional dict with 'sample_size', 'balance', 'fairness' weights
     
     Example:
-        >>> generate_summary_report(results, Path('results/age_binning_report.md'))
+        >>> generate_summary_report(results, Path('output/age_binning_report.md'))
     """
     logger.info(f"Generating summary report: {output_file}")
     
@@ -520,6 +753,11 @@ def generate_summary_report(
     report.append("2. **Ensure min_group_size ≥ 30** for statistical validity")
     report.append("3. **Test top strategies** across both datasets for consistency")
     report.append("4. **Consider clinical interpretability** in final selection\n")
+
+    # -----------------------------------------------------------------
+    # Cross-Attribute Fairness Impact
+    # -----------------------------------------------------------------
+    _append_cross_attribute_section(report, results)
     
     # Write report
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -527,3 +765,60 @@ def generate_summary_report(
         f.write('\n'.join(report))
     
     logger.info(f"✓ Summary report saved: {output_file}")
+
+
+def _append_cross_attribute_section(
+    report: List[str], results: List[Dict]
+) -> None:
+    """Append a Cross-Attribute Fairness Impact section to *report*.
+
+    Builds a table:  strategy × other-sensitive-attr → ΔSP
+    (delta = max within-bin SP − global SP).
+    """
+    # Collect all cross-attr data across results
+    all_attrs: set[str] = set()
+    for r in results:
+        all_attrs.update(r.get("cross_attribute_impact", {}).keys())
+
+    if not all_attrs:
+        return
+
+    sorted_attrs = sorted(all_attrs)
+
+    report.append("## Cross-Attribute Fairness Impact\n")
+    report.append(
+        "How each binning strategy affects statistical parity of **other** "
+        "sensitive attributes.  ΔSP = max(within-bin SP) − global SP.  "
+        "Positive values mean the binning *amplifies* disparities inside "
+        "at least one bin.\n"
+    )
+
+    # Group by dataset
+    datasets = sorted({r["dataset"] for r in results})
+    for ds in datasets:
+        ds_results = [r for r in results if r["dataset"] == ds]
+        if not ds_results:
+            continue
+
+        report.append(f"### {ds}\n")
+
+        # Header row
+        header = "| Strategy | " + " | ".join(f"ΔSP ({a})" for a in sorted_attrs) + " |"
+        sep = "|" + "|".join(["---"] * (len(sorted_attrs) + 1)) + "|"
+        report.append(header)
+        report.append(sep)
+
+        for r in ds_results:
+            impact = r.get("cross_attribute_impact", {})
+            cells = []
+            for attr in sorted_attrs:
+                info = impact.get(attr)
+                if info is None:
+                    cells.append("—")
+                else:
+                    d = info["delta"]
+                    cells.append(f"{d:+.4f}")
+            row = f"| {r['strategy']} | " + " | ".join(cells) + " |"
+            report.append(row)
+
+        report.append("")  # blank line after table

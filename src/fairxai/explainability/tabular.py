@@ -2,10 +2,14 @@
 
 These wrappers are thin and defer heavy lifting to third-party libs. They keep
 inputs/output formats consistent so pipeline callers can swap explainers.
+
+Runtime behavior (sample caps, enable/disable toggles, CV usage) is configured
+by caller scripts via YAML `xai` sections.
 """
 
 from dataclasses import dataclass
 from typing import Any, Iterable, List, Optional, Union
+import warnings
 import numpy as np
 import pandas as pd
 
@@ -43,6 +47,22 @@ def shap_explain_tabular(
     df = data.copy()
     if len(df) > max_samples:
         df = df.sample(n=max_samples, random_state=42)
+
+    # Suppress sklearn stratified-fold warnings emitted during PermutationExplainer
+    # runs (model called on tiny subsets → imbalanced folds). These are expected
+    # when using fine-grained bins with small group sizes and are not actionable.
+    # Note: must be a plain filterwarnings call (not catch_warnings) so the filter
+    # persists across threads spawned internally by SHAP/joblib workers.
+    warnings.filterwarnings(
+        "ignore",
+        message=".*least populated class.*",
+        category=UserWarning,
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message=".*n_splits.*",
+        category=UserWarning,
+    )
 
     explainer = shap.Explainer(model, df)
     shap_values = explainer(df)
@@ -146,5 +166,9 @@ def lime_explain_instance(
 
 
 def counterfactual_stub(*_: Any, **__: Any) -> None:
-    """Placeholder for future counterfactual implementations (tabular)."""
+    """Placeholder for future counterfactual implementations (tabular).
+
+    Roadmap:
+        Planned implementation target: Q2 2026.
+    """
     raise NotImplementedError("Counterfactual explanations not implemented yet for tabular data.")

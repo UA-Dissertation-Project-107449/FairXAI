@@ -46,7 +46,7 @@ def main():
         choices=["cardiac", "dermatology"],
         help="Pipeline name (e.g., cardiac, dermatology)"
     )
-    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose console output")
+    parser.add_argument("-v", "--verbose", action="count", default=0, help="Verbosity: -v=info, -vv=debug")
     parser.add_argument(
         "--run-id",
         type=str,
@@ -64,12 +64,15 @@ def main():
     feature_map_path = project_root / f"configs/domain/{pipeline}_feature_map.yaml"
     data_external = project_root / pipeline_cfg['paths']['external_dir']
     data_raw = project_root / pipeline_cfg['paths']['raw_dir']
-    log_dir = setup_phase_logging(project_root, 'data_loading.log', verbose=args.verbose)
     run_id = resolve_run_id(args.run_id) if args.run_id else None
+    log_dir = setup_phase_logging(
+        project_root, 'data_loading.log', verbose=args.verbose,
+        run_id=run_id, stage_name='load',
+    )
     if run_id:
-        results_profiling = get_run_root(project_root / f"results/{pipeline}", run_id) / "profiling"
+        results_profiling = get_run_root(project_root / f"output/{pipeline}", run_id) / "profiling"
     else:
-        results_profiling = project_root / f"results/{pipeline}/profiling"
+        results_profiling = project_root / f"output/{pipeline}/profiling"
 
     # Setup
     logging.info("[PHASE] Data loading started")

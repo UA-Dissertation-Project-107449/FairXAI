@@ -132,6 +132,38 @@ def prepare_data_splits(
     }
 
 
+def _unwrap_for_xai(raw_model: Any) -> Optional[Any]:
+    """Extract a sklearn-compatible estimator from fairlearn/wrapper models.
+
+    ``_run_xai_for_fold`` only does ``getattr(model, 'model', model)`` which
+    is insufficient for fairlearn in-processing models.  This helper digs
+    into ``predictors_`` / ``.model`` to find a real sklearn estimator that
+    exposes ``predict_proba`` (or at least ``predict``).
+
+    Returns:
+        A sklearn-like estimator, or *None* if nothing usable is found.
+    """
+    candidate = raw_model
+    # Fairlearn in-processing (ExponentiatedGradient, GridSearch)
+    if hasattr(raw_model, 'predictors_'):
+        predictor = next(
+            (p for p in raw_model.predictors_ if hasattr(p, 'predict_proba')),
+            next(
+                (p for p in raw_model.predictors_ if hasattr(p, 'predict')),
+                None,
+            ),
+        )
+        if predictor is not None:
+            candidate = predictor
+    # Custom wrappers (e.g. BaselineLogisticRegression)
+    if hasattr(candidate, 'model'):
+        candidate = candidate.model
+    # Final check: usable by SHAP (callable or sklearn) and LIME (predict_proba)
+    if hasattr(candidate, 'predict_proba') or hasattr(candidate, 'predict'):
+        return candidate
+    return None
+
+
 def save_experiment_xai(
     exp_id: str,
     model: Any,
@@ -139,19 +171,21 @@ def save_experiment_xai(
     X_lime: pd.DataFrame,
     versioning: ExperimentVersioning,
     dataset_name: str,
-    base_model: Optional[Any] = None
+    base_model: Optional[Any] = None,
+    xai_cfg: Optional[Dict[str, Any]] = None
 ) -> None:
-    xai_enabled = os.getenv('XAI_ENABLED', 'true').lower() == 'true'
-    if not xai_enabled:
+    if xai_cfg is None:
+        xai_cfg = {}
+    if not xai_cfg.get('enabled', True):
         return
 
-    dataset_xai_dir = versioning.latest_dir / 'xai' / dataset_name
+    dataset_xai_dir = versioning.latest_dir / 'xai' / dataset_name / 'holdout'
     shap_dir = dataset_xai_dir / 'shap'
     lime_dir = dataset_xai_dir / 'lime'
     shap_dir.mkdir(parents=True, exist_ok=True)
     lime_dir.mkdir(parents=True, exist_ok=True)
-    max_samples = int(os.getenv('XAI_MAX_SAMPLES', '200'))
-    lime_instances = int(os.getenv('XAI_LIME_INSTANCES', '2'))
+    max_samples = int(xai_cfg.get('max_samples', 200))
+    lime_instances = int(xai_cfg.get('lime_instances', 2))
 
     def _mean_abs_shap_values(shap_values: Any) -> np.ndarray:
         def _reduce(arr: np.ndarray) -> np.ndarray:
@@ -225,7 +259,7 @@ def save_experiment_xai(
             'feature': shap_global.feature_names,
             'mean_abs_shap': mean_abs_global
         }).sort_values('mean_abs_shap', ascending=False)
-        shap_global_file = shap_dir / f"{exp_id}_shap_global.csv"
+        shap_global_file = shap_dir / f"{exp_id}_global.csv"
         shap_global_df.to_csv(shap_global_file, index=False)
 
         # Local SHAP (test/reference for local context)
@@ -235,7 +269,7 @@ def save_experiment_xai(
             'feature': shap_local.feature_names,
             'mean_abs_shap': mean_abs_local
         }).sort_values('mean_abs_shap', ascending=False)
-        shap_local_file = shap_dir / f"{exp_id}_shap_local.csv"
+        shap_local_file = shap_dir / f"{exp_id}_local.csv"
         shap_local_df.to_csv(shap_local_file, index=False)
     except Exception as exc:
         logging.getLogger(__name__).warning(f"SHAP failed for {exp_id}: {exc}")
@@ -265,7 +299,7 @@ def save_experiment_xai(
                         'local_pred': exp.local_pred
                     })
             lime_df = pd.DataFrame(lime_results)
-            lime_file = lime_dir / f"{exp_id}_lime_examples.csv"
+            lime_file = lime_dir / f"{exp_id}_examples.csv"
             lime_df.to_csv(lime_file, index=False)
         elif lime_instances > 0:
             logging.getLogger(__name__).warning(f"LIME skipped for {exp_id}: no predict_proba/decision_function")
@@ -273,10 +307,65 @@ def save_experiment_xai(
         logging.getLogger(__name__).warning(f"LIME failed for {exp_id}: {exc}")
 
 
+def save_cv_experiment_xai(
+    exp_id: str,
+    fold_results: List[Dict[str, Any]],
+    versioning: ExperimentVersioning,
+    dataset_name: str,
+    xai_cfg: Optional[Dict[str, Any]] = None
+) -> None:
+    """Aggregate and save cross-validated XAI outputs (SHAP + LIME).
+
+    Uses :meth:`CVTrainer.aggregate_cv_shap` and
+    :meth:`CVTrainer.aggregate_cv_lime` to combine per-fold XAI data,
+    then writes the results to ``xai/{dataset}/cv/shap/`` and
+    ``xai/{dataset}/cv/lime/``.
+
+    Args:
+        exp_id: Experiment identifier.
+        fold_results: Per-fold result dicts (each must contain an ``xai`` key).
+        versioning: Versioning system instance.
+        dataset_name: Dataset name for directory structure.
+        xai_cfg: XAI configuration dict.
+    """
+    if xai_cfg is None:
+        xai_cfg = {}
+    if not xai_cfg.get('enabled', True):
+        return
+
+    logger = logging.getLogger(__name__)
+
+    cv_xai_dir = versioning.latest_dir / 'xai' / dataset_name / 'cv'
+    shap_dir = cv_xai_dir / 'shap'
+    lime_dir = cv_xai_dir / 'lime'
+    shap_dir.mkdir(parents=True, exist_ok=True)
+    lime_dir.mkdir(parents=True, exist_ok=True)
+
+    # Aggregate SHAP across folds (global = train data, local = val data)
+    cv_shap_global = CVTrainer.aggregate_cv_shap(fold_results, scope='global')
+    if cv_shap_global is not None:
+        shap_file = shap_dir / f"{exp_id}_global.csv"
+        cv_shap_global.to_csv(shap_file, index=False)
+        logger.info(f"  CV SHAP global saved: {shap_file.name}")
+
+    cv_shap_local = CVTrainer.aggregate_cv_shap(fold_results, scope='local')
+    if cv_shap_local is not None:
+        shap_file = shap_dir / f"{exp_id}_local.csv"
+        cv_shap_local.to_csv(shap_file, index=False)
+        logger.info(f"  CV SHAP local saved: {shap_file.name}")
+
+    # Aggregate LIME across folds
+    cv_lime_df = CVTrainer.aggregate_cv_lime(fold_results)
+    if cv_lime_df is not None:
+        lime_file = lime_dir / f"{exp_id}_tracked.csv"
+        cv_lime_df.to_csv(lime_file, index=False)
+        logger.info(f"  CV LIME tracked saved: {lime_file.name}")
+
+
 def aggregate_dataset_shap(xai_dir: Path, suffix: str) -> None:
     files = [
-        p for p in xai_dir.glob(f"*_shap_{suffix}.csv")
-        if not p.name.endswith(f"shap_{suffix}_summary.csv")
+        p for p in xai_dir.glob(f"*_{suffix}.csv")
+        if not p.name.endswith(f"{suffix}_summary.csv")
     ]
     if not files:
         return
@@ -307,7 +396,7 @@ def aggregate_dataset_shap(xai_dir: Path, suffix: str) -> None:
     summary['p75'] = grouped.quantile(0.75).values
     summary = summary.sort_values('mean', ascending=False)
 
-    out_file = xai_dir / f"shap_{suffix}_summary.csv"
+    out_file = xai_dir / f"{suffix}_summary.csv"
     summary.to_csv(out_file, index=False)
 
 
@@ -496,7 +585,7 @@ def run_single_split_experiment(
     )
     
     # Save predictions
-    versioning.save_predictions(exp_id, predictions_df, dataset=config['dataset'])
+    versioning.save_predictions(exp_id, predictions_df, dataset=config['dataset'], split_method='holdout')
 
     # XAI outputs (single-split only)
     model_for_xai = result.get('model') if isinstance(result, dict) else None
@@ -512,7 +601,8 @@ def run_single_split_experiment(
             splits['X_test'],
             versioning,
             config['dataset'],
-            base_model=base_model
+            base_model=base_model,
+            xai_cfg=config.get('xai')
         )
     
     logger.info(f"  Accuracy: {result['test_metrics']['accuracy']:.3f}")
@@ -567,6 +657,19 @@ def run_cv_experiment(
             }
         return aggregated
 
+    # XAI setup for CV
+    xai_cfg = config.get('xai', {})
+    xai_enabled = xai_cfg.get('enabled', True)
+    tracked_indices = None
+    feature_names = list(X_full.columns)
+    shap_max_samples = int(xai_cfg.get('max_samples', 200))
+    if xai_enabled:
+        lime_n = int(xai_cfg.get('lime_instances', 2))
+        rng = np.random.RandomState(config.get('random_seed', 42))
+        tracked_indices = rng.choice(
+            len(X_full), size=min(lime_n, len(X_full)), replace=False
+        ).tolist()
+
     if mitigation == 'baseline':
         # Run CV experiment (baseline only)
         cv_results = cv_trainer.run_cv_experiment(
@@ -574,7 +677,11 @@ def run_cv_experiment(
             X=X_full,
             y=y_full,
             sensitive_attrs=sensitive_full,
-            model_params=config.get('model_params', {})
+            model_params=config.get('model_params', {}),
+            xai_enabled=xai_enabled,
+            tracked_indices=tracked_indices,
+            feature_names=feature_names,
+            shap_max_samples=shap_max_samples,
         )
 
         # Get fold predictions for fairness calculation
@@ -625,13 +732,42 @@ def run_cv_experiment(
                 base_model=base_model
             )
 
-            fold_results.append({
+            fold_result_entry = {
                 'fold_idx': fold_idx,
                 'train_indices': train_idx,
                 'val_indices': val_idx,
                 'train_metrics': result.get('train_metrics', None),
                 'val_metrics': result['test_metrics']
-            })
+            }
+
+            # Per-fold XAI (while fold model is still available)
+            if xai_enabled:
+                raw_fold_model = None
+                if stage == 'post-processing' and base_model is not None:
+                    raw_fold_model = base_model
+                else:
+                    raw_fold_model = result.get('model')
+                # Unwrap fairlearn / wrapper models to sklearn estimator
+                fold_model = _unwrap_for_xai(raw_fold_model) if raw_fold_model is not None else None
+                if fold_model is not None:
+                    try:
+                        fold_xai = cv_trainer._run_xai_for_fold(
+                            model=fold_model,
+                            X_train=X_train,
+                            X_val=X_val,
+                            feature_names=feature_names,
+                            tracked_indices=tracked_indices,
+                            val_indices=val_idx,
+                            fold_idx=fold_idx,
+                            max_samples=shap_max_samples,
+                        )
+                        fold_result_entry['xai'] = fold_xai
+                    except Exception as exc:
+                        logger.warning(f"  Fold {fold_idx} XAI failed: {exc}")
+                elif raw_fold_model is not None:
+                    logger.info(f"  Fold {fold_idx}: XAI skipped — model type not XAI-compatible")
+
+            fold_results.append(fold_result_entry)
 
             y_pred = result['predictions']['y_pred']
             y_proba = result['predictions']['y_proba']
@@ -661,15 +797,25 @@ def run_cv_experiment(
             'n_folds': n_folds,
             'random_state': config.get('random_seed', 42)
         }
-    
-    # Save fold predictions
-        versioning.save_predictions(
+
+    # Save fold predictions (both baseline and mitigated paths)
+    versioning.save_predictions(
+        exp_id,
+        fold_predictions,
+        dataset=config['dataset'],
+        split_method='cv'
+    )
+
+    # CV XAI outputs
+    if xai_enabled:
+        save_cv_experiment_xai(
             exp_id,
-            fold_predictions,
-            f"cv_predictions_{exp_id}.csv",
-            dataset=config['dataset']
+            cv_results['fold_results'],
+            versioning,
+            config['dataset'],
+            xai_cfg=xai_cfg
         )
-    
+
     # Calculate fairness metrics on full CV predictions
     predictions_df = fold_predictions.copy()
     for col in X_full.columns:
@@ -703,17 +849,19 @@ def run_combinatorial_analysis(
     config_path: str,
     pipeline: str = 'cardiac',
     n_jobs: int = 1,
-    verbose: bool = False,
+    verbose: int = 0,
     archive_previous: bool = True,
     run_id: Optional[str] = None,
-    results_root: Optional[str] = None
+    output_root: Optional[str] = None
 ):
     """Main orchestration for combinatorial experiments."""
     project_root = get_project_root(Path(__file__))
     use_run_id = bool(run_id or os.getenv('RUN_ID') or os.getenv('PREFECT__RUNTIME__FLOW_RUN_ID'))
     run_id = resolve_run_id(run_id) if use_run_id else None
-    log_subdir = f"experiments/{run_id}" if run_id else 'experiments/latest_run'
-    setup_phase_logging(project_root, 'combinatorial_experiments.log', verbose=verbose, log_subdir=log_subdir)
+    setup_phase_logging(
+        project_root, 'combinatorial_experiments.log', verbose=verbose,
+        run_id=run_id, stage_name='combinatorial',
+    )
     logger = logging.getLogger(__name__)
     
     logger.info("="*80)
@@ -742,20 +890,20 @@ def run_combinatorial_analysis(
     target_col = pipeline_cfg.get('training', {}).get('target', 'heart_disease')
 
     # Initialize versioning
-    base_results_dir = Path(results_root) if results_root else Path(config['paths']['results_dir'])
+    base_output_dir = Path(output_root) if output_root else Path(config['paths']['results_dir'])
     if run_id:
-        base_results_dir = Path(results_root) if results_root else (project_root / f"results/{pipeline}")
-        run_dir = get_run_root(base_results_dir, run_id) / 'experiments' / 'full'
+        base_output_dir = Path(output_root) if output_root else (project_root / f"output/{pipeline}")
+        run_dir = get_run_root(base_output_dir, run_id) / 'experiments' / 'full'
         run_dir.mkdir(parents=True, exist_ok=True)
-        versioning = ExperimentVersioning(base_results_dir, run_dir=run_dir)
+        versioning = ExperimentVersioning(base_output_dir, run_dir=run_dir)
     else:
-        versioning = ExperimentVersioning(base_results_dir)
+        versioning = ExperimentVersioning(base_output_dir)
         # Archive previous run if requested
         if archive_previous:
             versioning.archive_previous_run()
 
     if run_id:
-        append_run_history(base_results_dir, {
+        append_run_history(base_output_dir, {
             'run_id': run_id,
             'pipeline': pipeline,
             'mode': 'full',
@@ -789,6 +937,7 @@ def run_combinatorial_analysis(
                         'model_params': config.get('model_params', {}),
                         'fairness_base_model_params': fairness_base_params or None,
                         'sensitive_attributes': sensitive_attrs,
+                        'xai': config.get('xai', {}),
                     }
                     
                     experiments.append((exp_id, exp_config))
@@ -804,7 +953,8 @@ def run_combinatorial_analysis(
     # Save manifests first
     logger.info("\nSaving experiment manifests...")
     for exp_id, exp_config in experiments:
-        versioning.save_manifest(exp_id, exp_config)
+        _sm = 'holdout' if exp_config['training_method'] == 'single_split' else 'cv'
+        versioning.save_manifest(exp_id, exp_config, split_method=_sm)
     
     # Run experiments
     logger.info("\nStarting experiments...")
@@ -821,7 +971,8 @@ def run_combinatorial_analysis(
             logger.info(f"\n[{i}/{total_experiments}] Running experiment {exp_id}...")
             result = run_single_experiment(exp_id, exp_config, versioning, processed_dir, schema_cfg, logger, target_col)
             results.append(result)
-            versioning.save_results(exp_id, result)
+            _sm = 'holdout' if result.get('training_method') == 'single_split' else 'cv'
+            versioning.save_results(exp_id, result, split_method=_sm)
     else:
         # Parallel execution
         logger.info(f"Running experiments in parallel with {n_jobs} jobs...")
@@ -833,7 +984,8 @@ def run_combinatorial_analysis(
         
         # Save results
         for result in results:
-            versioning.save_results(result['experiment_id'], result)
+            _sm = 'holdout' if result.get('training_method') == 'single_split' else 'cv'
+            versioning.save_results(result['experiment_id'], result, split_method=_sm)
     
     # Create summary
     logger.info("\n" + "="*80)
@@ -854,8 +1006,8 @@ def run_combinatorial_analysis(
     logger.info("[PHASE] Combinatorial experiments complete")
 
     if run_id:
-        update_latest_pointer(base_results_dir, versioning.latest_dir, logger)
-        append_run_history(base_results_dir, {
+        update_latest_pointer(base_output_dir, versioning.latest_dir, logger)
+        append_run_history(base_output_dir, {
             'run_id': run_id,
             'pipeline': pipeline,
             'mode': 'full',
@@ -865,13 +1017,17 @@ def run_combinatorial_analysis(
             'status': 'completed'
         })
 
-    # Aggregate dataset-level SHAP summaries (global/local)
+    # Aggregate dataset-level SHAP summaries (global/local for both holdout and CV)
     xai_root = versioning.latest_dir / 'xai'
     for dataset in config['datasets']:
-        shap_dir = xai_root / dataset / 'shap'
+        shap_dir = xai_root / dataset / 'holdout' / 'shap'
         if shap_dir.exists():
             aggregate_dataset_shap(shap_dir, 'global')
             aggregate_dataset_shap(shap_dir, 'local')
+        cv_shap_dir = xai_root / dataset / 'cv' / 'shap'
+        if cv_shap_dir.exists():
+            aggregate_dataset_shap(cv_shap_dir, 'global')
+            aggregate_dataset_shap(cv_shap_dir, 'local')
 
 
 def main():
@@ -897,9 +1053,10 @@ def main():
         help='Number of parallel jobs (-1 for all cores)'
     )
     parser.add_argument(
-        '--verbose',
-        action='store_true',
-        help='Enable verbose logging'
+        '-v', '--verbose',
+        action='count',
+        default=0,
+        help='Verbosity: -v=info, -vv=debug'
     )
     parser.add_argument(
         '--archive-previous',
@@ -914,10 +1071,10 @@ def main():
         help='Run identifier (optional, enables run-scoped outputs)'
     )
     parser.add_argument(
-        '--results-root',
+        '--output-root',
         type=str,
         default=None,
-        help='Base results directory for run outputs'
+        help='Base output directory for run outputs'
     )
     
     args = parser.parse_args()
@@ -929,7 +1086,7 @@ def main():
         verbose=args.verbose,
         archive_previous=args.archive_previous,
         run_id=args.run_id,
-        results_root=args.results_root
+        output_root=args.output_root
     )
 
 

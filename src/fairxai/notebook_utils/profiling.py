@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import json
+import logging
+from pathlib import Path
+
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -15,6 +17,8 @@ from ..profiling import (
 )
 
 from . import PALETTE_DATASET, PALETTE_SEX
+
+logger = logging.getLogger(__name__)
 
 
 EXPECTED_COMPLEXITY_METRICS = get_supported_complexity_metrics(include_aliases=False)
@@ -69,7 +73,7 @@ def load_profiles(files: dict[str, Path]) -> dict[str, dict]:
 
             profiles[name] = profile
         except Exception as exc:
-            print(f"Failed to load {name}: {exc}")
+            logger.warning("Failed to load %s: %s", name, exc)
     return profiles
 
 
@@ -124,7 +128,7 @@ def plot_sensitive_proportions(
 ) -> tuple[plt.Figure, plt.Axes] | None:
     subset = df[df["attribute"] == attribute].copy()
     if subset.empty:
-        print(f"No data for {attribute}")
+        logger.warning("No data for %s", attribute)
         return
     pivot = subset.pivot_table(index="dataset", columns="group", values="pct", aggfunc="sum").fillna(0)
     pivot = pivot.reindex(datasets)
@@ -166,7 +170,7 @@ def plot_balance_cv(
 ) -> tuple[plt.Figure, plt.Axes] | None:
     plot_df = df.dropna(subset=["cv"]).copy()
     if plot_df.empty:
-        print("No representation balance data available.")
+        logger.warning("No representation balance data available.")
         return
     fig, ax = plt.subplots(figsize=(8, 4))
     sns.barplot(data=plot_df, x="dataset", y="cv", hue="attribute", ax=ax)
@@ -189,7 +193,7 @@ def plot_size_ratio_heatmap(
 ) -> tuple[plt.Figure, plt.Axes] | None:
     ratio_df = df.dropna(subset=["size_ratio"]).copy()
     if ratio_df.empty:
-        print("No size ratio data available.")
+        logger.warning("No size ratio data available.")
         return
     heat = ratio_df.pivot(index="dataset", columns="attribute", values="size_ratio").reindex(datasets)
     fig, ax = plt.subplots(figsize=(6, 3))
@@ -229,7 +233,7 @@ def plot_prevalence_heatmap_by_age(
 ) -> tuple[plt.Figure, plt.Axes] | None:
     age_df = df[df["attribute"] == "age_group"].copy()
     if age_df.empty:
-        print("No age-group prevalence data available.")
+        logger.warning("No age-group prevalence data available.")
         return
     age_df["group"] = pd.Categorical(age_df["group"], categories=age_order, ordered=True)
     heat = age_df.pivot(index="group", columns="dataset", values="prevalence").reindex(age_order)
@@ -250,7 +254,7 @@ def plot_prevalence_by_sex(
 ) -> tuple[plt.Figure, plt.Axes] | None:
     sex_df = df[df["attribute"] == "sex"].copy()
     if sex_df.empty:
-        print("No sex prevalence data available.")
+        logger.warning("No sex prevalence data available.")
         return
     fig, ax = plt.subplots(figsize=(6, 4))
     sns.barplot(data=sex_df, x="dataset", y="prevalence", hue="group", ax=ax, palette=PALETTE_SEX)
@@ -289,7 +293,7 @@ def plot_spd_bars(
 ) -> tuple[plt.Figure, list[plt.Axes]] | None:
     plot_spd = df.dropna(subset=["max_spd"]).copy()
     if plot_spd.empty:
-        print("No SPD data available.")
+        logger.warning("No SPD data available.")
         return
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
     sns.barplot(data=plot_spd, x="dataset", y="max_spd", hue="attribute", ax=axes[0])
@@ -336,7 +340,7 @@ def plot_positive_rates_by_age(
     show: bool = True,
 ) -> tuple[plt.Figure, plt.Axes] | None:
     if df.empty:
-        print("No positive-rate series available.")
+        logger.warning("No positive-rate series available.")
         return
     df["age_group"] = pd.Categorical(df["age_group"], categories=age_order, ordered=True)
     fig, ax = plt.subplots(figsize=(7, 4))

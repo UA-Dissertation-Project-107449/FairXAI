@@ -28,7 +28,7 @@ FairXAI/
 ├── configs/              # Pipeline/dataset/experiment configs
 ├── notebooks/            # Jupyter notebooks & runs
 ├── data/                 # Datasets (external/raw/processed)
-├── results/              # Outputs (metrics, plots, reports)
+├── output/               # Outputs (metrics, plots, reports)
 ├── models/               # Trained checkpoints
 ├── logs/                 # Execution logs
 └── docs/                 # Documentation

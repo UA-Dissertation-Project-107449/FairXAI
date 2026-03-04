@@ -8,19 +8,8 @@ data/processed/
 data/external/
 *.pkl
 
-# Experiment/result artifacts
-results/*
-!results/cardiac/
-results/cardiac/*
-!results/cardiac/experiments/
-results/cardiac/experiments/*
-!results/cardiac/experiments/latest_run/
-results/cardiac/experiments/latest_run/**
-experiments/latest_run/
-experiments/archived_runs/
-experiments/**/manifests/
-experiments/**/reports/
-experiments/**/plots/
+# Output artifacts
+output/*
 
 # Local analysis outputs
 notebooks/**/.ipynb_checkpoints/

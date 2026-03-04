@@ -47,7 +47,7 @@ fairness:
     calibration_ece: 0.05
 
 output:
-  base_dir: "results/cardiac/baseline/latest_run"
+  base_dir: "output/cardiac/baseline/latest_run"
   save_model: true
   save_predictions: true
   save_fairness_report: true

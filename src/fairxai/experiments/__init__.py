@@ -1,4 +1,8 @@
-"""Experiment utilities and analysis functions."""
+"""Experiments package public API.
+
+Exports age-binning analysis utilities and experiment artifact versioning
+helpers consumed by experiment scripts.
+"""
 
 from .age_binning import (
     create_binning_strategy,

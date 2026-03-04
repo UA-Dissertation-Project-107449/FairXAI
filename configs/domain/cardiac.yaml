@@ -20,6 +20,13 @@ datasets:
     n_samples: 918  # After preprocessing
     n_features: 11
 
+  cardio70k:
+    source: "Cardiovascular Disease Dataset (70k)"
+    path: "data/raw/cardiac/cardio70k_standardized.csv"
+    n_samples: 70000
+    n_features: 12
+    age_unit: "days"  # ages stored in days, not years
+
 sensitive_attributes:
   age_group:
     type: "categorical"
@@ -30,6 +37,44 @@ sensitive_attributes:
     type: "binary"
     description: "Biological sex"
     categories: ["female", "male"]
+
+  ethnicity:
+    type: "categorical"
+    description: "Ethnicity (optional, not present in current cardiac datasets)"
+
+  group_cluster:
+    type: "categorical"
+    description: "Derived cluster/similarity group (optional)"
+
+# Canonical ordered list used for stratification and reporting.
+# Matches configs/pipelines/cardiac.yaml → fairness.sensitive_attributes.
+sensitive_attribute_order:
+  - age_group
+  - sex
+  - ethnicity
+  - group_cluster
+
+# ── Schema harmonization constants ────────────────────────────────────
+# Upper-bound clipping applied during age normalization.
+age_clipping:
+  years_upper: 120        # human-range upper bound for age in years
+  cardio70k_days_upper: 43830  # ~120 years in days
+
+# Canonical sex-value mappings applied during schema harmonization.
+# Used by schemas.py, loaders.py, and notebook_utils.
+sex_mapping:
+  numeric:
+    0: "Female"
+    1: "Male"
+    2: "Male"         # some datasets encode 2 as Male
+  string:
+    "F": "Female"
+    "Female": "Female"
+    "0": "Female"
+    "M": "Male"
+    "Male": "Male"
+    "1": "Male"
+    "2": "Male"
 
 feature_groups:
   demographic:
