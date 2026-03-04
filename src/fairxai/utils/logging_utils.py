@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Union
+from typing import Any, Dict, Optional, Union
 import logging
 import warnings
 
@@ -29,6 +29,44 @@ class _PhaseFilter(logging.Filter):
             or msg.startswith("[SUCCESS]")
             or msg.startswith("[ERROR]")
         )
+
+
+class _WarningFormatter(logging.Formatter):
+    """Formatter that prefixes warning records with their Python category type.
+
+    Produces: ``... - WARNING - [UserWarning] <message>``
+    Falls back gracefully for non-warning records.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        category = getattr(record, "warning_category", None)
+        if category:
+            saved_msg, saved_args = record.msg, record.args
+            record.msg = f"[{category}] {record.getMessage()}"
+            record.args = ()
+            result = super().format(record)
+            record.msg, record.args = saved_msg, saved_args
+            return result
+        return super().format(record)
+
+
+class _ErrorFormatter(logging.Formatter):
+    """Formatter that prefixes error records with the exception class name.
+
+    Produces: ``... - ERROR - [ValueError] <message>``
+    Falls back gracefully when no exc_info is attached.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        if record.exc_info and record.exc_info[0] is not None:
+            exc_name = record.exc_info[0].__name__
+            saved_msg, saved_args = record.msg, record.args
+            record.msg = f"[{exc_name}] {record.getMessage()}"
+            record.args = ()
+            result = super().format(record)
+            record.msg, record.args = saved_msg, saved_args
+            return result
+        return super().format(record)
 
 
 def _normalise_verbosity(verbose: Union[bool, int]) -> int:
@@ -86,14 +124,16 @@ def setup_logging(
     warn_path = log_file.with_name(f"{log_file.stem}_warnings.log")
     err_path = log_file.with_name(f"{log_file.stem}_errors.log")
 
+    warn_formatter = _WarningFormatter("%(asctime)s - %(levelname)s - %(message)s")
     warning_handler = logging.FileHandler(warn_path, mode="w")
     warning_handler.setLevel(logging.WARNING)
     warning_handler.addFilter(lambda r: r.levelno == logging.WARNING)
-    warning_handler.setFormatter(formatter)
+    warning_handler.setFormatter(warn_formatter)
 
+    err_formatter = _ErrorFormatter("%(asctime)s - %(levelname)s - %(message)s")
     error_handler = logging.FileHandler(err_path, mode="w")
     error_handler.setLevel(logging.ERROR)
-    error_handler.setFormatter(formatter)
+    error_handler.setFormatter(err_formatter)
 
     logger.addHandler(warning_handler)
     logger.addHandler(error_handler)
@@ -101,6 +141,27 @@ def setup_logging(
     # --- Capture Python warnings into the logging system --------------------
     logging.captureWarnings(True)
     warnings.simplefilter("default")
+
+    # Override the showwarning installed by captureWarnings so that the
+    # warning category type is surfaced as a structured field on the record.
+    # The _WarningFormatter on the warning_handler picks this up as [Category].
+    _py_warn_logger = logging.getLogger("py.warnings")
+
+    def _showwarning(  # noqa: WPS430
+        message: Warning,
+        category: type,
+        filename: str,
+        lineno: int,
+        file: Any = None,
+        line: Optional[str] = None,
+    ) -> None:
+        text = warnings.formatwarning(message, category, filename, lineno, line)
+        _py_warn_logger.warning(
+            text.rstrip("\n"),
+            extra={"warning_category": category.__name__},
+        )
+
+    warnings.showwarning = _showwarning
     return logger
 
 
