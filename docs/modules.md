@@ -9,7 +9,7 @@ for `src/fairxai`.
 |--------|---------|-----------|
 | `cli` | Script runner helpers, logging setup, run pointer/history utilities | `runner_base.py`, `runner_utils.py` |
 | `data` | Data loading, schema harmonization, preprocessing, profiling inputs | `loaders.py`, `preprocessors.py`, `schemas.py`, `profilers.py` |
-| `experiments` | Experiment versioning, age binning analysis, experiment data I/O | `versioning.py`, `age_binning.py`, `data_io.py` |
+| `experiments` | Experiment versioning, attribute binning analysis, experiment data I/O | `versioning.py`, `attribute_binning.py`, `data_io.py` |
 | `explainability` | SHAP/LIME wrappers and explainability dataclasses | `tabular.py` |
 | `fairness` | Fairness metrics and mitigation techniques | `metrics.py`, `mitigation.py` |
 | `models` | Baseline model wrapper and CV training orchestration | `baseline.py`, `cv_trainer.py` |

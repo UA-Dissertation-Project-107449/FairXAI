@@ -124,8 +124,8 @@ def analyze_attribute_binning(run_id: str, verbose: int = 0):
     """Analyzes attribute binning strategies."""
     logger = get_run_logger()
     logger.info("[PHASE 7/10] Attribute binning strategies analysis")
-    script = ROOT_DIR / "scripts" / "cardiac" / "age_binning.py"
-    args = ["--config", "configs/experiments/age_binning.yaml", "--run-mode", "full", "--run-id", run_id]
+    script = ROOT_DIR / "scripts" / "experiments" / "run_attribute_binning_analysis.py"
+    args = ["--config", "configs/experiments/age_binning.yaml", "--run-mode", "full", "--run-id", run_id, "--pipeline", "cardiac"]
     args.extend(_verbose_flags(verbose))
     _run_script(script, args, os.environ.copy())
 
@@ -306,7 +306,7 @@ def cardiac_pipeline(
     else:
         logger.info("[6/10] assess — SKIPPED (outside active range)")
 
-    # Stage 7 — Age binning (optional + gated)
+    # Stage 7 — Attribute binning (optional + gated)
     if _should_run(7) and run_attribute_binning:
         wait = [assess_predictions_task] if assess_predictions_task else []
         age_task = analyze_attribute_binning.submit(run_id, verbose, wait_for=wait)
