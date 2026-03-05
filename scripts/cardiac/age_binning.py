@@ -5,7 +5,7 @@ import runpy
 import sys
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-TARGET = ROOT_DIR / "scripts" / "experiments" / "run_age_binning_analysis.py"
+TARGET = ROOT_DIR / "scripts" / "experiments" / "run_attribute_binning_analysis.py"
 
 if __name__ == "__main__":
     args = sys.argv[1:]

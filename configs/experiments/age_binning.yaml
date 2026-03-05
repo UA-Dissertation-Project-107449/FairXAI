@@ -1,5 +1,18 @@
 # Age Binning Strategy Comparison Experiment
 # Tests different age discretization approaches for fairness analysis
+#
+# Strategies are grouped by method:
+#   fixed            — domain-defined edges (human-readable labels)
+#   quantile         — equal-frequency edges (data-driven)
+#   equal_width      — equal-range edges (data-driven)
+#   jenks            — natural breaks minimising within-group variance (requires jenkspy)
+#   adaptive_quantile — quantile + automatic merge of under-populated bins
+#
+# All strategies pass through a safeguard layer that:
+#   1. Clips edges to the actual data range (no empty tail bins)
+#   2. Optionally merges bins below min_group_size with their neighbour
+#
+# Fixed strategies with "adaptive: true" also trigger step 2.
 
 experiment:
   name: "age_binning_comparison"
@@ -14,59 +27,190 @@ experiment:
 
 data:
   base_config: "domain/cardiac.yaml"
-  datasets:
-    - cleveland
-    - kaggle_heart
+  # "auto" = discover all *_standardized.csv files in the pipeline's raw_dir.
+  # Override with an explicit list to restrict: [cleveland, kaggle_heart]
+  datasets: auto
   age_column: "age_raw"
   sensitive_attributes:
     - sex  # Analyze distribution within age bins
   target: "heart_disease"
 
+# ---------------------------------------------------------------------------
+# Binning strategies
+# ---------------------------------------------------------------------------
+#
+# Expected approximate group sizes per strategy (for reference):
+#   N=300  N=900  N=70000
+#   -----  -----  ------
+#   quantile_3   ~100   ~300   ~23k
+#   quantile_5    ~60   ~180   ~14k
+#   quantile_10   ~30    ~90    ~7k   ← at threshold for 300-sample datasets
+#
+# Adaptive / jenks strategies auto-merge bins < min_group_size.
+
 binning_strategies:
-  fixed_10yr:
-    description: "Current baseline - 10-year fixed intervals"
+  # --- Fixed strategies (domain-defined edges) ----------------------------
+  fixed_2:
+    description: "Binary split at cardiovascular risk boundary"
     method: "fixed"
-    bins: [0, 40, 50, 60, 70, 100]
-    labels: ["<40", "40-49", "50-59", "60-69", "70+"]
-    
+    bins: [0, 55, 100]
+    labels: ["<55", "55+"]
+
+  fixed_3:
+    description: "Coarse 3-bin split"
+    method: "fixed"
+    bins: [0, 45, 65, 100]
+    labels: ["<45", "45-64", "65+"]
+
   fixed_5yr:
     description: "Finer granularity - 5-year fixed intervals"
     method: "fixed"
     bins: [0, 35, 40, 45, 50, 55, 60, 65, 70, 75, 100]
     labels: ["<35", "35-39", "40-44", "45-49", "50-54", "55-59", "60-64", "65-69", "70-74", "75+"]
-    
+
+  fixed_10yr:
+    description: "Current baseline - 10-year fixed intervals"
+    method: "fixed"
+    bins: [0, 40, 50, 60, 70, 100]
+    labels: ["<40", "40-49", "50-59", "60-69", "70+"]
+
   clinical:
     description: "Clinical cardiovascular risk guidelines"
     method: "fixed"
     bins: [0, 45, 55, 65, 100]
     labels: ["<45", "45-54", "55-64", "65+"]
     reference: "ACC/AHA guidelines"
-    
+
+  clinical_adaptive:
+    description: "Clinical guidelines with auto-merge of small bins"
+    method: "fixed"
+    bins: [0, 45, 55, 65, 100]
+    labels: ["<45", "45-54", "55-64", "65+"]
+    adaptive: true
+
+  # --- Quantile strategies (equal-frequency bins) -------------------------
   quantile_3:
     description: "Data-driven terciles (equal sample sizes)"
     method: "quantile"
     n_bins: 3
-    
+
+  quantile_4:
+    description: "Data-driven quartiles"
+    method: "quantile"
+    n_bins: 4
+
   quantile_5:
-    description: "Data-driven quintiles (equal sample sizes)"
+    description: "Data-driven quintiles"
     method: "quantile"
     n_bins: 5
+
+  quantile_6:
+    description: "Data-driven sextiles"
+    method: "quantile"
+    n_bins: 6
+
+  quantile_7:
+    description: "Data-driven septiles"
+    method: "quantile"
+    n_bins: 7
+
+  quantile_8:
+    description: "Data-driven octiles"
+    method: "quantile"
+    n_bins: 8
+
+  quantile_9:
+    description: "Data-driven noniles"
+    method: "quantile"
+    n_bins: 9
+
+  quantile_10:
+    description: "Data-driven deciles"
+    method: "quantile"
+    n_bins: 10
+
+  # --- Equal-width strategies (equal-range bins) --------------------------
+  equal_width_3:
+    description: "3 equal-width bins spanning the data range"
+    method: "equal_width"
+    n_bins: 3
+
+  equal_width_4:
+    description: "4 equal-width bins"
+    method: "equal_width"
+    n_bins: 4
 
   equal_width_5:
     description: "5 equal-width bins spanning the data range"
     method: "equal_width"
     n_bins: 5
 
+  equal_width_6:
+    description: "6 equal-width bins"
+    method: "equal_width"
+    n_bins: 6
+
+  equal_width_8:
+    description: "8 equal-width bins"
+    method: "equal_width"
+    n_bins: 8
+
+  equal_width_10:
+    description: "10 equal-width bins spanning the data range"
+    method: "equal_width"
+    n_bins: 10
+
+  # --- Jenks natural breaks (requires jenkspy) ----------------------------
+  jenks_3:
+    description: "3 bins via Jenks natural breaks"
+    method: "jenks"
+    n_bins: 3
+
+  jenks_4:
+    description: "4 bins via Jenks natural breaks"
+    method: "jenks"
+    n_bins: 4
+
+  jenks_5:
+    description: "5 bins via Jenks natural breaks"
+    method: "jenks"
+    n_bins: 5
+
+  # --- Adaptive quantile (quantile + merge under-populated bins) ----------
+  adaptive_quantile_5:
+    description: "Quantile quintiles with forced merge of small bins"
+    method: "adaptive_quantile"
+    n_bins: 5
+
+  adaptive_quantile_8:
+    description: "Quantile octiles with forced merge of small bins"
+    method: "adaptive_quantile"
+    n_bins: 8
+
+  adaptive_quantile_10:
+    description: "Quantile deciles with forced merge of small bins"
+    method: "adaptive_quantile"
+    n_bins: 10
+
+# ---------------------------------------------------------------------------
+# Safeguards (global defaults applied by validate_and_repair)
+# ---------------------------------------------------------------------------
+safeguards:
+  clip_to_data_range: true         # always active: removes unreachable tail bins
+  auto_merge_small_bins: true      # active for adaptive strategies
+  min_group_size: 30               # threshold for merging
+
 metrics:
   fairness:
     - statistical_parity_difference  # Max difference in positive rates across bins
-    - demographic_parity_ratio       # Min/max ratio
-    
+    - demographic_parity_ratio       # Min/max positive-rate ratio
+    - max_within_bin_label_imbalance # Max deviation of a bin's positive rate from global
+
   balance:
     - coefficient_of_variation  # Group size balance
     - min_group_size           # Smallest bin size
     - max_group_size           # Largest bin size
-    
+
   stability:
     - cross_dataset_consistency  # Compare metrics across datasets
     - sensitive_attribute_balance  # Sex distribution within bins
@@ -76,19 +220,19 @@ scoring:
     min_group_size: 0.4       # 40% - Statistical power is critical
     group_balance: 0.3        # 30% - Balanced groups preferred
     fairness_sensitivity: 0.3 # 30% - Must detect bias but not over-fragment
-  
+
   fairness_ideal_range: [0.15, 0.40]  # Detectable but not extreme
   min_group_size_threshold: 30  # Minimum for statistical validity
 
 output:
-  results_dir: "output/cardiac/experiments/full/latest_run/age_binning"
+  results_dir: "output/cardiac/experiments/full/latest_run/attribute_binning"
   artifacts:
     - comparison_table_csv
     - stability_analysis_csv
     - tradeoff_plots_png
     - group_distribution_plots_png
     - recommendation_report_md
-  
+
   recommendation_criteria:
     - best_overall_score
     - cross_dataset_generalization

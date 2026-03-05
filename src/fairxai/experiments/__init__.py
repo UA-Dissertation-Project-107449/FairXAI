@@ -1,10 +1,10 @@
 """Experiments package public API.
 
-Exports age-binning analysis utilities and experiment artifact versioning
-helpers consumed by experiment scripts.
+Exports attribute-binning analysis utilities and experiment artifact
+versioning helpers consumed by experiment scripts.
 """
 
-from .age_binning import (
+from .attribute_binning import (
     create_binning_strategy,
     apply_binning,
     sensitive_attribute_distribution,
@@ -12,7 +12,8 @@ from .age_binning import (
     analyze_strategy_comprehensive,
     compare_strategies,
     compute_strategy_score,
-    generate_summary_report
+    generate_summary_report,
+    validate_and_repair,
 )
 from .versioning import ExperimentVersioning
 
@@ -25,5 +26,6 @@ __all__ = [
     'compare_strategies',
     'compute_strategy_score',
     'generate_summary_report',
-    'ExperimentVersioning'
+    'validate_and_repair',
+    'ExperimentVersioning',
 ]

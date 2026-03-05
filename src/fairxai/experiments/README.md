@@ -62,7 +62,7 @@ from fairxai.experiments import ExperimentVersioning, create_binning_strategy
 versioning = ExperimentVersioning(Path("output/cardiac/latest_run/experiments/full"))
 exp_id = versioning.generate_experiment_id()
 
-bins, labels = create_binning_strategy(df, "quantile_5", age_col="age_raw")
+bins, labels = create_binning_strategy(df, "quantile_5", col="age_raw")
 ```
 
 ## Notes

@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 from fairxai.data.preprocessors import CardiacPreprocessor
 from fairxai.data.profilers import DataProfiler
 from fairxai.data.schemas import available_sensitive, preferred_sensitive
-from fairxai.experiments.age_binning import create_binning_strategy, apply_binning
+from fairxai.experiments.attribute_binning import create_binning_strategy, apply_binning
 from fairxai.cli.runner_base import get_project_root, load_pipeline_config, setup_phase_logging
 
 
@@ -211,7 +211,7 @@ def main():
                 bins, labels = create_binning_strategy(df, binning_strategy)
 
                 # Apply binning (overwrite canonical age_group)
-                df = apply_binning(df, bins, labels, age_col='age_raw', output_col='age_group')
+                df = apply_binning(df, bins, labels, col='age_raw', output_col='age_group')
                 if df.empty:
                     logging.error(f"No rows available after binning for {dataset_name}. Skipping.")
                     continue
