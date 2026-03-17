@@ -1,8 +1,9 @@
 """
-Age binning strategies analysis - Reusable functions for experiments.
+Attribute binning strategies — reusable functions for experiments.
 
 This module provides utilities for:
-- Creating various age binning strategies (config-driven or built-in)
+- Creating various binning strategies for continuous attributes (config-driven
+  or built-in)
 - Analyzing sensitive attribute distribution within bins
 - Computing fairness metrics per binning strategy
 - Computing cross-attribute fairness impact (how binning one attribute
@@ -14,18 +15,18 @@ Strategies are defined declaratively in YAML (e.g.
 key.  The code reads method / bins / labels / n_bins from the config dict so
 users can add or modify strategies without touching Python.
 
-Three methods are supported:
-  - ``fixed``      — user supplies ``bins`` (edges) and ``labels``
-  - ``quantile``   — user supplies ``n_bins``; edges from ``pd.qcut``
-  - ``equal_width`` — user supplies ``n_bins``; edges from ``pd.cut``
+Supported methods:
+  - ``fixed``             — user supplies ``bins`` (edges) and ``labels``
+  - ``quantile``          — user supplies ``n_bins``; edges from ``pd.qcut``
+  - ``equal_width``       — user supplies ``n_bins``; edges from ``pd.cut``
+  - ``jenks``             — natural breaks via ``jenkspy`` (optional dep)
+  - ``adaptive_quantile`` — quantile + merge under-populated bins
+
+All strategies pass through a safeguard layer (``validate_and_repair``)
+that clips edges to the actual data range and merges any bin whose count
+falls below ``min_group_size``.
 
 Designed to be imported by notebooks and experiment scripts.
-
-.. note::
-
-   The module is named ``age_binning`` for historical reasons.  Internally
-   it is already attribute-agnostic — any continuous column can be binned.
-   A full rename to ``attribute_binning`` is planned for a future sprint.
 """
 
 import logging
@@ -48,11 +49,18 @@ MIN_SAMPLE_SIZE = 30  # Minimum recommended group size for statistical validity
 # ``create_binning_strategy``.
 # ---------------------------------------------------------------------------
 BUILTIN_STRATEGIES: Dict[str, Dict[str, Any]] = {
-    "fixed_10yr": {
-        "description": "Current baseline - 10-year fixed intervals",
+    # --- Fixed strategies ---------------------------------------------------
+    "fixed_2": {
+        "description": "Binary split at cardiovascular risk boundary",
         "method": "fixed",
-        "bins": [0, 40, 50, 60, 70, 100],
-        "labels": ["<40", "40-49", "50-59", "60-69", "70+"],
+        "bins": [0, 55, 100],
+        "labels": ["<55", "55+"],
+    },
+    "fixed_3": {
+        "description": "Coarse 3-bin split",
+        "method": "fixed",
+        "bins": [0, 45, 65, 100],
+        "labels": ["<45", "45-64", "65+"],
     },
     "fixed_5yr": {
         "description": "Finer granularity - 5-year fixed intervals",
@@ -61,20 +69,110 @@ BUILTIN_STRATEGIES: Dict[str, Dict[str, Any]] = {
         "labels": ["<35", "35-39", "40-44", "45-49", "50-54",
                     "55-59", "60-64", "65-69", "70-74", "75+"],
     },
+    "fixed_10yr": {
+        "description": "Current baseline - 10-year fixed intervals",
+        "method": "fixed",
+        "bins": [0, 40, 50, 60, 70, 100],
+        "labels": ["<40", "40-49", "50-59", "60-69", "70+"],
+    },
     "clinical": {
-        "description": "Clinical cardiovascular risk guidelines",
+        "description": "Clinical cardiovascular risk guidelines (ACC/AHA)",
         "method": "fixed",
         "bins": [0, 45, 55, 65, 100],
         "labels": ["<45", "45-54", "55-64", "65+"],
     },
+    # --- Quantile strategies ------------------------------------------------
     "quantile_3": {
         "description": "Data-driven terciles (equal sample sizes)",
         "method": "quantile",
         "n_bins": 3,
     },
-    "quantile_5": {
-        "description": "Data-driven quintiles (equal sample sizes)",
+    "quantile_4": {
+        "description": "Data-driven quartiles",
         "method": "quantile",
+        "n_bins": 4,
+    },
+    "quantile_5": {
+        "description": "Data-driven quintiles",
+        "method": "quantile",
+        "n_bins": 5,
+    },
+    "quantile_6": {
+        "description": "Data-driven sextiles",
+        "method": "quantile",
+        "n_bins": 6,
+    },
+    "quantile_7": {
+        "description": "Data-driven septiles",
+        "method": "quantile",
+        "n_bins": 7,
+    },
+    "quantile_8": {
+        "description": "Data-driven octiles",
+        "method": "quantile",
+        "n_bins": 8,
+    },
+    "quantile_9": {
+        "description": "Data-driven noniles",
+        "method": "quantile",
+        "n_bins": 9,
+    },
+    "quantile_10": {
+        "description": "Data-driven deciles",
+        "method": "quantile",
+        "n_bins": 10,
+    },
+    # --- Equal-width strategies ---------------------------------------------
+    "equal_width_3": {
+        "description": "3 equal-width bins spanning the data range",
+        "method": "equal_width",
+        "n_bins": 3,
+    },
+    "equal_width_4": {
+        "description": "4 equal-width bins spanning the data range",
+        "method": "equal_width",
+        "n_bins": 4,
+    },
+    "equal_width_5": {
+        "description": "5 equal-width bins spanning the data range",
+        "method": "equal_width",
+        "n_bins": 5,
+    },
+    "equal_width_6": {
+        "description": "6 equal-width bins spanning the data range",
+        "method": "equal_width",
+        "n_bins": 6,
+    },
+    "equal_width_8": {
+        "description": "8 equal-width bins spanning the data range",
+        "method": "equal_width",
+        "n_bins": 8,
+    },
+    "equal_width_10": {
+        "description": "10 equal-width bins spanning the data range",
+        "method": "equal_width",
+        "n_bins": 10,
+    },
+    # --- Jenks natural breaks -----------------------------------------------
+    "jenks_3": {
+        "description": "3 bins via Jenks natural breaks",
+        "method": "jenks",
+        "n_bins": 3,
+    },
+    "jenks_4": {
+        "description": "4 bins via Jenks natural breaks",
+        "method": "jenks",
+        "n_bins": 4,
+    },
+    "jenks_5": {
+        "description": "5 bins via Jenks natural breaks",
+        "method": "jenks",
+        "n_bins": 5,
+    },
+    # --- Adaptive quantile --------------------------------------------------
+    "adaptive_quantile_5": {
+        "description": "Quantile quintiles with forced merge of small bins",
+        "method": "adaptive_quantile",
         "n_bins": 5,
     },
 }
@@ -83,8 +181,9 @@ BUILTIN_STRATEGIES: Dict[str, Dict[str, Any]] = {
 def create_binning_strategy(
     df: pd.DataFrame,
     strategy_name: str,
-    age_col: str = 'age_raw',
+    col: str = 'age_raw',
     strategy_config: Optional[Dict[str, Any]] = None,
+    min_group_size: int = MIN_SAMPLE_SIZE,
     **kwargs,
 ) -> Tuple[List[float], Optional[List[str]]]:
     """Create bins and labels for a given binning strategy.
@@ -99,18 +198,25 @@ def create_binning_strategy(
        *n_bins* are inferred from the name.
     4. If none of the above match, a ``ValueError`` is raised.
 
+    After resolving, all strategies pass through
+    :func:`validate_and_repair` which clips edges to the data range and
+    merges under-populated bins.
+
     Parameters
     ----------
     df : DataFrame
         DataFrame that contains the column to bin.
     strategy_name : str
         Human-readable strategy identifier.
-    age_col : str
+    col : str
         Column with continuous values to bin (default ``age_raw``).
     strategy_config : dict, optional
         Config dict (typically one entry from the YAML
         ``binning_strategies`` section).  When provided, *strategy_name*
         is used only for logging/labelling.
+    min_group_size : int
+        Minimum acceptable bin count.  Bins below this are merged by
+        :func:`validate_and_repair`.  Set to 0 to disable merging.
     **kwargs
         Legacy pass-through (``n_bins`` etc.).
 
@@ -138,6 +244,10 @@ def create_binning_strategy(
         )
 
     method = cfg.get("method", "").lower()
+    # Per-strategy min_group_size override
+    effective_min = int(cfg.get("min_group_size", min_group_size))
+    # Adaptive flag — forces stricter repair for fixed strategies
+    adaptive = cfg.get("adaptive", method in ("adaptive_quantile",))
 
     # -- Fixed edges ---------------------------------------------------------
     if method == "fixed":
@@ -147,18 +257,37 @@ def create_binning_strategy(
     # -- Quantile (data-driven, equal-frequency) -----------------------------
     elif method == "quantile":
         n_bins = int(cfg.get("n_bins", kwargs.get("n_bins", 5)))
-        bins, labels = _quantile_bins(df, age_col, n_bins, strategy_name)
+        bins, labels = _quantile_bins(df, col, n_bins, strategy_name)
 
     # -- Equal-width (data-driven, equal-range) ------------------------------
     elif method == "equal_width":
         n_bins = int(cfg.get("n_bins", kwargs.get("n_bins", 5)))
-        bins, labels = _equal_width_bins(df, age_col, n_bins, strategy_name)
+        bins, labels = _equal_width_bins(df, col, n_bins, strategy_name)
+
+    # -- Jenks natural breaks ------------------------------------------------
+    elif method == "jenks":
+        n_bins = int(cfg.get("n_bins", kwargs.get("n_bins", 5)))
+        bins, labels = _jenks_bins(df, col, n_bins, strategy_name)
+
+    # -- Adaptive quantile (quantile + forced repair) ------------------------
+    elif method == "adaptive_quantile":
+        n_bins = int(cfg.get("n_bins", kwargs.get("n_bins", 5)))
+        bins, labels = _quantile_bins(df, col, n_bins, strategy_name)
+        adaptive = True  # ensure repair runs
 
     else:
         raise ValueError(
             f"Unknown method '{method}' in strategy '{strategy_name}'.  "
-            f"Supported methods: fixed, quantile, equal_width."
+            f"Supported methods: fixed, quantile, equal_width, jenks, "
+            f"adaptive_quantile."
         )
+
+    # -- Safeguard layer -----------------------------------------------------
+    bins, labels = validate_and_repair(
+        df[col], bins, labels,
+        min_group_size=effective_min if adaptive else 0,
+        strategy_name=strategy_name,
+    )
 
     logger.info(f"  Created {len(bins) - 1} bins")
     return bins, labels
@@ -172,7 +301,7 @@ def _infer_config_from_name(
     name: str, **kwargs
 ) -> Optional[Dict[str, Any]]:
     """Try to build a config dict from a conventionally-named strategy."""
-    for prefix in ("quantile", "equal_width"):
+    for prefix in ("quantile", "equal_width", "jenks", "adaptive_quantile"):
         if name.startswith(prefix):
             suffix = name[len(prefix):]
             if suffix.startswith("_") and suffix[1:].isdigit():
@@ -227,22 +356,164 @@ def _equal_width_bins(
     return list(edges), None
 
 
+def _jenks_bins(
+    df: pd.DataFrame, col: str, n_bins: int, strategy_name: str
+) -> Tuple[List[float], None]:
+    """Compute bin edges via Jenks natural breaks (minimises within-group variance)."""
+    try:
+        from jenkspy import jenks_breaks
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError(
+            "jenkspy is required for Jenks natural breaks. pip install jenkspy"
+        ) from exc
+
+    logger.info(f"  Computing {n_bins} Jenks natural-break bins from data")
+    values = df[col].dropna().values
+    breaks = jenks_breaks(values.astype(float), n_classes=n_bins)
+    # jenkspy returns n_bins+1 values including min and max
+    edges = list(breaks)
+    # Widen endpoints slightly to ensure all values are captured
+    edges[0] -= 0.001
+    edges[-1] += 0.001
+    return edges, None
+
+
+# ---------------------------------------------------------------------------
+# Safeguard layer — clips edges, merges under-populated bins
+# ---------------------------------------------------------------------------
+
+def validate_and_repair(
+    series: pd.Series,
+    bins: List[float],
+    labels: Optional[List[str]],
+    min_group_size: int = 0,
+    strategy_name: str = "unknown",
+) -> Tuple[List[float], Optional[List[str]]]:
+    """Clip bin edges to the data range and merge under-populated bins.
+
+    Parameters
+    ----------
+    series : Series
+        The raw continuous column (before binning).
+    bins : list[float]
+        Bin edges.
+    labels : list[str] or None
+        Bin labels (must have ``len(bins) - 1`` entries, or ``None``).
+    min_group_size : int
+        Minimum acceptable count per bin.  Set to 0 to disable merging
+        (edge clipping still runs).
+    strategy_name : str
+        Used for log messages only.
+
+    Returns
+    -------
+    (bins, labels)
+        Possibly shortened after merging.
+    """
+    import warnings as _warnings
+
+    data_min, data_max = float(series.min()), float(series.max())
+    bins = list(bins)
+
+    # -- 1. Clip edges to actual data range ----------------------------------
+    # Keep first edge ≤ data_min and last edge ≥ data_max; remove any
+    # intermediate edges that fall outside the data range.
+    if bins[0] > data_min:
+        bins[0] = data_min - 0.001
+    if bins[-1] < data_max:
+        bins[-1] = data_max + 0.001
+
+    # Remove intermediate edges that create empty tail bins
+    while len(bins) > 2 and bins[1] <= data_min:
+        bins.pop(1)
+        if labels is not None and len(labels) > 1:
+            logger.warning(
+                f"  strategy '{strategy_name}': dropped empty leading bin "
+                f"(edge {bins[0]:.1f} below data minimum {data_min:.1f})"
+            )
+            labels.pop(0)
+    while len(bins) > 2 and bins[-2] >= data_max:
+        bins.pop(-2)
+        if labels is not None and len(labels) > 1:
+            logger.warning(
+                f"  strategy '{strategy_name}': dropped empty trailing bin "
+                f"(edge {bins[-1]:.1f} above data maximum {data_max:.1f})"
+            )
+            labels.pop(-1)
+
+    # Re-sync labels if they were None (auto-generated)
+    if labels is not None and len(labels) != len(bins) - 1:
+        labels = None  # fall back to auto labels after clipping
+
+    if min_group_size <= 0 or len(bins) <= 2:
+        return bins, labels
+
+    # -- 2. Merge under-populated bins ---------------------------------------
+    # Do a trial cut, then iteratively merge the smallest bin with its
+    # smaller neighbour until all bins meet the threshold.
+    max_merges = len(bins) - 2  # can't merge below 1 bin
+    for _ in range(max_merges):
+        trial = pd.cut(series, bins=bins, include_lowest=True)
+        counts = trial.value_counts(sort=False)
+        # Find first bin below threshold
+        below = [(i, c) for i, c in enumerate(counts) if c < min_group_size]
+        if not below:
+            break
+        idx, cnt = min(below, key=lambda x: x[1])
+
+        n_bins_now = len(bins) - 1
+        if n_bins_now <= 1:
+            break
+
+        # Decide merge direction: left or right neighbour (pick smaller)
+        if idx == 0:
+            merge_right = True
+        elif idx == n_bins_now - 1:
+            merge_right = False
+        else:
+            left_count = int(counts.iloc[idx - 1])
+            right_count = int(counts.iloc[idx + 1])
+            merge_right = right_count <= left_count
+
+        if merge_right:
+            removed_edge = bins.pop(idx + 1)
+        else:
+            removed_edge = bins.pop(idx)
+
+        old_label = None
+        if labels is not None and len(labels) == n_bins_now:
+            merge_idx = idx if merge_right else idx - 1
+            old_label = labels.pop(max(merge_idx, 0))
+
+        logger.warning(
+            f"  strategy '{strategy_name}': merged bin with {cnt} samples "
+            f"(edge {removed_edge:.1f} removed, label '{old_label}' dropped) "
+            f"— below min_group_size={min_group_size}"
+        )
+
+    # If labels got out of sync, fall back to None (auto)
+    if labels is not None and len(labels) != len(bins) - 1:
+        labels = None
+
+    return bins, labels
+
+
 def apply_binning(
     df: pd.DataFrame,
     bins: List[float],
     labels: Optional[List[str]],
-    age_col: str = 'age_raw',
+    col: str = 'age_raw',
     output_col: str = 'age_group_exp'
 ) -> pd.DataFrame:
     """
-    Apply age binning to a DataFrame.
+    Apply binning to a DataFrame column.
     
     Args:
         df: Input DataFrame
         bins: Bin edges (from create_binning_strategy)
         labels: Bin labels (or None for auto-generation)
-        age_col: Column containing numeric age values
-        output_col: Name for the new binned age column
+        col: Column containing numeric values to bin
+        output_col: Name for the new binned column
     
     Returns:
         DataFrame with new binned column added
@@ -254,7 +525,7 @@ def apply_binning(
     """
     df = df.copy()
     df[output_col] = pd.cut(
-        df[age_col], 
+        df[col], 
         bins=bins, 
         labels=labels,
         include_lowest=True
@@ -320,7 +591,7 @@ def compute_fairness_metrics(
     target_col: str = 'heart_disease'
 ) -> Dict:
     """
-    Compute fairness-relevant metrics for an age binning strategy.
+    Compute fairness-relevant metrics for an attribute binning strategy.
     
     Metrics include:
     - Group size statistics (min, max, mean, balance coefficient of variation)
@@ -353,7 +624,17 @@ def compute_fairness_metrics(
     
     # Statistical parity difference (max - min positive rate)
     sp_diff = float(positive_rates.max() - positive_rates.min())
-    
+
+    # Demographic parity ratio (min / max positive rate)
+    max_rate = float(positive_rates.max())
+    min_rate = float(positive_rates.min())
+    dp_ratio = (min_rate / max_rate) if max_rate > 0 else 0.0
+
+    # Max within-bin label imbalance: largest deviation of any bin's
+    # positive rate from the dataset-wide positive rate.
+    overall_rate = float(df[target_col].mean())
+    label_imbalance = float((positive_rates - overall_rate).abs().max())
+
     metrics = {
         'n_groups': len(group_counts),
         'min_group_size': int(group_counts.min()),
@@ -361,7 +642,9 @@ def compute_fairness_metrics(
         'mean_group_size': float(group_counts.mean()),
         'group_balance_cv': cv,
         'max_sp_difference': sp_diff,
-        'overall_positive_rate': float(df[target_col].mean()),
+        'demographic_parity_ratio': round(dp_ratio, 4),
+        'max_within_bin_label_imbalance': round(label_imbalance, 4),
+        'overall_positive_rate': overall_rate,
         'group_sizes': {str(k): int(v) for k, v in group_counts.to_dict().items()},
         'positive_rates_by_group': {str(k): float(v) for k, v in positive_rates.to_dict().items()}
     }
@@ -459,12 +742,12 @@ def analyze_strategy_comprehensive(
     bins: List[float],
     labels: Optional[List[str]],
     dataset_name: str,
-    age_col: str = 'age_raw',
+    col: str = 'age_raw',
     sensitive_col: Union[str, List[str]] = 'sex',
     target_col: str = 'heart_disease'
 ) -> Dict:
     """
-    Comprehensive analysis of a single age binning strategy.
+    Comprehensive analysis of a single binning strategy.
     
     Combines:
     - Fairness metrics (group balance, statistical parity)
@@ -484,7 +767,7 @@ def analyze_strategy_comprehensive(
         Bin labels.
     dataset_name : str
         Dataset identifier for tracking.
-    age_col : str
+    col : str
         Column with continuous values.
     sensitive_col : str or list[str]
         One or more sensitive attribute columns.  The first element
@@ -515,7 +798,7 @@ def analyze_strategy_comprehensive(
     logger.info(f"{'='*60}")
     
     # Apply binning
-    df_binned = apply_binning(df, bins, labels, age_col, 'age_group_exp')
+    df_binned = apply_binning(df, bins, labels, col, 'age_group_exp')
     
     # Fairness metrics
     fairness = compute_fairness_metrics(df_binned, 'age_group_exp', target_col)
@@ -594,6 +877,8 @@ def compare_strategies(
             'max_group_size': metrics['max_group_size'],
             'group_balance_cv': round(metrics['group_balance_cv'], 3),
             'max_sp_difference': round(metrics['max_sp_difference'], 3),
+            'demographic_parity_ratio': metrics.get('demographic_parity_ratio', float('nan')),
+            'max_label_imbalance': metrics.get('max_within_bin_label_imbalance', float('nan')),
         })
     
     df = pd.DataFrame(comparison_data)
@@ -669,7 +954,7 @@ def generate_summary_report(
     scoring_weights: Dict[str, float] = None
 ):
     """
-    Generate markdown summary report for age binning analysis.
+    Generate markdown summary report for attribute binning analysis.
     
     Includes:
     - Overview statistics
@@ -683,7 +968,7 @@ def generate_summary_report(
         scoring_weights: Optional dict with 'sample_size', 'balance', 'fairness' weights
     
     Example:
-        >>> generate_summary_report(results, Path('output/age_binning_report.md'))
+        >>> generate_summary_report(results, Path('output/attribute_binning_report.md'))
     """
     logger.info(f"Generating summary report: {output_file}")
     
@@ -710,7 +995,7 @@ def generate_summary_report(
     comparison['score'] = comparison['score'].round(3)
     
     # Generate report content
-    report = ["# Age Binning Strategy Analysis Report\n"]
+    report = ["# Attribute Binning Strategy Analysis Report\n"]
     
     report.append("## Overview\n")
     report.append(f"- **Datasets analyzed**: {len(set(r['dataset'] for r in results))}")

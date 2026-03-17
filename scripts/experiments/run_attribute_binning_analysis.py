@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-Run age binning strategies analysis experiment.
+Run attribute binning strategies analysis experiment.
 
 This script:
-1. Loads standardized raw datasets (with age_raw column)
-2. Tests multiple age binning strategies
+1. Loads standardized raw datasets (with continuous attribute column)
+2. Tests multiple binning strategies
 3. Computes fairness metrics for each strategy
 4. Analyzes sensitive attribute distribution within bins
 5. Scores strategies based on sample size, balance, and fairness
 6. Generates comprehensive comparison report
 
 Usage:
-    python scripts/experiments/run_age_binning_analysis.py
-    python scripts/experiments/run_age_binning_analysis.py --strategies fixed_10yr clinical
-    python scripts/experiments/run_age_binning_analysis.py --config configs/experiments/age_binning.yaml
+    python scripts/experiments/run_attribute_binning_analysis.py
+    python scripts/experiments/run_attribute_binning_analysis.py --strategies fixed_10yr clinical
+    python scripts/experiments/run_attribute_binning_analysis.py --config configs/experiments/age_binning.yaml
 """
 
 import sys
@@ -28,7 +28,7 @@ import pandas as pd
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 
-from fairxai.experiments.age_binning import (
+from fairxai.experiments.attribute_binning import (
     create_binning_strategy,
     analyze_strategy_comprehensive,
     compare_strategies,
@@ -81,6 +81,7 @@ def load_dataset_for_binning(dataset_name: str, data_dir: Path, sensitive_col: s
 def run_strategy_analysis(
     df, strategy_name, dataset_name, sensitive_cols, target_col,
     strategy_config=None,
+    min_group_size=30,
 ):
     """
     Analyze a single binning strategy on a dataset.
@@ -101,8 +102,9 @@ def run_strategy_analysis(
     try:
         # Create binning strategy (config-driven)
         bins, labels = create_binning_strategy(
-            df, strategy_name, age_col='age_raw',
+            df, strategy_name, col='age_raw',
             strategy_config=strategy_config,
+            min_group_size=min_group_size,
         )
         
         # Comprehensive analysis (all sensitive attrs)
@@ -112,7 +114,7 @@ def run_strategy_analysis(
             bins=bins,
             labels=labels,
             dataset_name=dataset_name,
-            age_col='age_raw',
+            col='age_raw',
             sensitive_col=sensitive_cols,
             target_col=target_col
         )
@@ -138,7 +140,7 @@ def run_analysis(
     verbose: int = 0
 ):
     """
-    Runs the age binning analysis experiment.
+    Runs the attribute binning analysis experiment.
     """
     # Paths
     project_root = get_project_root(Path(__file__))
@@ -161,12 +163,32 @@ def run_analysis(
         sys.exit(1)
     
     # Determine datasets and strategies to process
-    datasets = datasets if datasets else experiment_cfg['data']['datasets']
+    cfg_datasets = experiment_cfg['data'].get('datasets', 'auto')
     sensitive_attrs = experiment_cfg.get('data', {}).get('sensitive_attributes', ['sex'])
     target_col = experiment_cfg.get('data', {}).get('target', 'heart_disease')
 
     # Keep single primary attr for backward-compat helpers (e.g. load_dataset)
     primary_sensitive_col = sensitive_attrs[0] if sensitive_attrs else 'sex'
+
+    # Resolve data directory early — needed for auto-detection
+    data_dir = project_root / pipeline_cfg['paths']['raw_dir']
+
+    if datasets:
+        # CLI override takes precedence
+        pass
+    elif cfg_datasets == 'auto' or cfg_datasets is None:
+        # Auto-detect: scan for *_standardized.csv files in the data dir
+        found = sorted(
+            p.stem.replace('_standardized', '')
+            for p in data_dir.glob('*_standardized.csv')
+        )
+        if not found:
+            logging.error(f"No *_standardized.csv files found in {data_dir}")
+            sys.exit(1)
+        datasets = found
+        logging.info(f"Auto-detected datasets: {datasets}")
+    else:
+        datasets = list(cfg_datasets)
     
     if strategies:
         strategies = strategies
@@ -175,6 +197,10 @@ def run_analysis(
 
     # Strategy config lookup for config-driven binning
     strategy_configs = experiment_cfg.get('binning_strategies', {})
+
+    # Safeguard defaults from config
+    safeguards_cfg = experiment_cfg.get('safeguards', {})
+    global_min_group_size = safeguards_cfg.get('min_group_size', 30)
     
     use_run_id = bool(run_id or os.getenv('RUN_ID') or os.getenv('PREFECT__RUNTIME__FLOW_RUN_ID'))
     run_id = resolve_run_id(run_id) if use_run_id else None
@@ -187,7 +213,7 @@ def run_analysis(
         base_output = Path(output_root)
     elif default_output_dir:
         base_output = Path(default_output_dir)
-        if base_output.parts and base_output.name == 'age_binning':
+        if base_output.parts and base_output.name == 'attribute_binning':
             base_output = base_output.parents[1]
         if run_mode == 'partial' and 'full' in base_output.parts:
             parts = list(base_output.parts)
@@ -198,23 +224,23 @@ def run_analysis(
         base_output = project_root / f"output/{pipeline}/experiments/{run_mode}"
     # Setup logging
     setup_phase_logging(
-        project_root, 'age_binning_analysis.log', verbose=verbose,
-        run_id=run_id, stage_name='age_binning',
+        project_root, 'attribute_binning_analysis.log', verbose=verbose,
+        run_id=run_id, stage_name='attribute_binning',
     )
     logger = logging.getLogger(__name__)
-    logging.info("[PHASE] Age binning analysis started")
+    logging.info("[PHASE] Attribute binning analysis started")
 
     if run_id:
         run_dir = get_run_root(base_output, run_id)
         run_dir.mkdir(parents=True, exist_ok=True)
-        output_dir = Path(output_dir) if output_dir else run_dir / 'experiments' / run_mode / 'age_binning'
+        output_dir = Path(output_dir) if output_dir else run_dir / 'experiments' / run_mode / 'attribute_binning'
     else:
         latest_dir = base_output / 'latest_run'
         if run_mode == 'partial':
             archive_latest_run(base_output, enabled=True, logger=logger)
         else:
             archive_latest_run(base_output, enabled=archive_previous, logger=logger)
-        output_dir = Path(output_dir) if output_dir else latest_dir / 'age_binning'
+        output_dir = Path(output_dir) if output_dir else latest_dir / 'attribute_binning'
     
     output_dir.mkdir(parents=True, exist_ok=True)
     
@@ -230,14 +256,11 @@ def run_analysis(
             'run_id': run_id,
             'pipeline': pipeline,
             'mode': run_mode,
-            'phase': 'age_binning',
+            'phase': 'attribute_binning',
             'datasets': datasets,
             'output_dir': str(output_dir),
             'status': 'started'
         })
-    
-    # Data directory (use raw standardized data)
-    data_dir = project_root / pipeline_cfg['paths']['raw_dir']
     
     # Get scoring weights from config
     scoring_cfg = experiment_cfg.get('scoring', {})
@@ -276,6 +299,7 @@ def run_analysis(
                 sensitive_cols=sensitive_attrs,
                 target_col=target_col,
                 strategy_config=strategy_cfg,
+                min_group_size=global_min_group_size,
             )
             if result:
                 all_results.append(result)
@@ -285,7 +309,7 @@ def run_analysis(
         return
     
     # Compute scores for all results (done once, used by report and recommendations)
-    from fairxai.experiments.age_binning import compute_strategy_score
+    from fairxai.experiments.attribute_binning import compute_strategy_score
     for result in all_results:
         result['score'] = compute_strategy_score(
             result,
@@ -303,9 +327,9 @@ def run_analysis(
     comparison_df = compare_strategies(all_results, by_dataset=True)
     
     # Save results
-    csv_file = output_dir / f'age_binning_comparison_{timestamp}.csv'
-    json_file = output_dir / f'age_binning_analysis_{timestamp}.json'
-    report_file = output_dir / f'age_binning_report_{timestamp}.md'
+    csv_file = output_dir / f'attribute_binning_comparison_{timestamp}.csv'
+    json_file = output_dir / f'attribute_binning_analysis_{timestamp}.json'
+    report_file = output_dir / f'attribute_binning_report_{timestamp}.md'
     
     comparison_df.to_csv(csv_file, index=False)
     logging.info(f"\n[SUCCESS] Saved CSV: {csv_file}")
@@ -354,7 +378,7 @@ def run_analysis(
     logging.info(f"  - Comparison CSV: {csv_file.name}")
     logging.info(f"  - Detailed JSON: {json_file.name}")
     logging.info(f"  - Summary Report: {report_file.name}")
-    logging.info("[PHASE] Age binning analysis complete")
+    logging.info("[PHASE] Attribute binning analysis complete")
 
     if run_id:
         update_latest_pointer(base_output, run_dir, logger)
@@ -362,7 +386,7 @@ def run_analysis(
             'run_id': run_id,
             'pipeline': pipeline,
             'mode': run_mode,
-            'phase': 'age_binning',
+            'phase': 'attribute_binning',
             'datasets': datasets,
             'output_dir': str(output_dir),
             'status': 'completed'
@@ -379,7 +403,7 @@ def main():
     parser.add_argument('--strategies', type=str, nargs='+',
                        help='Strategies to test (default: from config)')
     parser.add_argument('--output-dir', type=str,
-                       help='Output directory (default: from config or output/{pipeline}/experiments/{run_mode}/latest_run/age_binning)')
+                       help='Output directory (default: from config or output/{pipeline}/experiments/{run_mode}/latest_run/attribute_binning)')
     parser.add_argument('--pipeline', type=str, default='cardiac',
                        help='Pipeline name (e.g., cardiac, dermatology)')
     parser.add_argument('--run-mode', type=str, choices=['full', 'partial'],

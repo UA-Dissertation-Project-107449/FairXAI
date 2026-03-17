@@ -120,12 +120,12 @@ def assess_predictions(run_id: str, verbose: int = 0):
 
 
 @task
-def analyze_age_binning(run_id: str, verbose: int = 0):
-    """Analyzes age binning strategies."""
+def analyze_attribute_binning(run_id: str, verbose: int = 0):
+    """Analyzes attribute binning strategies."""
     logger = get_run_logger()
-    logger.info("[PHASE 7/10] Age binning strategies analysis")
-    script = ROOT_DIR / "scripts" / "cardiac" / "age_binning.py"
-    args = ["--config", "configs/experiments/age_binning.yaml", "--run-mode", "full", "--run-id", run_id]
+    logger.info("[PHASE 7/10] Attribute binning strategies analysis")
+    script = ROOT_DIR / "scripts" / "experiments" / "run_attribute_binning_analysis.py"
+    args = ["--config", "configs/experiments/age_binning.yaml", "--run-mode", "full", "--run-id", run_id, "--pipeline", "cardiac"]
     args.extend(_verbose_flags(verbose))
     _run_script(script, args, os.environ.copy())
 
@@ -165,7 +165,7 @@ def compare_experiments(run_id: str, verbose: int = 0):
 
 @flow(name="Cardiac Fairness Pipeline")
 def cardiac_pipeline(
-    run_age_binning: bool = True,
+    run_attribute_binning: bool = True,
     run_mitigation: bool = True,
     run_combinatorial: bool = True,
     run_comparison: bool = True,
@@ -234,7 +234,7 @@ def cardiac_pipeline(
     logger.info("======================================================================")
     logger.info(f"Run ID:       {run_id}")
     logger.info(f"Stages:       {first.number}..{last.number}  ({first.name} → {last.name})")
-    logger.info(f"Age binning:  {run_age_binning}")
+    logger.info(f"Attr binning: {run_attribute_binning}")
     logger.info(f"Mitigation:   {run_mitigation}")
     logger.info(f"Combinatorial:{run_combinatorial}")
     logger.info(f"Comparison:   {run_comparison}")
@@ -306,13 +306,13 @@ def cardiac_pipeline(
     else:
         logger.info("[6/10] assess — SKIPPED (outside active range)")
 
-    # Stage 7 — Age binning (optional + gated)
-    if _should_run(7) and run_age_binning:
+    # Stage 7 — Attribute binning (optional + gated)
+    if _should_run(7) and run_attribute_binning:
         wait = [assess_predictions_task] if assess_predictions_task else []
-        age_task = analyze_age_binning.submit(run_id, verbose, wait_for=wait)
+        age_task = analyze_attribute_binning.submit(run_id, verbose, wait_for=wait)
     else:
-        reason = "disabled" if not run_age_binning else "outside active range"
-        logger.info(f"[7/10] age_binning — SKIPPED ({reason})")
+        reason = "disabled" if not run_attribute_binning else "outside active range"
+        logger.info(f"[7/10] attribute_binning — SKIPPED ({reason})")
 
     # Stage 8 — Mitigation (optional + gated)
     if _should_run(8) and run_mitigation:
@@ -389,7 +389,7 @@ def cardiac_pipeline(
     if _should_run(5):
         logger.info(f"  - Baseline:           {run_root}/baseline")
     if age_task:
-        logger.info(f"  - Age binning:        {run_root}/experiments/full/age_binning")
+        logger.info(f"  - Attr binning:       {run_root}/experiments/full/attribute_binning")
     if mitigation_task:
         logger.info(f"  - Mitigation:         {run_root}/experiments/full/mitigation")
     if combinatorial_task:
@@ -409,7 +409,7 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog="""\
 Stage names (number or name accepted):
   1=load  2=profile  3=recommend  4=preprocess  5=train
-  6=assess  7=age_binning  8=mitigation  9=combinatorial  10=compare
+  6=assess  7=attribute_binning  8=mitigation  9=combinatorial  10=compare
 
 Examples:
   # Run only through profiling
@@ -428,7 +428,7 @@ Examples:
                     help="Last stage to execute (inclusive). Accepts name or number.")
     p.add_argument("--run-id", default=None,
                     help="Explicit run ID. On resume, defaults to latest run.")
-    p.add_argument("--no-age-binning", action="store_true", help="Skip age binning stage.")
+    p.add_argument("--no-attribute-binning", action="store_true", help="Skip attribute binning stage.")
     p.add_argument("--no-mitigation", action="store_true", help="Skip mitigation stage.")
     p.add_argument("--no-combinatorial", action="store_true", help="Skip combinatorial stage.")
     p.add_argument("--no-comparison", action="store_true", help="Skip comparison stage.")
@@ -440,7 +440,7 @@ Examples:
 if __name__ == "__main__":
     args = _build_parser().parse_args()
     cardiac_pipeline(
-        run_age_binning=not args.no_age_binning,
+        run_attribute_binning=not args.no_attribute_binning,
         run_mitigation=not args.no_mitigation,
         run_combinatorial=not args.no_combinatorial,
         run_comparison=not args.no_comparison,

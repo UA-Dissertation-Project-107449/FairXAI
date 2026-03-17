@@ -11,12 +11,12 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
 declare -A STAGE_NUM=(
     [load]=1 [profile]=2 [profiling]=2 [recommend]=3 [recommendations]=3
     [triage]=3 [preprocess]=4 [preprocessing]=4 [train]=5 [baseline]=5
-    [training]=5 [assess]=6 [fairness]=6 [assessment]=6 [age_binning]=7
+    [training]=5 [assess]=6 [fairness]=6 [assessment]=6 [attribute_binning]=7 [age_binning]=7
     [mitigation]=8 [combinatorial]=9 [combo]=9 [compare]=10 [comparison]=10
 )
 declare -A STAGE_NAME=(
     [1]=load [2]=profile [3]=recommend [4]=preprocess [5]=train
-    [6]=assess [7]=age_binning [8]=mitigation [9]=combinatorial [10]=compare
+    [6]=assess [7]=attribute_binning [8]=mitigation [9]=combinatorial [10]=compare
 )
 
 resolve_stage() {
@@ -36,14 +36,14 @@ resolve_stage() {
     if [[ -n "${STAGE_NUM[$input]+x}" ]]; then
         echo "${STAGE_NUM[$input]}" && return
     fi
-    echo "ERROR: Unknown stage '$1'. Valid: load(1) profile(2) recommend(3) preprocess(4) train(5) assess(6) age_binning(7) mitigation(8) combinatorial(9) compare(10)" >&2
+    echo "ERROR: Unknown stage '$1'. Valid: load(1) profile(2) recommend(3) preprocess(4) train(5) assess(6) attribute_binning(7) mitigation(8) combinatorial(9) compare(10)" >&2
     exit 1
 }
 
 # ======================================================================
 # Configuration
 # ======================================================================
-RUN_AGE_BINNING=${RUN_AGE_BINNING:-true}
+RUN_ATTRIBUTE_BINNING=${RUN_ATTRIBUTE_BINNING:-${RUN_AGE_BINNING:-true}}
 RUN_MITIGATION=${RUN_MITIGATION:-true}
 RUN_COMBINATORIAL=${RUN_COMBINATORIAL:-true}
 RUN_COMPARISON=${RUN_COMPARISON:-true}
@@ -51,7 +51,7 @@ RUN_RECOMMENDATIONS=${RUN_RECOMMENDATIONS:-true}
 VERBOSE=${VERBOSE:-0}
 RESUME_FROM=${RESUME_FROM:-""}
 GO_UNTIL=${GO_UNTIL:-""}
-AGE_BINNING_CONFIG="$ROOT_DIR/configs/experiments/age_binning.yaml"
+ATTRIBUTE_BINNING_CONFIG="$ROOT_DIR/configs/experiments/age_binning.yaml"
 MITIGATION_CONFIG="$ROOT_DIR/configs/experiments/mitigation.yaml"
 COMBINATORIAL_CONFIG="$ROOT_DIR/configs/experiments/combinatorial.yaml"
 
@@ -176,7 +176,7 @@ echo "======================================================================"
 echo "Working directory: $ROOT_DIR"
 echo "Run ID:           $RUN_ID"
 echo "Stages:           $START_NUM..${END_NUM}  (${STAGE_NAME[$START_NUM]} → ${STAGE_NAME[$END_NUM]})"
-echo "Age binning:      $RUN_AGE_BINNING"
+echo "Attr binning:  $RUN_ATTRIBUTE_BINNING"
 echo "Mitigation:       $RUN_MITIGATION"
 echo "Combinatorial:    $RUN_COMBINATORIAL"
 echo "Comparison:       $RUN_COMPARISON"
@@ -269,21 +269,21 @@ else
     echo "[6/10] assess — SKIPPED (outside active range)"
 fi
 
-# Stage 7 — Age binning (optional)
+# Stage 7 — Attribute binning (optional)
 ARCHIVE_EXPERIMENTS=true
 if should_run 7; then
-    if [[ "$RUN_AGE_BINNING" == "true" ]]; then
-        echo "[PHASE 7/10] Age binning strategies analysis"
-        EXPERIMENT_RUN_MODE=full ARCHIVE_PREVIOUS=$ARCHIVE_EXPERIMENTS python3 "$ROOT_DIR/scripts/cardiac/age_binning.py" \
-            --config "$AGE_BINNING_CONFIG" --run-id "$RUN_ID" $VERBOSE_FLAG
+    if [[ "$RUN_ATTRIBUTE_BINNING" == "true" ]]; then
+        echo "[PHASE 7/10] Attribute binning strategies analysis"
+        EXPERIMENT_RUN_MODE=full ARCHIVE_PREVIOUS=$ARCHIVE_EXPERIMENTS python3 "$ROOT_DIR/scripts/experiments/run_attribute_binning_analysis.py" \
+            --config "$ATTRIBUTE_BINNING_CONFIG" --run-id "$RUN_ID" --pipeline cardiac $VERBOSE_FLAG
         ARCHIVE_EXPERIMENTS=false
-        mark_done 7 "age_binning"
+        mark_done 7 "attribute_binning"
         echo ""
     else
-        echo "[7/10] Age binning SKIPPED (disabled)"
+        echo "[7/10] Attribute binning SKIPPED (disabled)"
     fi
 else
-    echo "[7/10] age_binning — SKIPPED (outside active range)"
+    echo "[7/10] attribute_binning — SKIPPED (outside active range)"
 fi
 
 # Stage 8 — Mitigation (optional)
@@ -360,7 +360,7 @@ should_run 4 && echo "  - Processed data:     $ROOT_DIR/data/processed/cardiac"
 should_run 2 && echo "  - Profiling:          $RUN_ROOT/profiling"
 should_run 3 && [[ "$RUN_RECOMMENDATIONS" == "true" ]] && echo "  - Recommendations:    $RUN_ROOT/recommendations"
 should_run 5 && echo "  - Baseline:           $RUN_ROOT/baseline"
-should_run 7 && [[ "$RUN_AGE_BINNING" == "true" ]] && echo "  - Age binning:        $RUN_ROOT/experiments/full/age_binning"
+should_run 7 && [[ "$RUN_ATTRIBUTE_BINNING" == "true" ]] && echo "  - Attr binning:       $RUN_ROOT/experiments/full/attribute_binning"
 should_run 8 && [[ "$RUN_MITIGATION" == "true" ]] && echo "  - Mitigation:         $RUN_ROOT/experiments/full/mitigation"
 should_run 9 && [[ "$RUN_COMBINATORIAL" == "true" ]] && echo "  - Combinatorial:      $RUN_ROOT/experiments/full"
 should_run 10 && [[ "$RUN_COMPARISON" == "true" ]] && echo "  - Comparison:         $RUN_ROOT/experiments/full/comparisons"

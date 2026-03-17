@@ -14,7 +14,7 @@ Both the **Prefect flow** (`flows/cardiac_pipeline.py`) and the **bash pipeline*
 | 4 | `preprocess`   | `preprocessing`                | Split, scale, generate fairness profiles |
 | 5 | `train`        | `baseline`, `training`         | Train baseline model(s)                  |
 | 6 | `assess`       | `fairness`, `assessment`       | Assess post-prediction fairness          |
-| 7 | `age_binning`  | —                              | Age binning strategy analysis            |
+| 7 | `attribute_binning`  | `age_binning`                  | Attribute binning strategy analysis      |
 | 8 | `mitigation`   | —                              | Mitigation technique comparison          |
 | 9 | `combinatorial`| `combo`                        | Combinatorial experiments                |
 | 10| `compare`      | `comparison`                   | Experiment comparison & reporting        |
@@ -30,7 +30,7 @@ load (1)
         └─ preprocess (4)
               └─ train (5)
                     └─ assess (6)
-                          ├─ age_binning (7)       [optional]
+                          ├─ attribute_binning (7)  [optional]
                           ├─ mitigation (8)        [optional]
                           └─ combinatorial (9)     [optional]
                                 └─ compare (10)    [optional]
@@ -45,7 +45,7 @@ load (1)
 | Resume point | `--resume-from <stage>` | `RESUME_FROM=<stage>` | First stage to execute (inclusive). Triggers artifact validation for prior stages. |
 | Stop point | `--go-until <stage>` | `GO_UNTIL=<stage>` | Last stage to execute (inclusive). Stages after this are skipped. |
 | Run ID | `--run-id <id>` | `RUN_ID=<id>` | Explicit run ID. On resume without this, defaults to `latest_run` symlink. |
-| Skip age binning | `--no-age-binning` | `RUN_AGE_BINNING=false` | Skip stage 7 even if in active range. |
+| Skip attr binning | `--no-attribute-binning` | `RUN_ATTRIBUTE_BINNING=false` | Skip stage 7 even if in active range. |
 | Skip mitigation | `--no-mitigation` | `RUN_MITIGATION=false` | Skip stage 8 even if in active range. |
 | Skip combinatorial | `--no-combinatorial` | `RUN_COMBINATORIAL=false` | Skip stage 9 even if in active range. |
 | Skip comparison | `--no-comparison` | `RUN_COMPARISON=false` | Skip stage 10 even if in active range. |
@@ -127,7 +127,7 @@ Example after a full run:
 ├── 4_preprocess.done
 ├── 5_train.done
 ├── 6_assess.done
-├── 7_age_binning.done
+├── 7_attribute_binning.done
 ├── 8_mitigation.done
 ├── 9_combinatorial.done
 └── 10_compare.done
@@ -167,4 +167,4 @@ For stages that declare artifact patterns (e.g., stage 1 expects `data/raw/cardi
 
 6. **Names + numbers both accepted**: more code, but more user-friendly. `3`, `recommend`, `recommendations`, `triage`, `phase3` all resolve to the same stage.
 
-7. **Optional stages (7–10) have two independent gates**: the range gate (`--resume-from` / `--go-until`) and the feature toggle (`RUN_AGE_BINNING`, `--no-age-binning`, etc.). Both must pass for the stage to execute.
+7. **Optional stages (7–10) have two independent gates**: the range gate (`--resume-from` / `--go-until`) and the feature toggle (`RUN_ATTRIBUTE_BINNING`, `--no-attribute-binning`, etc.). Both must pass for the stage to execute.

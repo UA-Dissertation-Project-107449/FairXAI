@@ -1,7 +1,7 @@
 # Attribute Binning — Design & Usage
 
-> **Module**: `src/fairxai/experiments/age_binning.py`
-> **Runner**: `scripts/experiments/run_age_binning_analysis.py`
+> **Module**: `src/fairxai/experiments/attribute_binning.py`
+> **Runner**: `scripts/experiments/run_attribute_binning_analysis.py`
 > **Config**: `configs/experiments/age_binning.yaml`
 
 ---
@@ -58,6 +58,8 @@ Supported methods:
 | `fixed`       | User-supplied bin edges and labels             |
 | `quantile`    | Bins with (approximately) equal sample counts  |
 | `equal_width` | Bins with equal-width intervals over the range |
+| `jenks`       | Natural breaks minimising within-group variance |
+| `adaptive_quantile` | Quantile + auto-merge of under-populated bins |
 
 ### 2.2  Cross-attribute impact analysis
 
@@ -110,45 +112,42 @@ representation:
 
 ```bash
 # Minimal (uses defaults from YAML)
-python3 scripts/experiments/run_age_binning_analysis.py
+python3 scripts/experiments/run_attribute_binning_analysis.py
 
 # Specific datasets / strategies
-python3 scripts/experiments/run_age_binning_analysis.py \
+python3 scripts/experiments/run_attribute_binning_analysis.py \
     --datasets cleveland hungarian \
     --strategies clinical quantile_4
 
 # With verbosity
-python3 scripts/experiments/run_age_binning_analysis.py -vv
+python3 scripts/experiments/run_attribute_binning_analysis.py -vv
 ```
 
 Or via the pipeline:
 
 ```bash
-bash scripts/cardiac/cardiac_pipeline.sh --resume-from age_binning --go-until age_binning
+bash scripts/cardiac/cardiac_pipeline.sh --resume-from attribute_binning --go-until attribute_binning
 ```
 
 ### Output artefacts
 
 | File                               | Content                          |
 |------------------------------------|----------------------------------|
-| `age_binning_comparison_*.csv`     | One row per strategy × dataset   |
-| `age_binning_analysis_*.json`      | Full analysis dict (all metrics) |
-| `age_binning_report_*.md`          | Human-readable summary + tables  |
+| `attribute_binning_comparison_*.csv`     | One row per strategy × dataset   |
+| `attribute_binning_analysis_*.json`      | Full analysis dict (all metrics) |
+| `attribute_binning_report_*.md`          | Human-readable summary + tables  |
 
 ---
 
-## 5  Future Vision — Generic Attribute Binning
+## 5  Current State
 
-The current module is named `age_binning` because age is the primary use case.
-The eventual goal is to generalise into a full **attribute binning** module
-that:
+The module has been renamed from `age_binning` to `attribute_binning`.
+A backward-compatibility shim (`age_binning.py`) re-exports everything
+from the canonical module.  The architecture already supports any
+continuous or ordinal column via the `col` parameter, not just `age_raw`.
 
-- Accepts *any* continuous or ordinal column, not just `age_raw`.
-- Supports additional methods (e.g., decision-tree-based optimal binning,
-  domain-driven cutoffs loaded from external references).
-- Runs binning sensitivity as part of the standard profiling stage, not only
-  as a separate experiment.
+Future extensions may include:
 
-This generalisation is documented here for future reference; the current
-implementation deliberately keeps the `age_binning` name to avoid premature
-renaming churn.
+- Decision-tree-based optimal binning.
+- Domain-driven cutoffs loaded from external references.
+- Binning sensitivity as part of the standard profiling stage.

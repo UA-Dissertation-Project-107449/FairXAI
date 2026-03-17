@@ -104,8 +104,8 @@ STAGES: tuple[PipelineStage, ...] = (
     ),
     PipelineStage(
         number=7,
-        name="age_binning",
-        description="Age binning strategy analysis",
+        name="attribute_binning",
+        description="Attribute binning strategy analysis",
         checkpoint_artifacts=(),
     ),
     PipelineStage(
