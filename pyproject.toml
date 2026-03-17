@@ -1,0 +1,118 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fairxai"
+version = "0.1.0"
+description = "FairXAI: Fair and Explainable AI for Healthcare Decision Support System"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "Miguel Silva" },
+]
+requires-python = ">=3.11"
+
+# CORE: Minimum viable install — all that the HPC batch jobs need
+dependencies = [
+    "numpy>=2.0.0",        # (reqs: 2.3.5)  array ops used everywhere
+    "pandas>=2.0.0",       # (reqs: 2.3.3)  tabular data throughout pipeline
+    "scikit-learn>=1.5.0", # (reqs: 1.7.2)  train/test split, scaling, encoding
+    "PyYAML>=6.0.1",       # (reqs: 6.0.3)  config loading in utils and data loaders
+]
+
+[project.optional-dependencies]
+
+# EXPERIMENT: ML training, fairness metrics, and imbalance handling
+# Install: pip install -e ".[experiment]"
+experiment = [
+    "joblib>=1.3.0",            # (reqs: 1.5.2)  model serialisation / persistence
+    "scipy>=1.10.0",            # (reqs: 1.15.3) distance metrics, statistical functions
+    "imbalanced-learn>=0.12.0", # (reqs: 0.14.0) SMOTE, oversampling, undersampling
+    "fairlearn>=0.10.0",        # (reqs: 0.13.0) fairness metrics and mitigation algorithms
+    "interpret>=0.6.0",         # (reqs: 0.6.10) InterpretML — loads the EBM difficulty model
+]
+
+# DEV: Local notebooks, visualisation, and explainability analysis
+# Install: pip install -e ".[dev]"
+dev = [
+    "matplotlib>=3.8.0",  # (reqs: 3.10.7) plotting and figure generation
+    "seaborn>=0.13.0",    # (reqs: 0.13.2) statistical visualisation
+    "shap>=0.44.0",       # (reqs: 0.50.0) SHAP feature importance (lazy-imported)
+    "lime>=0.2.0",        # (reqs: 0.2.0.1) LIME local explanations (lazy-imported)
+    "jenkspy>=0.3.0",     # (reqs: 0.3.3)  Jenks natural breaks for attribute binning
+    "tqdm>=4.66.0",       # (reqs: 4.67.1) progress bars
+    "ipykernel>=6.20",    # (reqs: 7.1.0)  Jupyter kernel
+    "notebook>=7.0",      #                Jupyter Notebook UI
+]
+
+# ORCHESTRATION: Prefect-managed multi-step flows — local use only, NOT for HPC
+# The HPC uses the bash pipeline (scripts/cardiac/cardiac_pipeline.sh) instead
+# Install: pip install -e ".[orchestration]"
+orchestration = [
+    "prefect>=3.0.0",     # (reqs: 3.6.15) workflow orchestration
+]
+
+# GPU: RAPIDS cuML for GPU-accelerated ML — Pleiades CUDA 12.4
+# WARNING: cannot pip install on machines without NVIDIA GPU + CUDA toolkit
+# Install manually on HPC AFTER "module load cuda/12.4.0":
+#   pip install cuml-cu12==25.2.1
+gpu = [
+    "cuml-cu12>=24.2.0",  # RAPIDS cuML — requires CUDA 12.x pre-installed on host
+]
+
+# --- Convenience groups ---
+
+# HPC deployment: core + experiment (bash pipeline, no Prefect, no GPU via pip)
+# Install: pip install -e ".[hpc]"   then manually: pip install cuml-cu12==25.2.1
+hpc = [
+    "fairxai[experiment]",
+]
+
+# Local development: everything except GPU (GPU requires CUDA on host)
+# Install: pip install -e ".[full]"
+full = [
+    "fairxai[experiment,dev,orchestration]",
+]
+
+[project.scripts]
+fairxai-characterize = "fairxai.cli.characterize:main"
+
+[project.urls]
+Repository = "https://github.com/yourusername/fairxai"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fairxai"]
+# Include non-Python package data (the pre-trained EBM model)
+artifacts = ["src/fairxai/profiling/models/*.joblib"]
+
+# sdist: what gets included in a source distribution archive (python -m build)
+# Note: for git clone + pip install -e . this section has no effect
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",      # Python package
+    "/scripts",  # Bash pipeline + per-domain Python scripts
+    "/configs",  # YAML configs referenced by pipeline scripts
+    "/LICENSE",
+    "/README.md",
+]
+exclude = [
+    "/data",    # raw/processed datasets — stored on cluster storage, never in repo
+    "/output",  # pipeline run artefacts — generated at runtime
+    "/logs",    # execution logs — generated at runtime
+    "/flows",   # Prefect flows — not used on HPC
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"
+
+[tool.black]
+line-length = 100
+target-version = ["py311", "py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+src_paths = ["src", "tests"]
