@@ -12,6 +12,7 @@ history).
 |------|---------|
 | `runner_base.py` | Core runner helpers (`get_project_root`, `load_pipeline_config`, `setup_phase_logging`) |
 | `runner_utils.py` | Run ID/pointer/history/archive helpers for reproducible pipeline runs |
+| `characterize.py` | WebApp-compatible dataset characterization CLI (CSV -> metrics JSON + EBM difficulty) |
 | `__init__.py` | Public API re-exports |
 
 ## Public API
@@ -25,6 +26,28 @@ history).
 - `update_latest_pointer(base_results, run_dir, logger)`
 - `append_run_history(base_results, record)`
 - `archive_latest_run(base_dir, enabled, logger)`
+
+## Characterize CLI
+
+`characterize.py` provides a focused request-time path used by the WebApp integration.
+
+Arguments:
+- `--filename` (required): CSV filename or path
+- `--output-dir` (required): target directory for `<jobId>.json`
+- `--datasets-dir` (optional): base directory for resolving relative filenames
+- `--target-column` (optional): explicit target column (default: `heart_disease` or last column)
+- `--ebm-model-path` (optional): explicit model path override
+- `--print-json` (optional): prints resulting JSON to stdout
+
+Example:
+
+```bash
+python3 -m fairxai.cli.characterize \
+	--filename cleveland_standardized.csv \
+	--datasets-dir data/raw/cardiac \
+	--output-dir /tmp/fairxai_characterize \
+	--print-json
+```
 
 ## Logging Integration
 

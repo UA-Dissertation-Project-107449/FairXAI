@@ -12,6 +12,7 @@ signals that feed downstream fairness analysis and recommendation workflows.
 |------|---------|
 | `complexity.py` | Complexity metric implementations and metric registry helpers |
 | `config.py` | `ComplexityConfig` dataclass and `load_complexity_config()` loader (reads `configs/profiling/complexity.yaml`) |
+| `domain_characterization.py` | WebApp-compatible characterization API and EBM difficulty scoring |
 | `__init__.py` | Public re-exports for profiling APIs |
 
 ## Public API
@@ -28,6 +29,43 @@ signals that feed downstream fairness analysis and recommendation workflows.
   - Typed configuration for tunables (max samples, random seed, solver, etc.).
 - `load_complexity_config(path=None)`
   - Loads `ComplexityConfig` from YAML (defaults to `configs/profiling/complexity.yaml`).
+- `characterize_dataset(filename, output_dir, ...)`
+  - Computes compatibility metrics and writes `<jobId>.json` for WebApp consumption.
+
+## Domain Characterization Output
+
+`characterize_dataset` writes JSON in the shape:
+
+```json
+{
+  "jobId": "<file_stem>",
+  "metrics": {
+    "nSamples": 0,
+    "nFeatures": 0,
+    "nClasses": 0,
+    "F2Imbalance": 0.0,
+    "F3Imbalance": 0.0,
+    "F4Imbalance": 0.0,
+    "L1Imbalance": 0.0,
+    "L2Imbalance": 0.0,
+    "L3Imbalance": 0.0,
+    "N2Imbalance": 0.0,
+    "N3Imbalance": 0.0,
+    "N4Imbalance": 0.0,
+    "T1Imbalance": 0.0,
+    "RaugImbalance": 0.0,
+    "BayesImbalance": 0.0,
+    "ebmDifficulty": 0.0
+  }
+}
+```
+
+## EBM Runtime Requirement
+
+EBM inference is loaded from `src/fairxai/profiling/models/ebm_model.joblib`.
+
+Runtime requirement:
+- `interpret` must be available in the active Python environment (included in `.[experiment]` / `.[hpc]`).
 
 ## Supported Metrics
 
