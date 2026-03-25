@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from sklearn.decomposition import PCA as SklearnPCA
 
 from .complexity import compute_complexity_metrics
 
@@ -57,12 +58,20 @@ def _resolve_input_csv(filename: str, datasets_dir: str | Path | None = None) ->
     )
 
 
+_TARGET_COLUMN_HINTS = [
+    "target", "label", "class", "outcome", "result",
+    "heart_disease", "diagnosis", "y", "output",
+]
+
+
 def _resolve_target_column(df: pd.DataFrame, target_column: str | None = None) -> str:
     if target_column and target_column in df.columns:
         return target_column
 
-    if "heart_disease" in df.columns:
-        return "heart_disease"
+    lower_cols = [c.lower() for c in df.columns]
+    for hint in _TARGET_COLUMN_HINTS:
+        if hint in lower_cols:
+            return df.columns[lower_cols.index(hint)]
 
     return str(df.columns[-1])
 
@@ -107,6 +116,39 @@ def _round_metric(value: Any) -> float | None:
     return float(np.round(value_f, 3))
 
 
+def _clip_metrics(metrics: dict[str, Any]) -> None:
+    """Clip all complexity metric values to [0.0, 1.0] in-place.
+
+    N2 is a distance ratio and can exceed 1; other metrics are theoretically
+    bounded but may produce minor floating-point overflows. The frontend and
+    AI service assume all values are in [0, 1].
+    """
+    for name in EBM_FEATURE_ORDER:
+        v = metrics.get(name)
+        if v is not None:
+            metrics[name] = float(np.clip(v, 0.0, 1.0))
+
+
+def _compute_pca2d(X: pd.DataFrame, y: pd.Series) -> list[list[float | int]]:
+    """Reduce dataset to 2D via PCA for the frontend scatter plot.
+
+    Returns a list of [x, y_coord, classLabel] triples.
+    """
+    X_numeric = X.select_dtypes(include=[np.number]).fillna(0)
+    if X_numeric.shape[1] < 2:
+        return []
+    n_components = min(2, X_numeric.shape[0], X_numeric.shape[1])
+    pca = SklearnPCA(n_components=n_components, random_state=42)
+    coords = pca.fit_transform(X_numeric.values)
+    # Pad to 2 columns if dataset has only 1 numeric feature
+    if coords.shape[1] < 2:
+        coords = np.hstack([coords, np.zeros((coords.shape[0], 1))])
+    return [
+        [float(row[0]), float(row[1]), int(label)]
+        for row, label in zip(coords, y.values)
+    ]
+
+
 def _predict_ebm_difficulty(metrics: dict[str, Any], ebm_model_path: str | Path | None = None) -> float:
     missing = [name for name in EBM_FEATURE_ORDER if _to_float_or_none(metrics.get(name)) is None]
     if missing:
@@ -133,6 +175,7 @@ def characterize_dataset(
     output_dir: str | Path,
     datasets_dir: str | Path | None = None,
     target_column: str | None = None,
+    index_column: str | None = None,
     ebm_model_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Characterize one dataset and write WebApp-compatible JSON output.
@@ -147,6 +190,8 @@ def characterize_dataset(
         Optional base folder for relative ``filename`` resolution.
     target_column : str | None
         Optional target column override.
+    index_column : str | None
+        Optional index/identifier column to exclude from feature computation.
     ebm_model_path : str | Path | None
         Optional EBM model path override.
     """
@@ -158,10 +203,15 @@ def characterize_dataset(
         raise ValueError(f"Dataset is empty: {csv_path}")
 
     target = _resolve_target_column(df, target_column=target_column)
-    X = df.drop(columns=[target], errors="ignore")
+    drop_cols = [target]
+    if index_column and index_column in df.columns and index_column != target:
+        drop_cols.append(index_column)
+
+    X = df.drop(columns=drop_cols, errors="ignore")
     y = df[target]
 
-    complexity = compute_complexity_metrics(df, target=target)
+    complexity_df = df.drop(columns=[index_column], errors="ignore") if index_column else df
+    complexity = compute_complexity_metrics(complexity_df, target=target)
     metrics = {
         "nSamples": int(X.shape[0]),
         "nFeatures": int(X.shape[1]),
@@ -171,9 +221,14 @@ def characterize_dataset(
     for name in EBM_FEATURE_ORDER:
         metrics[name] = _round_metric(complexity.get(name))
 
-    metrics["ebmDifficulty"] = _predict_ebm_difficulty(metrics=metrics, ebm_model_path=ebm_model_path)
+    metrics["ebmDifficulty"] = float(np.clip(
+        _predict_ebm_difficulty(metrics=metrics, ebm_model_path=ebm_model_path),
+        0.0, 1.0,
+    ))
 
-    result = {"jobId": file_id, "metrics": metrics}
+    pca2d = _compute_pca2d(X, y)
+
+    result = {"jobId": file_id, "metrics": metrics, "pca2d": pca2d}
 
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

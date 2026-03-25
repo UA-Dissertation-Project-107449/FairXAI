@@ -28,6 +28,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional target column override (defaults to heart_disease or last column)",
     )
     parser.add_argument(
+        "--index-column",
+        default=None,
+        help="Optional index/identifier column to exclude from metric feature computation",
+    )
+    parser.add_argument(
         "--ebm-model-path",
         default=None,
         help="Optional path to the EBM model (.joblib)",
@@ -50,6 +55,7 @@ def main(argv: list[str] | None = None) -> int:
             output_dir=args.output_dir,
             datasets_dir=args.datasets_dir,
             target_column=args.target_column,
+            index_column=args.index_column,
             ebm_model_path=args.ebm_model_path,
         )
     except Exception as exc:
