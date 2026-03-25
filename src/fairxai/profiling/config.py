@@ -22,11 +22,12 @@ _BUILTIN_DEFAULTS: dict[str, object] = {
     "max_samples": 1000,
     "t1_max_samples": 600,
     "raug_k": 5,
+    "raug_delta": 2,
+    "raug_output_variant": "minority_normalized",
     "random_seed": 42,
-    "logistic_regression": {
-        "solver": "liblinear",
-        "max_iter": 1000,
-    },
+    "bayes_k": 5,
+    "bayes_search_depth": 100,
+    "linear_svc_max_iter": 1000,
     "default_target": "heart_disease",
 }
 
@@ -46,13 +47,13 @@ class ComplexityConfig:
         self.max_samples: int = int(raw.get("max_samples", _BUILTIN_DEFAULTS["max_samples"]))
         self.t1_max_samples: int = int(raw.get("t1_max_samples", _BUILTIN_DEFAULTS["t1_max_samples"]))
         self.raug_k: int = int(raw.get("raug_k", _BUILTIN_DEFAULTS["raug_k"]))
+        self.raug_delta: int = int(raw.get("raug_delta", _BUILTIN_DEFAULTS["raug_delta"]))
+        self.raug_output_variant: str = str(raw.get("raug_output_variant", _BUILTIN_DEFAULTS["raug_output_variant"]))
         self.random_seed: int = int(raw.get("random_seed", _BUILTIN_DEFAULTS["random_seed"]))
+        self.bayes_k: int = int(raw.get("bayes_k", _BUILTIN_DEFAULTS["bayes_k"]))
+        self.bayes_search_depth: int = int(raw.get("bayes_search_depth", _BUILTIN_DEFAULTS["bayes_search_depth"]))
+        self.linear_svc_max_iter: int = int(raw.get("linear_svc_max_iter", _BUILTIN_DEFAULTS["linear_svc_max_iter"]))
         self.default_target: str = str(raw.get("default_target", _BUILTIN_DEFAULTS["default_target"]))
-
-        lr = raw.get("logistic_regression", {})
-        lr_defaults = _BUILTIN_DEFAULTS["logistic_regression"]
-        self.lr_solver: str = str(lr.get("solver", lr_defaults["solver"]))
-        self.lr_max_iter: int = int(lr.get("max_iter", lr_defaults["max_iter"]))
 
     # Convenience: allow ``dict(cfg)`` for callers that need plain dicts.
     def to_dict(self) -> dict[str, object]:
@@ -60,12 +61,13 @@ class ComplexityConfig:
             "max_samples": self.max_samples,
             "t1_max_samples": self.t1_max_samples,
             "raug_k": self.raug_k,
+            "raug_delta": self.raug_delta,
+            "raug_output_variant": self.raug_output_variant,
             "random_seed": self.random_seed,
+            "bayes_k": self.bayes_k,
+            "bayes_search_depth": self.bayes_search_depth,
+            "linear_svc_max_iter": self.linear_svc_max_iter,
             "default_target": self.default_target,
-            "logistic_regression": {
-                "solver": self.lr_solver,
-                "max_iter": self.lr_max_iter,
-            },
         }
 
 

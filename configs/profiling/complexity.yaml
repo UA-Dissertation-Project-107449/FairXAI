@@ -14,14 +14,24 @@ t1_max_samples: 600
 # Neighbourhood size for the Raug overlap metric.
 raug_k: 5
 
+# Opposite-class neighbour threshold for Raug (legacy Domain_characterization: 2).
+raug_delta: 2
+
+# Output variant used for RaugImbalance.
+# "minority_normalized" matches the value stored in legacy Domain_characterization
+# JSON reports, while "final_weighted_count" uses the weighted raw-count formula.
+raug_output_variant: minority_normalized
+
 # Global random seed used by every metric that subsamples or
 # generates synthetic interpolations.
 random_seed: 42
 
-# Logistic-regression hyper-parameters used by L1, L2, and L3.
-logistic_regression:
-  solver: "liblinear"
-  max_iter: 1000
+# BayesImbalance neighborhood parameters (Domain_characterization-equivalent).
+bayes_k: 5
+bayes_search_depth: 100
+
+# LinearSVC max iterations for L1/L2/L3 metrics.
+linear_svc_max_iter: 1000
 
 # Default binary-classification target column expected in the input
 # DataFrame when no explicit ``target`` argument is passed.
