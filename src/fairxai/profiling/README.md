@@ -6,6 +6,9 @@ or alongside model training.
 This module computes class-overlap, neighborhood, linearity, and imbalance
 signals that feed downstream fairness analysis and recommendation workflows.
 
+Metric implementations are aligned with Domain_characterization behavior while
+remaining fully implemented inside FairXAI.
+
 ## Files
 
 | File | Purpose |
@@ -13,6 +16,7 @@ signals that feed downstream fairness analysis and recommendation workflows.
 | `complexity.py` | Complexity metric implementations and metric registry helpers |
 | `config.py` | `ComplexityConfig` dataclass and `load_complexity_config()` loader (reads `configs/profiling/complexity.yaml`) |
 | `domain_characterization.py` | WebApp-compatible characterization API and EBM difficulty scoring |
+| `METRIC_NOTES.md` | Deep metric definitions, legacy-equivalence notes, and reproducibility guide |
 | `__init__.py` | Public re-exports for profiling APIs |
 
 ## Public API
@@ -80,6 +84,9 @@ Primary metric keys exposed today:
 
 Imbalance aliases are also exposed (e.g., `F2Imbalance`, `N3Imbalance`).
 
+For full formulas, per-metric behavior details, and migration rationale, see
+`METRIC_NOTES.md`.
+
 ## Design Notes
 
 - Numeric-only feature selection is handled internally.
@@ -100,3 +107,7 @@ print(profile.get("F2"), profile.get("N3"))
 - `numpy`
 - `pandas`
 - `scikit-learn` (optional for specific metrics)
+
+## See Also
+
+- `METRIC_NOTES.md` for detailed implementation notes and divergence analysis.
