@@ -42,6 +42,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print resulting JSON to stdout",
     )
+    parser.add_argument(
+        "--include-triage",
+        action="store_true",
+        help="Optionally run the recommendation engine and append triage_report",
+    )
+    parser.add_argument(
+        "--sensitive-columns",
+        nargs="*",
+        default=None,
+        help="Optional sensitive columns passed to triage generation",
+    )
+    parser.add_argument(
+        "--triage-project-root",
+        default=None,
+        help="Optional project root for recommendation config resolution",
+    )
     return parser
 
 
@@ -57,6 +73,9 @@ def main(argv: list[str] | None = None) -> int:
             target_column=args.target_column,
             index_column=args.index_column,
             ebm_model_path=args.ebm_model_path,
+            include_triage=args.include_triage,
+            sensitive_columns=args.sensitive_columns,
+            triage_project_root=args.triage_project_root,
         )
     except Exception as exc:
         print(f"[ERROR] Characterization failed: {exc}", file=sys.stderr)

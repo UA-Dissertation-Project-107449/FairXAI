@@ -162,12 +162,19 @@ class RecommendationEngine:
         # --- Step 6: visual panel references ---
         visual_panels = self._build_visual_panel_refs(profile, ingestion)
 
+        feature_type_summary = self._build_feature_type_summary(ingestion)
+        feature_metadata = [column.to_dict() for column in ingestion.columns]
+        columns_with_quality_issues = self._identify_quality_issues(ingestion, profile)
+
         return TriageReport(
             readiness_status=readiness,
             recommendations=recommendations,
             visual_panels=visual_panels,
             limitations=limitations,
             dataset_summary=summary,
+            feature_type_summary=feature_type_summary,
+            feature_metadata=feature_metadata,
+            columns_with_quality_issues=columns_with_quality_issues,
         )
 
     # ------------------------------------------------------------------
@@ -306,3 +313,41 @@ class RecommendationEngine:
             })
 
         return panels
+
+    @staticmethod
+    def _build_feature_type_summary(ingestion: DatasetIngestion) -> Dict[str, int]:
+        summary: Dict[str, int] = {}
+        for column in ingestion.columns:
+            detected_type = column.detected_type.value
+            summary[detected_type] = summary.get(detected_type, 0) + 1
+        return summary
+
+    @staticmethod
+    def _identify_quality_issues(
+        ingestion: DatasetIngestion,
+        profile: Dict,
+    ) -> Dict[str, List[str]]:
+        issues: Dict[str, List[str]] = {
+            "high_missing": [],
+            "unconfirmed_role": [],
+            "low_unique": [],
+        }
+
+        n_rows = ingestion.n_rows or profile.get("basic_stats", {}).get("n_samples") or 0
+        high_missing_threshold = max(1, int(n_rows * 0.20)) if n_rows else 0
+
+        for column in ingestion.columns:
+            if not column.user_confirmed:
+                issues["unconfirmed_role"].append(column.name)
+
+            if column.n_unique is not None and column.n_unique <= 1:
+                issues["low_unique"].append(column.name)
+
+            if (
+                high_missing_threshold
+                and column.n_missing is not None
+                and column.n_missing >= high_missing_threshold
+            ):
+                issues["high_missing"].append(column.name)
+
+        return {key: values for key, values in issues.items() if values}

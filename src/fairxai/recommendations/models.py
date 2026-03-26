@@ -183,6 +183,9 @@ class TriageReport:
     visual_panels: List[Dict[str, Any]] = field(default_factory=list)
     limitations: List[str] = field(default_factory=list)
     dataset_summary: Dict[str, Any] = field(default_factory=dict)
+    feature_type_summary: Dict[str, int] = field(default_factory=dict)
+    feature_metadata: List[Dict[str, Any]] = field(default_factory=list)
+    columns_with_quality_issues: Dict[str, List[str]] = field(default_factory=dict)
     generated_at: str = field(default_factory=lambda: datetime.now().isoformat())
 
     # Convenience filters -------------------------------------------------------
@@ -202,7 +205,7 @@ class TriageReport:
         return len(self.by_priority(Priority.P1))
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        payload: Dict[str, Any] = {
             "readiness_status": self.readiness_status.value,
             "recommendations": [r.to_dict() for r in self.recommendations],
             "visual_panels": self.visual_panels,
@@ -210,3 +213,12 @@ class TriageReport:
             "dataset_summary": self.dataset_summary,
             "generated_at": self.generated_at,
         }
+
+        if self.feature_type_summary:
+            payload["feature_type_summary"] = self.feature_type_summary
+        if self.feature_metadata:
+            payload["feature_metadata"] = self.feature_metadata
+        if self.columns_with_quality_issues:
+            payload["columns_with_quality_issues"] = self.columns_with_quality_issues
+
+        return payload

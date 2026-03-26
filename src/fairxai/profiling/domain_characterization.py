@@ -149,6 +149,93 @@ def _compute_pca2d(X: pd.DataFrame, y: pd.Series) -> list[list[float | int]]:
     ]
 
 
+def _compute_feature_type_summary(X: pd.DataFrame) -> dict[str, int]:
+    summary = {
+        "numerical": 0,
+        "categorical": 0,
+        "binary": 0,
+        "datetime": 0,
+        "text": 0,
+        "unknown": 0,
+    }
+
+    for column_name in X.columns:
+        series = X[column_name]
+        non_null = series.dropna()
+        if non_null.empty:
+            summary["unknown"] += 1
+            continue
+
+        if pd.api.types.is_datetime64_any_dtype(series):
+            summary["datetime"] += 1
+            continue
+
+        unique_count = int(non_null.nunique())
+        if unique_count == 2:
+            summary["binary"] += 1
+            continue
+
+        if pd.api.types.is_numeric_dtype(series):
+            summary["numerical"] += 1
+            continue
+
+        if unique_count <= 20:
+            summary["categorical"] += 1
+            continue
+
+        summary["text"] += 1
+
+    return {key: value for key, value in summary.items() if value > 0}
+
+
+def _resolve_project_root(project_root: str | Path | None = None) -> Path | None:
+    if project_root:
+        candidate = Path(project_root)
+        if candidate.exists():
+            return candidate.resolve()
+
+    env_project_root = os.getenv("FAIRXAI_PROJECT_ROOT")
+    if env_project_root:
+        candidate = Path(env_project_root)
+        if candidate.exists():
+            return candidate.resolve()
+
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        config_path = parent / "configs" / "recommendations" / "thresholds.yaml"
+        if config_path.exists():
+            return parent
+
+    return None
+
+
+def _build_triage_report(
+    csv_path: Path,
+    dataset_name: str,
+    target_column: str,
+    index_column: str | None,
+    sensitive_columns: list[str] | None,
+    project_root: str | Path | None,
+) -> tuple[dict[str, Any], dict[str, int]]:
+    from fairxai.recommendations.engine import RecommendationEngine
+
+    resolved_project_root = _resolve_project_root(project_root)
+    engine = RecommendationEngine(
+        project_root=str(resolved_project_root) if resolved_project_root else None,
+    )
+
+    ingestion = engine.ingest(
+        str(csv_path),
+        label_column=target_column,
+        sensitive_columns=sensitive_columns or None,
+        identifier_columns=[index_column] if index_column else None,
+        dataset_name=dataset_name,
+    )
+    report = engine.generate(ingestion)
+    feature_summary = report.feature_type_summary or {}
+    return report.to_dict(), feature_summary
+
+
 def _predict_ebm_difficulty(metrics: dict[str, Any], ebm_model_path: str | Path | None = None) -> float:
     missing = [name for name in EBM_FEATURE_ORDER if _to_float_or_none(metrics.get(name)) is None]
     if missing:
@@ -177,6 +264,9 @@ def characterize_dataset(
     target_column: str | None = None,
     index_column: str | None = None,
     ebm_model_path: str | Path | None = None,
+    include_triage: bool = False,
+    sensitive_columns: list[str] | None = None,
+    triage_project_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Characterize one dataset and write WebApp-compatible JSON output.
 
@@ -228,7 +318,43 @@ def characterize_dataset(
 
     pca2d = _compute_pca2d(X, y)
 
-    result = {"jobId": file_id, "metrics": metrics, "pca2d": pca2d}
+    missing_percentages = {
+        str(column_name): float(np.round(X[column_name].isna().mean() * 100, 2))
+        for column_name in X.columns
+    }
+    duplicate_count = int(df.drop(columns=[index_column], errors="ignore").duplicated().sum())
+    class_distribution = {
+        str(class_name): int(count)
+        for class_name, count in pd.Series(y).value_counts(dropna=False).to_dict().items()
+    }
+
+    feature_type_summary = _compute_feature_type_summary(X)
+
+    result: dict[str, Any] = {
+        "jobId": file_id,
+        "metrics": metrics,
+        "pca2d": pca2d,
+        "missing_percentages": missing_percentages,
+        "duplicate_count": duplicate_count,
+        "class_distribution": class_distribution,
+        "feature_type_summary": feature_type_summary,
+    }
+
+    if include_triage:
+        try:
+            triage_report, triage_feature_summary = _build_triage_report(
+                csv_path=csv_path,
+                dataset_name=file_id,
+                target_column=target,
+                index_column=index_column,
+                sensitive_columns=sensitive_columns,
+                project_root=triage_project_root,
+            )
+            result["triage_report"] = triage_report
+            if triage_feature_summary:
+                result["feature_type_summary"] = triage_feature_summary
+        except Exception as exc:  # pragma: no cover - keep characterize resilient
+            result["triage_error"] = str(exc)
 
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
