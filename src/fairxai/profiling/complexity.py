@@ -1,24 +1,26 @@
 """Complexity and overlap metrics for profiling.
 
-Runtime tunables (max_samples, random seed, solver, etc.) are loaded from
-``configs/profiling/complexity.yaml`` via :class:`~.config.ComplexityConfig`.
-Individual metric functions still accept keyword overrides for standalone use.
+This module intentionally follows Domain_characterization metric behavior for all
+implemented metrics.
 """
 
 from __future__ import annotations
 
 import logging
-from itertools import combinations
 
 import numpy as np
 import pandas as pd
 
-from .config import ComplexityConfig, load_complexity_config
+from .config import ComplexityConfig
 
 try:
-    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import pairwise_distances
+    from sklearn.neighbors import NearestNeighbors
+    from sklearn.svm import LinearSVC
 except Exception:  # pragma: no cover - optional dependency
-    LogisticRegression = None
+    pairwise_distances = None
+    NearestNeighbors = None
+    LinearSVC = None
 
 logger = logging.getLogger(__name__)
 
@@ -56,15 +58,24 @@ METRIC_IMBALANCE_ALIASES = {
 def _select_numeric(df: pd.DataFrame, target: str) -> tuple[np.ndarray, np.ndarray] | tuple[None, None]:
     if target not in df.columns:
         return None, None
+
     numeric = df.select_dtypes(include=[np.number]).copy()
     if target in numeric.columns:
         numeric = numeric.drop(columns=[target])
-    numeric = numeric.dropna(axis=0)
+
     if numeric.empty:
         return None, None
-    X = numeric.to_numpy(dtype=float)
-    y = df.loc[numeric.index, target].to_numpy()
-    return X, y
+
+    y = pd.Series(df[target]).loc[numeric.index]
+    non_nan_target = y.notna()
+    numeric = numeric.loc[non_nan_target]
+    y = y.loc[non_nan_target]
+
+    if numeric.empty:
+        return None, None
+
+    X = numeric.to_numpy(dtype=np.float32)
+    return X, y.to_numpy()
 
 
 def get_supported_complexity_metrics(include_aliases: bool = False) -> list[str]:
@@ -82,347 +93,11 @@ def is_complexity_metric_key(metric_name: str) -> bool:
     return metric_name in SUPPORTED_COMPLEXITY_METRICS or metric_name in METRIC_IMBALANCE_ALIASES.values()
 
 
-def _ensure_binary(y: np.ndarray) -> np.ndarray | None:
+def _encode_binary_labels(y: np.ndarray) -> np.ndarray | None:
     values = pd.Series(y).dropna().unique()
     if len(values) != 2:
         return None
-    return y
-
-
-def _feature_overlap_ratio(feature: np.ndarray, y: np.ndarray) -> float | None:
-    classes = np.unique(y)
-    if len(classes) != 2:
-        return None
-    f0 = feature[y == classes[0]]
-    f1 = feature[y == classes[1]]
-    if f0.size == 0 or f1.size == 0:
-        return None
-    min0, max0 = np.nanmin(f0), np.nanmax(f0)
-    min1, max1 = np.nanmin(f1), np.nanmax(f1)
-    overlap = max(0.0, min(max0, max1) - max(min0, min1))
-    span = max(max0, max1) - min(min0, min1)
-    if span <= 0:
-        return None
-    return float(overlap / span)
-
-
-def _overlap_interval(feature: np.ndarray, y: np.ndarray) -> tuple[float, float] | None:
-    classes = np.unique(y)
-    if len(classes) != 2:
-        return None
-    f0 = feature[y == classes[0]]
-    f1 = feature[y == classes[1]]
-    if f0.size == 0 or f1.size == 0:
-        return None
-    overlap_min = max(np.nanmin(f0), np.nanmin(f1))
-    overlap_max = min(np.nanmax(f0), np.nanmax(f1))
-    if overlap_max <= overlap_min:
-        return overlap_min, overlap_min
-    return overlap_min, overlap_max
-
-
-def _pairwise_distances(X: np.ndarray) -> np.ndarray:
-    """Compute pairwise Euclidean distances without O(n²·features) intermediate."""
-    sq = np.einsum("ij,ij->i", X, X)          # (n,) — squared norms
-    dist_sq = sq[:, None] + sq[None, :] - 2.0 * (X @ X.T)
-    np.maximum(dist_sq, 0.0, out=dist_sq)      # numerical guard
-    return np.sqrt(dist_sq)
-
-
-def f2_overlap(X: np.ndarray, y: np.ndarray) -> float | None:
-    ratios = []
-    for col in range(X.shape[1]):
-        ratio = _feature_overlap_ratio(X[:, col], y)
-        if ratio is not None:
-            ratios.append(ratio)
-    if not ratios:
-        return None
-    return float(np.prod(ratios))
-
-
-def f3_overlap(X: np.ndarray, y: np.ndarray) -> float | None:
-    ratios = []
-    for col in range(X.shape[1]):
-        ratio = _feature_overlap_ratio(X[:, col], y)
-        if ratio is not None:
-            ratios.append((ratio, col))
-    if not ratios:
-        return None
-    ratios.sort(key=lambda x: x[0])
-    _, best_col = ratios[0]
-    classes = np.unique(y)
-    f0 = X[:, best_col][y == classes[0]]
-    f1 = X[:, best_col][y == classes[1]]
-    overlap_min = max(np.nanmin(f0), np.nanmin(f1))
-    overlap_max = min(np.nanmax(f0), np.nanmax(f1))
-    if overlap_max <= overlap_min:
-        return 0.0
-    in_overlap = (X[:, best_col] >= overlap_min) & (X[:, best_col] <= overlap_max)
-    return float(np.mean(in_overlap))
-
-
-def f4_overlap(X: np.ndarray, y: np.ndarray) -> float | None:
-    if X.shape[0] == 0 or X.shape[1] == 0:
-        return None
-    mask = np.ones(X.shape[0], dtype=bool)
-    last_ratio: float | None = None
-
-    for _ in range(X.shape[1]):
-        if mask.sum() < 2:
-            break
-        current_X = X[mask]
-        current_y = y[mask]
-        if len(np.unique(current_y)) != 2:
-            break
-
-        candidates: list[tuple[float, int, np.ndarray]] = []
-        for col in range(current_X.shape[1]):
-            interval = _overlap_interval(current_X[:, col], current_y)
-            if interval is None:
-                continue
-            overlap_min, overlap_max = interval
-            col_mask = (current_X[:, col] >= overlap_min) & (current_X[:, col] <= overlap_max)
-            ratio = float(np.mean(col_mask))
-            candidates.append((ratio, col, col_mask))
-
-        if not candidates:
-            break
-
-        candidates.sort(key=lambda item: item[0])
-        best_ratio, _, best_mask = candidates[0]
-        last_ratio = best_ratio
-
-        selected_idx = np.where(mask)[0]
-        keep_idx = selected_idx[best_mask]
-        new_mask = np.zeros_like(mask)
-        new_mask[keep_idx] = True
-        if new_mask.sum() == mask.sum():
-            break
-        mask = new_mask
-
-    if last_ratio is None:
-        return None
-    return float(mask.sum() / X.shape[0])
-
-
-def _sample_indices(n: int, max_samples: int, rng: np.random.Generator) -> np.ndarray:
-    if n <= max_samples:
-        return np.arange(n)
-    return rng.choice(n, size=max_samples, replace=False)
-
-
-def n3_error(X: np.ndarray, y: np.ndarray, max_samples: int = 1000, random_seed: int = 42) -> float | None:
-    n = X.shape[0]
-    if n < 2:
-        return None
-    rng = np.random.default_rng(random_seed)
-    idx = _sample_indices(n, max_samples, rng)
-    Xs = X[idx]
-    ys = y[idx]
-    dists = _pairwise_distances(Xs)            # (m, m) — no 3-D intermediate
-    np.fill_diagonal(dists, np.inf)
-    nn = np.argmin(dists, axis=1)
-    opp = ys[nn] != ys
-    return float(np.mean(opp))
-
-
-def n2_ratio(X: np.ndarray, y: np.ndarray, max_samples: int = 1000, random_seed: int = 42) -> float | None:
-    n = X.shape[0]
-    if n < 3:
-        return None
-    rng = np.random.default_rng(random_seed)
-    idx = _sample_indices(n, max_samples, rng)
-    Xs = X[idx]
-    ys = y[idx]
-    if len(np.unique(ys)) != 2:
-        return None
-
-    dists = _pairwise_distances(Xs)
-    np.fill_diagonal(dists, np.inf)
-    ratios = []
-    for i in range(len(Xs)):
-        same_mask = ys == ys[i]
-        same_mask[i] = False
-        opp_mask = ys != ys[i]
-        if not np.any(same_mask) or not np.any(opp_mask):
-            continue
-        same_dist = np.min(dists[i, same_mask])
-        opp_dist = np.min(dists[i, opp_mask])
-        ratios.append(float(same_dist / (opp_dist + 1e-12)))
-
-    if not ratios:
-        return None
-    return float(np.mean(ratios))
-
-
-def raug_overlap(X: np.ndarray, y: np.ndarray, k: int = 5, max_samples: int = 1000, random_seed: int = 42) -> float | None:
-    n = X.shape[0]
-    if n <= 1:
-        return None
-    rng = np.random.default_rng(random_seed)
-    idx = _sample_indices(n, max_samples, rng)
-    Xs = X[idx]
-    ys = y[idx]
-    k = min(k, len(Xs) - 1)
-    dists = _pairwise_distances(Xs)            # (m, m) — no 3-D intermediate
-    np.fill_diagonal(dists, np.inf)
-    nn_idx = np.argpartition(dists, kth=k, axis=1)[:, :k]
-    opp_counts = (ys[nn_idx] != ys[:, None]).sum(axis=1)
-    in_overlap = opp_counts > 0
-    return float(np.mean(in_overlap))
-
-
-def _synthetic_interpolation(
-    X: np.ndarray,
-    y: np.ndarray,
-    rng: np.random.Generator,
-    max_samples: int = 1000,
-) -> tuple[np.ndarray, np.ndarray] | tuple[None, None]:
-    if X.shape[0] < 3:
-        return None, None
-
-    idx = _sample_indices(X.shape[0], max_samples, rng)
-    Xs = X[idx]
-    ys = y[idx]
-    classes = np.unique(ys)
-    synth_rows: list[np.ndarray] = []
-    synth_labels: list[object] = []
-
-    for cls in classes:
-        class_idx = np.where(ys == cls)[0]
-        if len(class_idx) < 2:
-            continue
-        class_X = Xs[class_idx]
-        dists = _pairwise_distances(class_X)
-        np.fill_diagonal(dists, np.inf)
-        nn = np.argmin(dists, axis=1)
-        lam = rng.random(len(class_idx))
-        base = class_X
-        neigh = class_X[nn]
-        synthetic = base + lam[:, None] * (neigh - base)
-        synth_rows.extend(synthetic)
-        synth_labels.extend([cls] * len(synthetic))
-
-    if not synth_rows:
-        return None, None
-    return np.asarray(synth_rows, dtype=float), np.asarray(synth_labels)
-
-
-def _nearest_label(train_X: np.ndarray, train_y: np.ndarray, test_X: np.ndarray) -> np.ndarray:
-    """Nearest-neighbour labels using the squared-distance trick (no 3-D tensor)."""
-    sq_train = np.einsum("ij,ij->i", train_X, train_X)
-    sq_test  = np.einsum("ij,ij->i", test_X,  test_X)
-    dist_sq  = sq_test[:, None] + sq_train[None, :] - 2.0 * (test_X @ train_X.T)
-    np.maximum(dist_sq, 0.0, out=dist_sq)
-    nn = np.argmin(dist_sq, axis=1)            # argmin of squared == argmin of distance
-    return train_y[nn]
-
-
-def n4_error(X: np.ndarray, y: np.ndarray, max_samples: int = 1000, random_seed: int = 42) -> float | None:
-    rng = np.random.default_rng(random_seed)
-    synth_X, synth_y = _synthetic_interpolation(X, y, rng=rng, max_samples=max_samples)
-    if synth_X is None or synth_y is None:
-        return None
-
-    pred = _nearest_label(X, y, synth_X)
-    return float(np.mean(pred != synth_y))
-
-
-def l2_linear_error(X: np.ndarray, y: np.ndarray, lr_solver: str = "liblinear", lr_max_iter: int = 1000) -> float | None:
-    if LogisticRegression is None:
-        return None
-    try:
-        model = LogisticRegression(max_iter=lr_max_iter, solver=lr_solver)
-        model.fit(X, y)
-        acc = model.score(X, y)
-        return float(1.0 - acc)
-    except Exception:
-        return None
-
-
-def l1_linear_boundary_error(X: np.ndarray, y: np.ndarray, lr_solver: str = "liblinear", lr_max_iter: int = 1000) -> float | None:
-    if LogisticRegression is None:
-        return None
-    try:
-        model = LogisticRegression(max_iter=lr_max_iter, solver=lr_solver)
-        model.fit(X, y)
-        pred = model.predict(X)
-        misclassified = pred != y
-        if not np.any(misclassified):
-            return 0.0
-        if hasattr(model, "decision_function"):
-            margins = np.abs(model.decision_function(X))
-        else:
-            proba = model.predict_proba(X)
-            margins = np.abs(proba.max(axis=1) - 0.5)
-        penalty = margins[misclassified]
-        return float(np.mean(penalty) * np.mean(misclassified))
-    except Exception:
-        return None
-
-
-def l3_linear_synth_error(
-    X: np.ndarray, y: np.ndarray,
-    max_samples: int = 1000,
-    random_seed: int = 42,
-    lr_solver: str = "liblinear",
-    lr_max_iter: int = 1000,
-) -> float | None:
-    if LogisticRegression is None:
-        return None
-    try:
-        model = LogisticRegression(max_iter=lr_max_iter, solver=lr_solver)
-        model.fit(X, y)
-    except Exception:
-        return None
-
-    rng = np.random.default_rng(random_seed)
-    synth_X, synth_y = _synthetic_interpolation(X, y, rng=rng, max_samples=max_samples)
-    if synth_X is None or synth_y is None:
-        return None
-
-    pred = model.predict(synth_X)
-    return float(np.mean(pred != synth_y))
-
-
-def t1_structural_overlap(X: np.ndarray, y: np.ndarray, max_samples: int = 600, random_seed: int = 42) -> float | None:
-    if X.shape[0] < 3:
-        return None
-    rng = np.random.default_rng(random_seed)
-    idx = _sample_indices(X.shape[0], max_samples, rng)
-    Xs = X[idx]
-    ys = y[idx]
-    if len(np.unique(ys)) != 2:
-        return None
-
-    dists = _pairwise_distances(Xs)
-    np.fill_diagonal(dists, np.inf)
-    radii = np.zeros(len(Xs), dtype=float)
-
-    for i in range(len(Xs)):
-        opp_mask = ys != ys[i]
-        if not np.any(opp_mask):
-            return None
-        radii[i] = np.min(dists[i, opp_mask])
-
-    keep = np.ones(len(Xs), dtype=bool)
-    for i, j in combinations(range(len(Xs)), 2):
-        if ys[i] != ys[j]:
-            continue
-        center_dist = dists[i, j]
-        if center_dist + radii[i] <= radii[j]:
-            keep[i] = False
-        elif center_dist + radii[j] <= radii[i]:
-            keep[j] = False
-
-    return float(np.sum(keep) / len(Xs))
-
-
-def bayes_imbalance(y: np.ndarray) -> float | None:
-    if y.size == 0:
-        return None
-    p_pos = float(np.mean(y))
-    return float(abs(p_pos - 0.5) / 0.5)
+    return (y == values[1]).astype(np.int16)
 
 
 def _with_aliases(metrics: dict[str, float | None]) -> dict[str, float | None]:
@@ -433,55 +108,479 @@ def _with_aliases(metrics: dict[str, float | None]) -> dict[str, float | None]:
     return enriched
 
 
+def _stable_subsample(X: np.ndarray, y: np.ndarray, max_samples: int, random_seed: int) -> tuple[np.ndarray, np.ndarray]:
+    if max_samples <= 0 or len(y) <= max_samples:
+        return X, y
+
+    rng = np.random.RandomState(random_seed)
+    idx = np.sort(rng.choice(len(y), size=max_samples, replace=False))
+    return X[idx], y[idx]
+
+
+def f2_overlap(X: np.ndarray, y: np.ndarray) -> float | None:
+    non_binary_features = np.array([len(np.unique(col)) > 3 for col in X.T])
+    if not np.any(non_binary_features):
+        return None
+
+    Xf = X[:, non_binary_features]
+    c0 = Xf[y == 0]
+    c1 = Xf[y == 1]
+    if c0.size == 0 or c1.size == 0:
+        return None
+
+    max_c0 = np.max(c0, axis=0)
+    max_c1 = np.max(c1, axis=0)
+    min_c0 = np.min(c0, axis=0)
+    min_c1 = np.min(c1, axis=0)
+
+    overlap = np.maximum(0.0, np.minimum(max_c0, max_c1) - np.maximum(min_c0, min_c1))
+    range_c0 = np.maximum(max_c0 - min_c0, 1e-12)
+    range_c1 = np.maximum(max_c1 - min_c1, 1e-12)
+
+    f_c0 = overlap / range_c0
+    f_c1 = overlap / range_c1
+    return float(np.mean([np.prod(f_c0), np.prod(f_c1)]))
+
+
+def f3_overlap(X: np.ndarray, y: np.ndarray) -> float | None:
+    c0 = X[y == 0]
+    c1 = X[y == 1]
+    if c0.size == 0 or c1.size == 0:
+        return None
+
+    max_c0 = np.max(c0, axis=0)
+    max_c1 = np.max(c1, axis=0)
+    min_c0 = np.min(c0, axis=0)
+    min_c1 = np.min(c1, axis=0)
+
+    minmax = np.minimum(max_c0, max_c1)
+    maxmin = np.maximum(min_c0, min_c1)
+
+    overlap_count_c0 = np.sum((c0 >= maxmin) & (c0 <= minmax), axis=0)
+    overlap_count_c1 = np.sum((c1 >= maxmin) & (c1 <= minmax), axis=0)
+    ratio_c0 = overlap_count_c0 / max(c0.shape[0], 1)
+    ratio_c1 = overlap_count_c1 / max(c1.shape[0], 1)
+
+    non_binary_features = np.array([len(np.unique(col)) > 3 for col in X.T])
+    if not np.any(non_binary_features):
+        return None
+
+    min_ratio_c0 = np.min(ratio_c0[non_binary_features])
+    min_ratio_c1 = np.min(ratio_c1[non_binary_features])
+    return float((min_ratio_c0 + min_ratio_c1) / 2.0)
+
+
+def f4_overlap(X: np.ndarray, y: np.ndarray) -> float | None:
+    non_binary_features = np.array([len(np.unique(col)) > 2 for col in X.T])
+    if not np.any(non_binary_features):
+        return None
+
+    Xf = X[:, non_binary_features]
+    c0 = Xf[y == 0]
+    c1 = Xf[y == 1]
+    if c0.size == 0 or c1.size == 0:
+        return None
+
+    max_c0 = np.max(c0, axis=0)
+    max_c1 = np.max(c1, axis=0)
+    min_c0 = np.min(c0, axis=0)
+    min_c1 = np.min(c1, axis=0)
+
+    minmax = np.minimum(max_c0, max_c1)
+    maxmin = np.maximum(min_c0, min_c1)
+
+    overlap_matrix = (Xf > minmax) | (Xf < maxmin)
+    overlap_counts = np.sum(overlap_matrix, axis=0)
+    overlap_matrix = overlap_matrix[:, np.flip(np.argsort(overlap_counts))]
+
+    classified = np.zeros(Xf.shape[0], dtype=bool)
+    for i in range(Xf.shape[1]):
+        classified = np.logical_or(classified, overlap_matrix[:, i])
+        if np.sum(classified) == Xf.shape[0]:
+            break
+
+    labels_c0 = y == 0
+    labels_c1 = y == 1
+    f4_c0 = np.sum(np.logical_and(labels_c0, ~classified)) / max(np.sum(labels_c0), 1)
+    f4_c1 = np.sum(np.logical_and(labels_c1, ~classified)) / max(np.sum(labels_c1), 1)
+    return float((f4_c0 + f4_c1) / 2.0)
+
+
+def l1_linear_boundary_error(X: np.ndarray, y: np.ndarray, svc_max_iter: int = 1000) -> float | None:
+    if LinearSVC is None:
+        return None
+    try:
+        clf = LinearSVC(max_iter=svc_max_iter)
+        clf.fit(X, y)
+        pred = clf.predict(X)
+        incorrect = pred != y
+
+        labels_c0 = y == 0
+        labels_c1 = y == 1
+        if np.sum(labels_c0) == 0 or np.sum(labels_c1) == 0:
+            return None
+
+        margins = np.abs(clf.decision_function(X))
+        l1_c0 = np.sum(margins[np.logical_and(labels_c0, incorrect)]) / np.sum(labels_c0)
+        l1_c1 = np.sum(margins[np.logical_and(labels_c1, incorrect)]) / np.sum(labels_c1)
+        return float((l1_c0 + l1_c1) / 2.0)
+    except Exception:
+        return None
+
+
+def l2_linear_error(X: np.ndarray, y: np.ndarray, svc_max_iter: int = 1000) -> float | None:
+    if LinearSVC is None:
+        return None
+    try:
+        clf = LinearSVC(max_iter=svc_max_iter)
+        clf.fit(X, y)
+        pred = clf.predict(X)
+
+        labels_c0 = y == 0
+        labels_c1 = y == 1
+        if np.sum(labels_c0) == 0 or np.sum(labels_c1) == 0:
+            return None
+
+        err_c0 = np.mean(pred[labels_c0] != y[labels_c0])
+        err_c1 = np.mean(pred[labels_c1] != y[labels_c1])
+        return float((err_c0 + err_c1) / 2.0)
+    except Exception:
+        return None
+
+
+def l3_linear_synth_error(X: np.ndarray, y: np.ndarray, random_seed: int = 42, svc_max_iter: int = 1000) -> float | None:
+    if LinearSVC is None:
+        return None
+    try:
+        rng = np.random.RandomState(random_seed)
+        clf = LinearSVC(max_iter=svc_max_iter)
+        clf.fit(X, y)
+
+        test_X = np.zeros_like(X, dtype=np.float32)
+        test_y = np.zeros((len(y),), dtype=np.int16)
+
+        for label in [0, 1]:
+            class_idx = np.where(y == label)[0]
+            if len(class_idx) < 2:
+                continue
+
+            n_syn = len(class_idx)
+            s1 = rng.choice(class_idx, n_syn, replace=True)
+            s2 = rng.choice(class_idx, n_syn, replace=True)
+            alphas = rng.rand(n_syn)
+            synthetic = alphas[:, None] * X[s1] + (1.0 - alphas[:, None]) * X[s2]
+
+            start = 0 if label == 0 else -n_syn
+            end = n_syn if label == 0 else None
+            test_X[start:end] = synthetic
+            test_y[start:end] = label
+
+        pred = clf.predict(test_X)
+
+        labels_c0 = test_y == 0
+        labels_c1 = test_y == 1
+        if np.sum(labels_c0) == 0 or np.sum(labels_c1) == 0:
+            return None
+
+        err_c0 = np.mean(pred[labels_c0] != test_y[labels_c0])
+        err_c1 = np.mean(pred[labels_c1] != test_y[labels_c1])
+        return float((err_c0 + err_c1) / 2.0)
+    except Exception:
+        return None
+
+
+def n3_error(X: np.ndarray, y: np.ndarray) -> float | None:
+    if NearestNeighbors is None or len(X) < 2:
+        return None
+
+    knn = NearestNeighbors(n_neighbors=2)
+    knn.fit(X)
+    _, idx = knn.kneighbors(X, 2)
+    nn = idx[:, -1]
+    errors = y != y[nn]
+
+    labels_c0 = y == 0
+    labels_c1 = y == 1
+    if np.sum(labels_c0) == 0 or np.sum(labels_c1) == 0:
+        return None
+
+    n3_c0 = np.sum(errors[labels_c0]) / np.sum(labels_c0)
+    n3_c1 = np.sum(errors[labels_c1]) / np.sum(labels_c1)
+    return float((n3_c0 + n3_c1) / 2.0)
+
+
+def n2_ratio(X: np.ndarray, y: np.ndarray) -> float | None:
+    if NearestNeighbors is None:
+        return None
+
+    X0 = X[y == 0]
+    X1 = X[y == 1]
+    if X0.shape[0] < 2 or X1.shape[0] < 2:
+        return None
+
+    knn0 = NearestNeighbors(n_neighbors=2)
+    knn0.fit(X0)
+    closest0, _ = knn0.kneighbors(X0, 2)
+    furthest1, _ = knn0.kneighbors(X1, 2)
+
+    knn1 = NearestNeighbors(n_neighbors=2)
+    knn1.fit(X1)
+    closest1, _ = knn1.kneighbors(X1, 2)
+    furthest0, _ = knn1.kneighbors(X0, 2)
+
+    n2_c0_raw = np.sum(closest0[:, -1]) / (np.sum(furthest0[:, 0]) + 1e-12)
+    n2_c1_raw = np.sum(closest1[:, -1]) / (np.sum(furthest1[:, 0]) + 1e-12)
+
+    n2_c0 = n2_c0_raw / (1.0 + n2_c0_raw)
+    n2_c1 = n2_c1_raw / (1.0 + n2_c1_raw)
+    return float((n2_c0 + n2_c1) / 2.0)
+
+
+def n4_error(X: np.ndarray, y: np.ndarray, random_seed: int = 42) -> float | None:
+    if NearestNeighbors is None:
+        return None
+
+    rng = np.random.RandomState(random_seed)
+    test_X = np.zeros_like(X, dtype=np.float32)
+    test_y = np.zeros((len(y),), dtype=np.int16)
+
+    for label in [0, 1]:
+        class_idx = np.where(y == label)[0]
+        if len(class_idx) < 2:
+            continue
+
+        n_syn = len(class_idx)
+        s1 = rng.choice(class_idx, n_syn, replace=False)
+        s2 = rng.choice(class_idx, n_syn, replace=False)
+        alphas = rng.rand(n_syn)
+        synthetic = alphas[:, None] * X[s1] + (1.0 - alphas[:, None]) * X[s2]
+
+        start = 0 if label == 0 else -n_syn
+        end = n_syn if label == 0 else None
+        test_X[start:end] = synthetic
+        test_y[start:end] = label
+
+    knn = NearestNeighbors(n_neighbors=1)
+    knn.fit(X)
+    _, idx = knn.kneighbors(test_X, 1)
+    nn = idx[:, 0]
+
+    errors = y[nn] != test_y
+    labels_c0 = test_y == 0
+    labels_c1 = test_y == 1
+    if np.sum(labels_c0) == 0 or np.sum(labels_c1) == 0:
+        return None
+
+    n4_c0 = np.sum(errors[labels_c0]) / np.sum(labels_c0)
+    n4_c1 = np.sum(errors[labels_c1]) / np.sum(labels_c1)
+    return float((n4_c0 + n4_c1) / 2.0)
+
+
+def _t1_class_loop(class_data: np.ndarray, sorted_indices: np.ndarray, radii: np.ndarray) -> float:
+    if pairwise_distances is None:
+        return float("nan")
+
+    is_remaining = np.ones((class_data.shape[0],), dtype=bool)
+    n_hyperspheres = 0
+    history: list[int] = []
+
+    for idx in sorted_indices:
+        if not np.any(is_remaining):
+            break
+        if not is_remaining[idx]:
+            continue
+
+        n_hyperspheres += 1
+        dist_row = pairwise_distances(class_data[idx, :].reshape(1, -1), class_data[is_remaining, :])
+        mask = dist_row > radii[idx]
+        is_remaining[is_remaining] = np.logical_and(mask.flatten(), is_remaining[is_remaining])
+        is_remaining[idx] = False
+
+        history.append(dist_row.shape[1])
+        history = history[-100:]
+        if len(history) == 100 and np.mean(np.abs(np.diff(np.array(history)))) < 1.5:
+            n_hyperspheres += int(np.sum(is_remaining))
+            break
+
+    return float(n_hyperspheres / class_data.shape[0])
+
+
+def t1_structural_overlap(X: np.ndarray, y: np.ndarray) -> float | None:
+    if NearestNeighbors is None or pairwise_distances is None or X.shape[0] < 3:
+        return None
+
+    X0 = X[y == 0]
+    X1 = X[y == 1]
+    if X0.shape[0] == 0 or X1.shape[0] == 0:
+        return None
+
+    knn1 = NearestNeighbors(n_neighbors=1)
+    knn1.fit(X1)
+    radii0, _ = knn1.kneighbors(X0, 1)
+    radii0 = radii0[:, 0]
+
+    knn0 = NearestNeighbors(n_neighbors=1)
+    knn0.fit(X0)
+    radii1, _ = knn0.kneighbors(X1, 1)
+    radii1 = radii1[:, 0]
+
+    idx0 = np.flip(np.argsort(radii0))
+    idx1 = np.flip(np.argsort(radii1))
+
+    t1_c0 = _t1_class_loop(X0, idx0, radii0)
+    t1_c1 = _t1_class_loop(X1, idx1, radii1)
+
+    if np.isnan(t1_c0) or np.isnan(t1_c1):
+        return None
+    return float((t1_c0 + t1_c1) / 2.0)
+
+
+def raug_components(
+    X: np.ndarray,
+    y: np.ndarray,
+    k: int = 5,
+    delta: int = 2,
+) -> tuple[float | None, float | None, float | None]:
+    if NearestNeighbors is None or len(X) < 2:
+        return None, None, None
+
+    labels_c0 = y == 0
+    labels_c1 = y == 1
+    if np.sum(labels_c0) == 0 or np.sum(labels_c1) == 0:
+        return None, None, None
+
+    def _raug_for_mask(mask: np.ndarray) -> float:
+        knn = NearestNeighbors(n_neighbors=min(k + 1, len(X)))
+        knn.fit(X)
+        _, idx = knn.kneighbors(X[mask, :], min(k + 1, len(X)))
+        if idx.shape[1] > 1:
+            idx = idx[:, 1:]
+        counts = np.sum(y[idx] != y[mask][0], axis=1)
+        return float(np.sum(counts > delta))
+
+    r_maj = _raug_for_mask(labels_c0)
+    r_min = _raug_for_mask(labels_c1)
+
+    n0 = float(np.sum(labels_c0))
+    n1 = float(np.sum(labels_c1))
+    ir = n0 / max(n1, 1.0)
+
+    r_maj_norm = float(r_maj / max(n0, 1.0))
+    r_min_norm = float(r_min / max(n1, 1.0))
+    raug_final = float((r_maj + ir * r_min) / (ir + 1.0))
+
+    return r_maj_norm, r_min_norm, raug_final
+
+
+def raug_overlap(X: np.ndarray, y: np.ndarray, k: int = 5, delta: int = 2, output_variant: str = "minority_normalized") -> float | None:
+    r_maj_norm, r_min_norm, raug_final = raug_components(X, y, k=k, delta=delta)
+    if r_maj_norm is None or r_min_norm is None or raug_final is None:
+        return None
+
+    if output_variant == "final_weighted_count":
+        return raug_final
+    if output_variant == "majority_normalized":
+        return r_maj_norm
+    # Domain_characterization JSON writer stores the minority-normalized component.
+    return r_min_norm
+
+
+def bayes_imbalance(X: np.ndarray, y: np.ndarray, k: int = 5, search_depth: int = 100) -> float | None:
+    if NearestNeighbors is None:
+        return None
+
+    if X.shape[0] < 3:
+        return None
+
+    search_depth = min(search_depth, X.shape[0] - 1)
+    if search_depth <= 1:
+        return None
+
+    minority_data = X[y == 1, :]
+    if minority_data.shape[0] == 0:
+        return None
+
+    knn = NearestNeighbors(n_neighbors=search_depth)
+    knn.fit(X)
+    _, closest = knn.kneighbors(minority_data, search_depth)
+    closest = closest[:, 1:]
+    if closest.shape[1] == 0:
+        return None
+
+    k_eff = min(k, closest.shape[1])
+    cumulative = np.cumsum(y[closest] == 1, axis=1)
+    m_values = cumulative[:, k_eff - 1].astype(float)
+
+    expansion_needed = m_values == k_eff
+    if np.any(expansion_needed) and cumulative.shape[1] > 1:
+        diffs = np.diff(cumulative[expansion_needed, :], axis=1)
+        m_values[expansion_needed] = np.argmin(diffs, axis=1)
+
+    m_values[np.logical_and(expansion_needed, m_values == 0)] = float(search_depth)
+
+    counts = np.zeros_like(m_values, dtype=float)
+    counts[expansion_needed] = m_values[expansion_needed] + 1.0 - float(k_eff)
+
+    denom = float(k_eff) + counts
+    fp_values = ((float(k_eff) + counts) - m_values) / (denom + 1e-12)
+
+    n0 = float(np.sum(y == 0))
+    n1 = float(np.sum(y == 1))
+    if n1 == 0:
+        return None
+
+    fp_balanced = (n0 / n1) * fp_values
+    fn_values = m_values / (denom + 1e-12)
+
+    ibi = (fp_balanced / (fp_balanced + fn_values + 1e-12)) - (fp_values / (fp_values + fn_values + 1e-12))
+    return float(np.mean(ibi))
+
+
 def compute_complexity_metrics(
     df: pd.DataFrame,
     target: str | None = None,
     max_samples: int | None = None,
     config: ComplexityConfig | None = None,
 ) -> dict[str, float | None]:
-    """Compute all supported complexity metrics for *df*.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Input data containing numeric features and a binary target.
-    target : str, optional
-        Target column name.  Falls back to ``config.default_target``.
-    max_samples : int, optional
-        Override the default sampling budget.  Falls back to ``config.max_samples``.
-    config : ComplexityConfig, optional
-        Explicit config object.  When *None*, built-in defaults are used
-        (equivalent to loading ``configs/profiling/complexity.yaml``).
-    """
+    """Compute all supported complexity metrics for *df*."""
     if config is None:
-        config = ComplexityConfig()  # built-in defaults
+        config = ComplexityConfig()
 
     target = target or config.default_target
-    max_samples = max_samples if max_samples is not None else config.max_samples
     seed = config.random_seed
-    lr_solver = config.lr_solver
-    lr_max_iter = config.lr_max_iter
-    raug_k = config.raug_k
-    t1_max = config.t1_max_samples
-    X, y = _select_numeric(df, target)
-    if X is None or y is None:
+    svc_max_iter = config.linear_svc_max_iter
+
+    X, y_raw = _select_numeric(df, target)
+    if X is None or y_raw is None:
         return {}
-    y = _ensure_binary(y)
+
+    y = _encode_binary_labels(y_raw)
     if y is None:
         return {}
+
+    metric_max_samples = max_samples if max_samples is not None else config.max_samples
+    X_main, y_main = _stable_subsample(X, y, max_samples=metric_max_samples, random_seed=seed)
+    X_t1, y_t1 = _stable_subsample(X, y, max_samples=config.t1_max_samples, random_seed=seed + 1)
+
     metrics = {
-        "F2": f2_overlap(X, y),
-        "F3": f3_overlap(X, y),
-        "F4": f4_overlap(X, y),
-        "N2": n2_ratio(X, y, max_samples=max_samples, random_seed=seed),
-        "N3": n3_error(X, y, max_samples=max_samples, random_seed=seed),
-        "N4": n4_error(X, y, max_samples=max_samples, random_seed=seed),
-        "Raug": raug_overlap(X, y, k=raug_k, max_samples=max_samples, random_seed=seed),
-        "L1": l1_linear_boundary_error(X, y, lr_solver=lr_solver, lr_max_iter=lr_max_iter),
-        "L2": l2_linear_error(X, y, lr_solver=lr_solver, lr_max_iter=lr_max_iter),
-        "L3": l3_linear_synth_error(X, y, max_samples=max_samples, random_seed=seed, lr_solver=lr_solver, lr_max_iter=lr_max_iter),
-        "T1": t1_structural_overlap(X, y, max_samples=t1_max, random_seed=seed),
-        "BayesImbalance": bayes_imbalance(y),
+        "F2": f2_overlap(X_main, y_main),
+        "F3": f3_overlap(X_main, y_main),
+        "F4": f4_overlap(X_main, y_main),
+        "N2": n2_ratio(X_main, y_main),
+        "N3": n3_error(X_main, y_main),
+        "N4": n4_error(X_main, y_main, random_seed=seed),
+        "Raug": raug_overlap(
+            X_main,
+            y_main,
+            k=config.raug_k,
+            delta=config.raug_delta,
+            output_variant=config.raug_output_variant,
+        ),
+        "L1": l1_linear_boundary_error(X_main, y_main, svc_max_iter=svc_max_iter),
+        "L2": l2_linear_error(X_main, y_main, svc_max_iter=svc_max_iter),
+        "L3": l3_linear_synth_error(X_main, y_main, random_seed=seed, svc_max_iter=svc_max_iter),
+        "T1": t1_structural_overlap(X_t1, y_t1),
+        "BayesImbalance": bayes_imbalance(X_main, y_main, k=config.bayes_k, search_depth=config.bayes_search_depth),
     }
-    output = _with_aliases(metrics)
-    return output
+
+    return _with_aliases(metrics)

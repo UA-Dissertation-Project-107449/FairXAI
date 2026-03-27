@@ -1,0 +1,134 @@
+name: Main Validation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - pyproject.toml
+      - requirements.txt
+      - src/**
+      - scripts/**
+      - configs/**
+      - .github/workflows/**
+  workflow_dispatch:
+
+concurrency:
+  group: main-validation
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate-and-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements.txt
+
+      - name: Upgrade pip
+        run: python3 -m pip install --upgrade pip
+
+      - name: Install experiment profile
+        run: python3 -m pip install -e ".[experiment]"
+
+      - name: Install CI tooling
+        run: python3 -m pip install black isort build
+
+      - name: Black format check
+        run: black --check src scripts
+
+      - name: isort check
+        run: isort --check-only src scripts
+
+      - name: Build wheel and sdist
+        run: python3 -m build
+
+      - name: Create synthetic smoke dataset
+        run: |
+          python3 - << 'PY'
+          import numpy as np
+          import pandas as pd
+
+          rng = np.random.default_rng(42)
+          n = 400
+          x1 = rng.normal(loc=0.0, scale=1.0, size=n)
+          x2 = rng.normal(loc=0.5, scale=1.2, size=n)
+          x3 = rng.uniform(low=-2.0, high=2.0, size=n)
+          logits = 0.8 * x1 - 0.5 * x2 + 0.2 * x3 + rng.normal(0, 0.4, n)
+          y = (logits > np.median(logits)).astype(int)
+
+          df = pd.DataFrame(
+              {
+                  "feature_a": x1,
+                  "feature_b": x2,
+                  "feature_c": x3,
+                  "heart_disease": y,
+              }
+          )
+          df.to_csv("ci_smoke_dataset.csv", index=False)
+          print("Wrote ci_smoke_dataset.csv")
+          PY
+
+      - name: Characterize smoke run
+        run: |
+          mkdir -p ci_smoke_out
+          fairxai-characterize \
+            --filename ci_smoke_dataset.csv \
+            --output-dir ci_smoke_out \
+            --target-column heart_disease \
+            --print-json > ci_smoke_stdout.json
+
+      - name: Validate JSON contract
+        run: |
+          python3 - << 'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          output_path = Path("ci_smoke_out/ci_smoke_dataset.json")
+          if not output_path.exists():
+              print("Missing characterization output JSON")
+              sys.exit(1)
+
+          data = json.loads(output_path.read_text(encoding="utf-8"))
+          metrics = data.get("metrics", {})
+
+          required = ["nSamples", "nFeatures", "nClasses", "ebmDifficulty"]
+          missing = [k for k in required if k not in metrics]
+          if missing:
+              print(f"Missing required metrics: {missing}")
+              sys.exit(1)
+
+          ebm = metrics.get("ebmDifficulty")
+          if not isinstance(ebm, (float, int)):
+              print("ebmDifficulty is not numeric")
+              sys.exit(1)
+
+          print("JSON contract OK")
+          PY
+
+      - name: Freeze dependency snapshot
+        run: python3 -m pip freeze > dependency_manifest.txt
+
+      - name: Upload CI artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fairxai-main-${{ github.sha }}
+          path: |
+            dist/*
+            dependency_manifest.txt
+            ci_smoke_dataset.csv
+            ci_smoke_out/*.json
+            ci_smoke_stdout.json

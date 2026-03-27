@@ -1,0 +1,59 @@
+name: PR Quick CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - pyproject.toml
+      - requirements.txt
+      - src/**
+      - scripts/**
+      - configs/**
+      - .github/workflows/**
+  workflow_dispatch:
+
+concurrency:
+  group: pr-quick-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quick-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements.txt
+
+      - name: Upgrade pip
+        run: python3 -m pip install --upgrade pip
+
+      - name: Install package (core)
+        run: python3 -m pip install -e .
+
+      - name: Install CI tooling
+        run: python3 -m pip install black isort build
+
+      - name: Black format check
+        run: black --check src scripts
+
+      - name: isort check
+        run: isort --check-only src scripts
+
+      - name: Build wheel and sdist
+        run: python3 -m build
+
+      - name: CLI help smoke check
+        run: python3 -m fairxai.cli.characterize --help
