@@ -31,16 +31,92 @@ training_methods:
   - single_split
   - kfold_cv
 
+# Model families to compare.
+# Note: mitigation techniques are currently executed only with logistic_regression.
+model_types:
+  - logistic_regression
+  - random_forest
+  - svm
+  - xgboost
+
+# Keep variants intentionally small for tractable runtime.
+# Each variant merges onto model_params_by_type[model_type].
+model_variants:
+  logistic_regression:
+    - name: c_1_0
+      params:
+        C: 1.0
+    - name: c_0_5
+      params:
+        C: 0.5
+
+  random_forest:
+    - name: rf_shallow
+      params:
+        n_estimators: 250
+        max_depth: 8
+    - name: rf_deeper
+      params:
+        n_estimators: 350
+        max_depth: 14
+
+  svm:
+    - name: svm_linear
+      params:
+        kernel: linear
+        C: 1.0
+    - name: svm_rbf
+      params:
+        kernel: rbf
+        C: 1.0
+        gamma: scale
+
+  xgboost:
+    - name: xgb_small
+      params:
+        n_estimators: 200
+        max_depth: 4
+        learning_rate: 0.05
+
 # Cross-validation settings
 cv_folds: 5
 random_seed: 42
 
-# Model parameters
-model_params:
-  C: 1.0
-  max_iter: 1000
-  class_weight: balanced
-  random_state: 42
+# Base model parameters by model type (kept intentionally compact)
+model_params_by_type:
+  logistic_regression:
+    C: 1.0
+    max_iter: 1000
+    class_weight: balanced
+    random_state: 42
+
+  random_forest:
+    n_estimators: 300
+    max_depth: null
+    min_samples_leaf: 1
+    class_weight: balanced_subsample
+    n_jobs: -1
+    random_state: 42
+
+  svm:
+    C: 1.0
+    kernel: rbf
+    gamma: scale
+    class_weight: balanced
+    probability: true
+    random_state: 42
+
+  xgboost:
+    n_estimators: 250
+    max_depth: 4
+    learning_rate: 0.05
+    subsample: 0.9
+    colsample_bytree: 0.9
+    reg_lambda: 1.0
+    n_jobs: -1
+    random_state: 42
+    eval_metric: logloss
+    tree_method: hist
 
 # Optional: override base estimator params for in-processing fairness methods
 # (e.g., set solver/penalty for fairlearn GridSearch/ExponentiatedGradient)
@@ -63,8 +139,15 @@ fairness_thresholds:
 # XAI settings
 xai:
   enabled: true
+  mode: top_configs          # all | top_configs | disabled
+  top_k: 3                   # interpreted per dataset when top_k_per_dataset=true
+  top_k_per_dataset: true
   max_samples: 200
+  top_max_samples: 120
   lime_instances: 2
+  skip_shap_model_types: [svm]
+  allow_svm_shap: false
+  allow_svm_shap_on_top_configs: true
 
 # Paths
 paths:

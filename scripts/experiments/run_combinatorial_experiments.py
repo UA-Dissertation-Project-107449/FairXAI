@@ -1,6 +1,7 @@
 """Combinatorial experiment orchestration for fairness mitigation analysis."""
 
 import argparse
+import copy
 import logging
 import sys
 import os
@@ -8,7 +9,7 @@ import json
 import yaml
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 import pandas as pd
 import numpy as np
 from joblib import Parallel, delayed
@@ -17,6 +18,7 @@ from joblib import Parallel, delayed
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 
 from fairxai.models.baseline import BaselineLogisticRegression
+from fairxai.models import get_model_class
 from fairxai.models.cv_trainer import CVTrainer
 from fairxai.fairness.metrics import FairnessMetrics
 from fairxai.fairness.mitigation import MitigationEngine
@@ -45,6 +47,145 @@ STAGE_MAP = {
     'threshold_optimizer': 'post-processing',
 }
 
+# Mitigation engine currently assumes logistic baseline for pre/in/post mitigation.
+MITIGATION_SUPPORTED_MODEL_TYPES = {'logistic_regression'}
+
+# Cache repeated dataset/binning CSV loads across experiment combinations.
+_PROCESSED_DATA_CACHE: Dict[tuple, Dict[str, pd.DataFrame]] = {}
+
+SCORE_WEIGHTS = {
+    'f1': 0.40,
+    'recall': 0.30,
+    'accuracy': 0.20,
+    'auc': 0.10,
+}
+
+
+def _coerce_probability_vector(values: Any) -> np.ndarray:
+    """Convert probability outputs into a single positive-class score vector."""
+    arr = np.asarray(values)
+    if arr.ndim == 0:
+        return np.asarray([float(arr)])
+    if arr.ndim == 1:
+        return arr.reshape(-1)
+    if arr.ndim == 2:
+        if arr.shape[1] == 0:
+            return np.zeros(arr.shape[0], dtype=float)
+        if arr.shape[1] == 1:
+            return arr[:, 0]
+        return arr[:, 1]
+    return arr.reshape(arr.shape[0], -1)[:, 0]
+
+
+def _coerce_label_vector(values: Any) -> np.ndarray:
+    """Convert prediction outputs into a 1D label vector."""
+    arr = np.asarray(values)
+    if arr.ndim <= 1:
+        return arr.reshape(-1)
+    return np.argmax(arr, axis=1)
+
+
+def _is_shap_enabled_for_model(model_type: str, xai_cfg: Optional[Dict[str, Any]]) -> bool:
+    cfg = xai_cfg or {}
+    skip_models = {
+        str(m).strip().lower()
+        for m in cfg.get('skip_shap_model_types', ['svm'])
+    }
+    return (model_type or '').strip().lower() not in skip_models
+
+
+def _resolve_xai_mode(xai_cfg: Optional[Dict[str, Any]]) -> str:
+    cfg = xai_cfg or {}
+    mode = str(cfg.get('mode', 'all')).strip().lower()
+    if mode not in {'all', 'top_configs', 'disabled'}:
+        return 'all'
+    return mode
+
+
+def _is_xai_enabled_for_phase(xai_cfg: Optional[Dict[str, Any]]) -> bool:
+    cfg = xai_cfg or {}
+    if not cfg.get('enabled', True):
+        return False
+    return _resolve_xai_mode(cfg) == 'all'
+
+
+def _result_score(result: Dict[str, Any]) -> Optional[float]:
+    """Compute composite score compatible with comparison phase ranking."""
+    if result.get('execution', {}).get('status') != 'success':
+        return None
+
+    if result.get('training_method') == 'kfold_cv':
+        cv = result.get('cv_results', {})
+        f1 = cv.get('f1_score', {}).get('mean')
+        recall = cv.get('recall', {}).get('mean')
+        accuracy = cv.get('accuracy', {}).get('mean')
+        auc = cv.get('auc_roc', {}).get('mean')
+    else:
+        tm = result.get('test_metrics', {})
+        f1 = tm.get('f1_score')
+        recall = tm.get('recall')
+        accuracy = tm.get('accuracy')
+        auc = tm.get('auc_roc')
+
+    values = [f1, recall, accuracy, auc]
+    if any(v is None for v in values):
+        return None
+
+    return (
+        SCORE_WEIGHTS['f1'] * float(f1)
+        + SCORE_WEIGHTS['recall'] * float(recall)
+        + SCORE_WEIGHTS['accuracy'] * float(accuracy)
+        + SCORE_WEIGHTS['auc'] * float(auc)
+    )
+
+
+def _select_top_experiments_for_xai(
+    results: List[Dict[str, Any]],
+    top_k: int,
+    per_dataset: bool,
+) -> List[Tuple[Dict[str, Any], float]]:
+    scored: List[Tuple[Dict[str, Any], float]] = []
+    for result in results:
+        score = _result_score(result)
+        if score is not None:
+            scored.append((result, score))
+
+    if not scored:
+        return []
+
+    if not per_dataset:
+        return sorted(scored, key=lambda item: item[1], reverse=True)[:top_k]
+
+    selected: List[Tuple[Dict[str, Any], float]] = []
+    datasets = sorted({item[0].get('configuration', {}).get('dataset', '') for item in scored})
+    for dataset in datasets:
+        dataset_scored = [
+            item for item in scored
+            if item[0].get('configuration', {}).get('dataset') == dataset
+        ]
+        dataset_scored.sort(key=lambda item: item[1], reverse=True)
+        selected.extend(dataset_scored[:top_k])
+
+    return selected
+
+
+def _resolve_model_variants(config: Dict[str, Any], model_type: str) -> List[Dict[str, Any]]:
+    """Resolve small model variants from config with backward compatibility."""
+    base_by_type = config.get('model_params_by_type', {})
+    base_params = dict(base_by_type.get(model_type, config.get('model_params', {})))
+
+    variants = config.get('model_variants', {}).get(model_type, [])
+    if not variants:
+        return [{'name': 'default', 'params': base_params}]
+
+    resolved = []
+    for variant in variants:
+        variant_name = str(variant.get('name', 'variant')).strip() or 'variant'
+        merged_params = dict(base_params)
+        merged_params.update(variant.get('params', {}))
+        resolved.append({'name': variant_name, 'params': merged_params})
+    return resolved
+
 
 def load_processed_data(
     dataset_name: str,
@@ -62,6 +203,14 @@ def load_processed_data(
     Returns:
         Dictionary with train/test data
     """
+    cache_key = (str(processed_dir.resolve()), dataset_name, binning_strategy)
+    if cache_key in _PROCESSED_DATA_CACHE:
+        cached = _PROCESSED_DATA_CACHE[cache_key]
+        return {
+            'train_df': cached['train_df'].copy(),
+            'test_df': cached['test_df'].copy(),
+        }
+
     data_dir = processed_dir / f"{dataset_name}_{binning_strategy}"
     
     if not data_dir.exists():
@@ -74,9 +223,14 @@ def load_processed_data(
     train_df = pd.read_csv(data_dir / f"{dataset_name}_train_scaled.csv")
     test_df = pd.read_csv(data_dir / f"{dataset_name}_test_scaled.csv")
     
-    return {
+    payload = {
         'train_df': train_df,
         'test_df': test_df
+    }
+    _PROCESSED_DATA_CACHE[cache_key] = payload
+    return {
+        'train_df': payload['train_df'].copy(),
+        'test_df': payload['test_df'].copy(),
     }
 
 
@@ -171,6 +325,7 @@ def save_experiment_xai(
     X_lime: pd.DataFrame,
     versioning: ExperimentVersioning,
     dataset_name: str,
+    model_type: str,
     base_model: Optional[Any] = None,
     xai_cfg: Optional[Dict[str, Any]] = None
 ) -> None:
@@ -186,6 +341,8 @@ def save_experiment_xai(
     lime_dir.mkdir(parents=True, exist_ok=True)
     max_samples = int(xai_cfg.get('max_samples', 200))
     lime_instances = int(xai_cfg.get('lime_instances', 2))
+    allow_svm_shap = bool(xai_cfg.get('allow_svm_shap', False))
+    shap_enabled = _is_shap_enabled_for_model(model_type, xai_cfg)
 
     def _mean_abs_shap_values(shap_values: Any) -> np.ndarray:
         def _reduce(arr: np.ndarray) -> np.ndarray:
@@ -249,30 +406,45 @@ def save_experiment_xai(
             return _wrap_decision_function(raw_model.model)
         return None
 
-    try:
-        xai_model = base_model if base_model is not None else model
-        shap_model = _resolve_shap_model(xai_model)
-        # Global SHAP (train reference)
-        shap_global = shap_explain_tabular(shap_model, X_ref, max_samples=max_samples)
-        mean_abs_global = _mean_abs_shap_values(shap_global.shap_values)
-        shap_global_df = pd.DataFrame({
-            'feature': shap_global.feature_names,
-            'mean_abs_shap': mean_abs_global
-        }).sort_values('mean_abs_shap', ascending=False)
-        shap_global_file = shap_dir / f"{exp_id}_global.csv"
-        shap_global_df.to_csv(shap_global_file, index=False)
+    xai_model = base_model if base_model is not None else model
+    if shap_enabled:
+        try:
+            shap_model = _resolve_shap_model(xai_model)
+            # Global SHAP (train reference)
+            shap_global = shap_explain_tabular(
+                shap_model,
+                X_ref,
+                max_samples=max_samples,
+                allow_svm=allow_svm_shap,
+            )
+            mean_abs_global = _mean_abs_shap_values(shap_global.shap_values)
+            shap_global_df = pd.DataFrame({
+                'feature': shap_global.feature_names,
+                'mean_abs_shap': mean_abs_global
+            }).sort_values('mean_abs_shap', ascending=False)
+            shap_global_file = shap_dir / f"{exp_id}_global.csv"
+            shap_global_df.to_csv(shap_global_file, index=False)
 
-        # Local SHAP (test/reference for local context)
-        shap_local = shap_explain_tabular(shap_model, X_lime, max_samples=max_samples)
-        mean_abs_local = _mean_abs_shap_values(shap_local.shap_values)
-        shap_local_df = pd.DataFrame({
-            'feature': shap_local.feature_names,
-            'mean_abs_shap': mean_abs_local
-        }).sort_values('mean_abs_shap', ascending=False)
-        shap_local_file = shap_dir / f"{exp_id}_local.csv"
-        shap_local_df.to_csv(shap_local_file, index=False)
-    except Exception as exc:
-        logging.getLogger(__name__).warning(f"SHAP failed for {exp_id}: {exc}")
+            # Local SHAP (test/reference for local context)
+            shap_local = shap_explain_tabular(
+                shap_model,
+                X_lime,
+                max_samples=max_samples,
+                allow_svm=allow_svm_shap,
+            )
+            mean_abs_local = _mean_abs_shap_values(shap_local.shap_values)
+            shap_local_df = pd.DataFrame({
+                'feature': shap_local.feature_names,
+                'mean_abs_shap': mean_abs_local
+            }).sort_values('mean_abs_shap', ascending=False)
+            shap_local_file = shap_dir / f"{exp_id}_local.csv"
+            shap_local_df.to_csv(shap_local_file, index=False)
+        except Exception as exc:
+            logging.getLogger(__name__).warning(f"SHAP failed for {exp_id}: {exc}")
+    else:
+        logging.getLogger(__name__).info(
+            f"SHAP skipped for exp_id={exp_id} model_type={model_type}"
+        )
 
     # LIME examples (requires predict_proba)
     try:
@@ -431,6 +603,7 @@ def run_single_experiment(
         logger.info(f"Dataset: {config['dataset']}")
         logger.info(f"Binning: {config['binning_strategy']}")
         logger.info(f"Mitigation: {config['mitigation_technique']}")
+        logger.info(f"Model: {config.get('model_type', 'logistic_regression')} [{config.get('model_variant', 'default')}]")
         logger.info(f"Training: {config['training_method']}")
         
         # Load data
@@ -506,6 +679,8 @@ def run_single_split_experiment(
     Run experiment with single train/test split.
     """
     logger.info("\nTraining with single train/test split...")
+    xai_cfg = config.get('xai', {})
+    xai_enabled = _is_xai_enabled_for_phase(xai_cfg)
     
     # Initialize mitigation engine
     engine = MitigationEngine()
@@ -526,13 +701,15 @@ def run_single_split_experiment(
 
     if mitigation == 'baseline':
         # Train baseline model
-        model = BaselineLogisticRegression(**config.get('model_params', {}))
+        model_type = config.get('model_type', 'logistic_regression')
+        model_class = get_model_class(model_type)
+        model = model_class(**config.get('model_params', {}))
         train_metrics = model.train(splits['X_train'], splits['y_train'])
         test_metrics = model.evaluate(splits['X_test'], splits['y_test'])
         
         # Get predictions
-        y_pred = model.predict(splits['X_test'])
-        y_proba = model.predict_proba(splits['X_test'])
+        y_pred = _coerce_label_vector(model.predict(splits['X_test']))
+        y_proba = _coerce_probability_vector(model.predict_proba(splits['X_test']))
         
         result = {
             'test_metrics': test_metrics,
@@ -563,10 +740,12 @@ def run_single_split_experiment(
         )
     
     # Calculate fairness metrics
+    y_pred_series = _coerce_label_vector(result['predictions']['y_pred'])
+    y_proba_series = _coerce_probability_vector(result['predictions']['y_proba'])
     predictions_df = pd.DataFrame({
         'y_true': splits['y_test'].values,
-        'y_pred': result['predictions']['y_pred'],
-        'y_proba': result['predictions']['y_proba'],
+        'y_pred': y_pred_series,
+        'y_proba': y_proba_series,
     })
 
     for col in splits['sensitive_cols']:
@@ -593,7 +772,7 @@ def run_single_split_experiment(
         model_for_xai = model
     if stage == 'post-processing' and base_model is not None:
         model_for_xai = base_model
-    if model_for_xai is not None:
+    if model_for_xai is not None and xai_enabled:
         save_experiment_xai(
             exp_id,
             model_for_xai,
@@ -601,8 +780,9 @@ def run_single_split_experiment(
             splits['X_test'],
             versioning,
             config['dataset'],
+            model_type=config.get('model_type', 'logistic_regression'),
             base_model=base_model,
-            xai_cfg=config.get('xai')
+            xai_cfg=xai_cfg,
         )
     
     logger.info(f"  Accuracy: {result['test_metrics']['accuracy']:.3f}")
@@ -659,7 +839,10 @@ def run_cv_experiment(
 
     # XAI setup for CV
     xai_cfg = config.get('xai', {})
-    xai_enabled = xai_cfg.get('enabled', True)
+    xai_enabled = _is_xai_enabled_for_phase(xai_cfg)
+    model_type = config.get('model_type', 'logistic_regression')
+    shap_enabled = _is_shap_enabled_for_model(model_type, xai_cfg)
+    allow_svm_shap = bool(xai_cfg.get('allow_svm_shap', False))
     tracked_indices = None
     feature_names = list(X_full.columns)
     shap_max_samples = int(xai_cfg.get('max_samples', 200))
@@ -671,21 +854,25 @@ def run_cv_experiment(
         ).tolist()
 
     if mitigation == 'baseline':
+        model_type = config.get('model_type', 'logistic_regression')
+        model_class = get_model_class(model_type)
         # Run CV experiment (baseline only)
         cv_results = cv_trainer.run_cv_experiment(
-            model_class=BaselineLogisticRegression,
+            model_class=model_class,
             X=X_full,
             y=y_full,
             sensitive_attrs=sensitive_full,
             model_params=config.get('model_params', {}),
             xai_enabled=xai_enabled,
+            shap_enabled=shap_enabled,
+            allow_svm_shap=allow_svm_shap,
             tracked_indices=tracked_indices,
             feature_names=feature_names,
             shap_max_samples=shap_max_samples,
         )
 
         # Get fold predictions for fairness calculation
-        model = BaselineLogisticRegression(**config.get('model_params', {}))
+        model = model_class(**config.get('model_params', {}))
         fold_predictions = cv_trainer.get_fold_predictions(model, X_full, y_full, sensitive_full)
     else:
         if stage is None:
@@ -760,6 +947,8 @@ def run_cv_experiment(
                             val_indices=val_idx,
                             fold_idx=fold_idx,
                             max_samples=shap_max_samples,
+                            shap_enabled=shap_enabled,
+                            allow_svm_shap=allow_svm_shap,
                         )
                         fold_result_entry['xai'] = fold_xai
                     except Exception as exc:
@@ -769,10 +958,12 @@ def run_cv_experiment(
 
             fold_results.append(fold_result_entry)
 
-            y_pred = result['predictions']['y_pred']
-            y_proba = result['predictions']['y_proba']
-            if y_proba is None:
-                y_proba = y_pred
+            y_pred = _coerce_label_vector(result['predictions']['y_pred'])
+            y_proba_raw = result['predictions']['y_proba']
+            if y_proba_raw is None:
+                y_proba = y_pred.astype(float)
+            else:
+                y_proba = _coerce_probability_vector(y_proba_raw)
 
             fold_preds = pd.DataFrame({
                 'fold': fold_idx,
@@ -878,6 +1069,10 @@ def run_combinatorial_analysis(
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
 
+    xai_cfg_global = config.get('xai', {})
+    xai_mode = _resolve_xai_mode(xai_cfg_global)
+    logger.info(f"XAI execution mode: {xai_mode}")
+
     if n_jobs is None:
         n_jobs = int(config.get('n_jobs', 1))
     
@@ -916,31 +1111,43 @@ def run_combinatorial_analysis(
     # Generate all experiment combinations
     experiments = []
     fairness_base_params_cfg = config.get('fairness_base_model_params')
+    model_types = [str(m).strip().lower() for m in config.get('model_types', ['logistic_regression'])]
     for dataset in config['datasets']:
         if isinstance(fairness_base_params_cfg, dict) and dataset in fairness_base_params_cfg:
             fairness_base_params = fairness_base_params_cfg.get(dataset)
         else:
             fairness_base_params = fairness_base_params_cfg
         if not fairness_base_params:
-            fairness_base_params = config.get('model_params', {})
+            fairness_base_params = config.get('model_params_by_type', {}).get(
+                'logistic_regression',
+                config.get('model_params', {})
+            )
         for binning in config['binning_strategies']:
             for mitigation in config['mitigation_techniques']:
                 for training_method in config['training_methods']:
-                    exp_id = versioning.generate_experiment_id()
-                    exp_config = {
-                        'dataset': dataset,
-                        'binning_strategy': binning,
-                        'mitigation_technique': mitigation,
-                        'training_method': training_method,
-                        'cv_folds': config.get('cv_folds', 5),
-                        'random_seed': config.get('random_seed', 42),
-                        'model_params': config.get('model_params', {}),
-                        'fairness_base_model_params': fairness_base_params or None,
-                        'sensitive_attributes': sensitive_attrs,
-                        'xai': config.get('xai', {}),
-                    }
-                    
-                    experiments.append((exp_id, exp_config))
+                    for model_type in model_types:
+                        # Keep mitigation stable: currently only logistic is supported there.
+                        if mitigation != 'baseline' and model_type not in MITIGATION_SUPPORTED_MODEL_TYPES:
+                            continue
+
+                        for variant in _resolve_model_variants(config, model_type):
+                            exp_id = versioning.generate_experiment_id()
+                            exp_config = {
+                                'dataset': dataset,
+                                'binning_strategy': binning,
+                                'mitigation_technique': mitigation,
+                                'training_method': training_method,
+                                'cv_folds': config.get('cv_folds', 5),
+                                'random_seed': config.get('random_seed', 42),
+                                'model_type': model_type,
+                                'model_variant': variant['name'],
+                                'model_params': variant['params'],
+                                'fairness_base_model_params': fairness_base_params or None,
+                                'sensitive_attributes': sensitive_attrs,
+                                'xai': config.get('xai', {}),
+                            }
+
+                            experiments.append((exp_id, exp_config))
     
     total_experiments = len(experiments)
     logger.info(f"\nTotal experiments to run: {total_experiments}")
@@ -948,6 +1155,7 @@ def run_combinatorial_analysis(
     logger.info(f"  Binning strategies: {len(config['binning_strategies'])}")
     logger.info(f"  Mitigation techniques: {len(config['mitigation_techniques'])}")
     logger.info(f"  Training methods: {len(config['training_methods'])}")
+    logger.info(f"  Model types: {len(model_types)} -> {model_types}")
     logger.info(f"  Parallel jobs: {n_jobs}")
     
     # Save manifests first
@@ -986,6 +1194,59 @@ def run_combinatorial_analysis(
         for result in results:
             _sm = 'holdout' if result.get('training_method') == 'single_split' else 'cv'
             versioning.save_results(result['experiment_id'], result, split_method=_sm)
+
+    # Deferred XAI pass: run only for top-ranked configurations.
+    if xai_cfg_global.get('enabled', True) and xai_mode == 'top_configs':
+        top_k = int(xai_cfg_global.get('top_k', 5))
+        per_dataset = bool(xai_cfg_global.get('top_k_per_dataset', True))
+        selected = _select_top_experiments_for_xai(results, top_k=top_k, per_dataset=per_dataset)
+
+        logger.info("\nStarting deferred XAI replay for top configurations...")
+        logger.info(f"  Selected configs: {len(selected)}")
+
+        if selected:
+            replay_xai_cfg = copy.deepcopy(xai_cfg_global)
+            replay_xai_cfg['enabled'] = True
+            replay_xai_cfg['mode'] = 'all'
+
+            if 'top_max_samples' in replay_xai_cfg:
+                replay_xai_cfg['max_samples'] = int(replay_xai_cfg['top_max_samples'])
+
+            if replay_xai_cfg.get('allow_svm_shap_on_top_configs', True):
+                replay_xai_cfg['allow_svm_shap'] = True
+                skip_models = [
+                    str(m).strip().lower()
+                    for m in replay_xai_cfg.get('skip_shap_model_types', [])
+                ]
+                replay_xai_cfg['skip_shap_model_types'] = [m for m in skip_models if m != 'svm']
+
+            for rank, (result_item, score_value) in enumerate(selected, start=1):
+                exp_id = result_item.get('experiment_id')
+                exp_cfg = copy.deepcopy(result_item.get('configuration', {}))
+                if not exp_id or not exp_cfg:
+                    continue
+
+                exp_cfg['xai'] = copy.deepcopy(replay_xai_cfg)
+                logger.info(
+                    f"  [XAI {rank}/{len(selected)}] exp_id={exp_id} score={score_value:.4f} "
+                    f"dataset={exp_cfg.get('dataset')} model={exp_cfg.get('model_type')}"
+                )
+
+                replay_result = run_single_experiment(
+                    exp_id,
+                    exp_cfg,
+                    versioning,
+                    processed_dir,
+                    schema_cfg,
+                    logger,
+                    target_col,
+                )
+
+                if replay_result.get('execution', {}).get('status') != 'success':
+                    logger.warning(
+                        f"  Deferred XAI replay failed for exp_id={exp_id}: "
+                        f"{replay_result.get('execution', {}).get('error')}"
+                    )
     
     # Create summary
     logger.info("\n" + "="*80)

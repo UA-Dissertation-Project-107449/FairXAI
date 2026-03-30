@@ -70,6 +70,8 @@ def load_all_results(versioning: ExperimentVersioning) -> pd.DataFrame:
                 'binning_strategy': config['binning_strategy'],
                 'mitigation_technique': config['mitigation_technique'],
                 'training_method': config['training_method'],
+                'model_type': config.get('model_type', 'logistic_regression'),
+                'model_variant': config.get('model_variant', 'default'),
                 'status': results['execution']['status'],
                 'error': results['execution'].get('error')
             }
@@ -289,9 +291,18 @@ def filter_best_configurations(
     
     best_configs = []
     
-    for dataset in df['dataset'].unique():
-        dataset_df = df[df['dataset'] == dataset].copy()
-        baseline_row = baseline_df[baseline_df['dataset'] == dataset]
+    key_pairs = (
+        df[['dataset', 'model_type']]
+        .drop_duplicates()
+        .itertuples(index=False, name=None)
+    )
+
+    for dataset, model_type in key_pairs:
+        dataset_df = df[(df['dataset'] == dataset) & (df['model_type'] == model_type)].copy()
+        baseline_row = baseline_df[
+            (baseline_df['dataset'] == dataset)
+            & (baseline_df['model_type'] == model_type)
+        ]
         
         if baseline_row.empty:
             logging.warning(f"No baseline for {dataset}, skipping")
@@ -322,6 +333,8 @@ def filter_best_configurations(
                 # Add to best configs
                 best_configs.append({
                     'dataset': dataset,
+                    'model_type': model_type,
+                    'model_variant': row.get('model_variant', 'default'),
                     'binning': row['binning_strategy'],
                     'mitigation': row['mitigation_technique'],
                     'training_method': row['training_method'],
