@@ -26,6 +26,31 @@ class CVTrainer:
         self.n_folds = n_folds
         self.random_state = random_state
         self.logger = logging.getLogger(__name__)
+        self._last_effective_folds = n_folds
+
+    @staticmethod
+    def _coerce_probability_vector(values: Any) -> np.ndarray:
+        """Convert probability outputs into a single positive-class score vector."""
+        arr = np.asarray(values)
+        if arr.ndim == 0:
+            return np.asarray([float(arr)])
+        if arr.ndim == 1:
+            return arr.reshape(-1)
+        if arr.ndim == 2:
+            if arr.shape[1] == 0:
+                return np.zeros(arr.shape[0], dtype=float)
+            if arr.shape[1] == 1:
+                return arr[:, 0]
+            return arr[:, 1]
+        return arr.reshape(arr.shape[0], -1)[:, 0]
+
+    @staticmethod
+    def _coerce_label_vector(values: Any) -> np.ndarray:
+        """Convert prediction outputs into a 1D label vector."""
+        arr = np.asarray(values)
+        if arr.ndim <= 1:
+            return arr.reshape(-1)
+        return np.argmax(arr, axis=1)
     
     def create_stratified_folds(
         self,
@@ -58,17 +83,44 @@ class CVTrainer:
 
         # Fallback to target-only strat if no sensitive columns are present
         strat_key = strat_df.astype(str).agg('_'.join, axis=1)
+
+        min_group_size = int(strat_key.value_counts().min())
+        if min_group_size < 2:
+            # Intersectional strata can become too sparse on fine-grained bins;
+            # fall back to target-only stratification for CV feasibility.
+            self.logger.warning(
+                "Combined sensitive stratification too sparse (min_group_size=%s). "
+                "Falling back to target-only stratification.",
+                min_group_size,
+            )
+            strat_key = y.astype(str)
+            min_group_size = int(strat_key.value_counts().min())
+        effective_folds = min(self.n_folds, min_group_size)
+        if effective_folds < 2:
+            raise ValueError(
+                "Not enough samples per stratification group for CV: "
+                f"min_group_size={min_group_size}, requested_folds={self.n_folds}."
+            )
+        if effective_folds != self.n_folds:
+            self.logger.warning(
+                "Reducing CV folds from %s to %s due to small stratified groups "
+                "(min_group_size=%s).",
+                self.n_folds,
+                effective_folds,
+                min_group_size,
+            )
+        self._last_effective_folds = effective_folds
         
         # Create folds
         skf = StratifiedKFold(
-            n_splits=self.n_folds,
+            n_splits=effective_folds,
             shuffle=True,
             random_state=self.random_state
         )
         
         folds = list(skf.split(X, strat_key))
         
-        self.logger.info(f"Created {self.n_folds} stratified folds")
+        self.logger.info(f"Created {effective_folds} stratified folds")
         self.logger.info(f"  Total samples: {len(X)}")
         for i, (train_idx, val_idx) in enumerate(folds):
             self.logger.info(f"  Fold {i}: train={len(train_idx)}, val={len(val_idx)}")
@@ -115,6 +167,8 @@ class CVTrainer:
         sensitive_attrs: pd.DataFrame,
         model_params: Optional[Dict] = None,
         xai_enabled: bool = False,
+        shap_enabled: bool = True,
+        allow_svm_shap: bool = False,
         tracked_indices: Optional[List[int]] = None,
         feature_names: Optional[List[str]] = None,
         shap_max_samples: int = 1000,
@@ -129,6 +183,8 @@ class CVTrainer:
             sensitive_attrs: Sensitive attributes for stratification
             model_params: Parameters to pass to model constructor
             xai_enabled: If True, run SHAP/LIME per fold and store results.
+            shap_enabled: If False, only LIME is computed in XAI stage.
+            allow_svm_shap: If True, allows SHAP calls for SVM models.
             tracked_indices: Row indices (into *X*) for LIME stability tracking.
                 Each tracked instance is LIME-explained in the fold where it
                 lands in the validation set.
@@ -185,6 +241,8 @@ class CVTrainer:
                     val_indices=val_idx,
                     fold_idx=fold_idx,
                     max_samples=shap_max_samples,
+                    shap_enabled=shap_enabled,
+                    allow_svm_shap=allow_svm_shap,
                 )
             
             fold_results.append(fold_result)
@@ -201,7 +259,7 @@ class CVTrainer:
         return {
             'fold_results': fold_results,
             'aggregated_metrics': aggregated,
-            'n_folds': self.n_folds,
+            'n_folds': self._last_effective_folds,
             'random_state': self.random_state
         }
     
@@ -255,6 +313,8 @@ class CVTrainer:
         val_indices: np.ndarray,
         fold_idx: int,
         max_samples: int = 1000,
+        shap_enabled: bool = True,
+        allow_svm_shap: bool = False,
     ) -> Dict:
         """Run SHAP (on train) and LIME (on tracked val instances) for one fold.
 
@@ -288,35 +348,40 @@ class CVTrainer:
 
         inner_model = getattr(model, 'model', model)
 
-        # --- SHAP on training data (global) ---
-        try:
-            shap_exp = shap_explain_tabular(
-                inner_model, X_train,
-                feature_names=feature_names,
-                max_samples=max_samples,
-            )
-            xai_result['shap_values'] = shap_exp.shap_values
-            self.logger.info(
-                f"  Fold {fold_idx}: SHAP global computed "
-                f"({shap_exp.shap_values.shape[0]} samples)"
-            )
-        except Exception as exc:
-            self.logger.warning(f"  Fold {fold_idx}: SHAP global failed — {exc}")
+        if shap_enabled:
+            # --- SHAP on training data (global) ---
+            try:
+                shap_exp = shap_explain_tabular(
+                    inner_model, X_train,
+                    feature_names=feature_names,
+                    max_samples=max_samples,
+                    allow_svm=allow_svm_shap,
+                )
+                xai_result['shap_values'] = shap_exp.shap_values
+                self.logger.info(
+                    f"  Fold {fold_idx}: SHAP global computed "
+                    f"({shap_exp.shap_values.shape[0]} samples)"
+                )
+            except Exception as exc:
+                self.logger.warning(f"  Fold {fold_idx}: SHAP global failed — {exc}")
 
-        # --- SHAP on validation data (local) ---
-        try:
-            shap_local = shap_explain_tabular(
-                inner_model, X_val,
-                feature_names=feature_names,
-                max_samples=max_samples,
-            )
-            xai_result['shap_values_local'] = shap_local.shap_values
-            self.logger.info(
-                f"  Fold {fold_idx}: SHAP local computed "
-                f"({shap_local.shap_values.shape[0]} samples)"
-            )
-        except Exception as exc:
-            self.logger.warning(f"  Fold {fold_idx}: SHAP local failed — {exc}")
+            # --- SHAP on validation data (local) ---
+            try:
+                shap_local = shap_explain_tabular(
+                    inner_model, X_val,
+                    feature_names=feature_names,
+                    max_samples=max_samples,
+                    allow_svm=allow_svm_shap,
+                )
+                xai_result['shap_values_local'] = shap_local.shap_values
+                self.logger.info(
+                    f"  Fold {fold_idx}: SHAP local computed "
+                    f"({shap_local.shap_values.shape[0]} samples)"
+                )
+            except Exception as exc:
+                self.logger.warning(f"  Fold {fold_idx}: SHAP local failed — {exc}")
+        else:
+            self.logger.info(f"  Fold {fold_idx}: SHAP skipped by configuration")
 
         # --- LIME on tracked instances that landed in this val set ---
         if tracked_indices is not None:
@@ -475,8 +540,8 @@ class CVTrainer:
             model.train(X_train, y_train)
             
             # Predict on validation set
-            y_pred = model.predict(X_val)
-            y_proba = model.predict_proba(X_val)
+            y_pred = self._coerce_label_vector(model.predict(X_val))
+            y_proba = self._coerce_probability_vector(model.predict_proba(X_val))
             
             # Create predictions dataframe
             fold_preds = pd.DataFrame({
