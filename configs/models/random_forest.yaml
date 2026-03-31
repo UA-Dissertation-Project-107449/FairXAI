@@ -1,0 +1,43 @@
+# Random Forest Model Configuration
+
+model_name: "random_forest"
+model_type: "sklearn.ensemble.RandomForestClassifier"
+
+description: |
+  Ensemble of decision trees using bagging.
+  Handles non-linear relationships and interactions without feature scaling.
+  Provides feature importance via mean decrease in impurity (Gini).
+
+hyperparameters:
+  # Ensemble size and depth
+  n_estimators: 300
+  max_depth: null      # grow full trees; controlled by min_samples_leaf
+
+  # Leaf size (implicit regularization — avoids very small leaves)
+  min_samples_leaf: 1
+
+  # Class imbalance
+  class_weight: "balanced_subsample"  # re-weights per bootstrap sample
+
+  # Parallelism / reproducibility
+  n_jobs: -1
+  random_state: 42
+
+training:
+  validation_strategy: "cross_validation"
+  cv_folds: 5
+
+features:
+  selection: "all"
+  scaling: "none"  # trees are scale-invariant
+
+explainability:
+  native_interpretability: false   # black-box; use SHAP for explanations
+  feature_importance: true         # gini-based; use with care (biased toward high-cardinality)
+  supports_shap: true              # TreeExplainer (fast)
+  supports_lime: true
+
+fairness:
+  supports_sample_weights: true
+  supports_class_weights: true    # via class_weight parameter
+  supports_fairness_constraints: false

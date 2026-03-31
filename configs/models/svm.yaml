@@ -1,0 +1,46 @@
+# Support Vector Machine Model Configuration
+
+model_name: "svm"
+model_type: "sklearn.svm.SVC"
+
+description: |
+  Support Vector Classifier with configurable kernel.
+  Default kernel is RBF; combinatorial sweep overrides to linear (svm_linear variant)
+  because RBF is O(n^2) in training and OOMs on cardio70k at full scale.
+  Requires feature scaling (standard scaler).
+
+hyperparameters:
+  # Regularization
+  C: 1.0
+
+  # Kernel — overridden to "linear" by the svm_linear variant in combinatorial.yaml.
+  # RBF is kept here as the base default but is excluded from cardio70k runs.
+  kernel: "rbf"
+  gamma: "scale"
+
+  # Class imbalance
+  class_weight: "balanced"
+
+  # Required for probability estimates (used in threshold optimization and SHAP)
+  probability: true
+
+  # Reproducibility
+  random_state: 42
+
+training:
+  validation_strategy: "cross_validation"
+  cv_folds: 5
+
+features:
+  selection: "all"
+  scaling: "standard"  # mandatory — SVM is not scale-invariant
+
+explainability:
+  native_interpretability: false
+  supports_shap: false   # KernelExplainer is O(n^2); skipped by default (allow_svm_shap: false)
+  supports_lime: true
+
+fairness:
+  supports_sample_weights: true
+  supports_class_weights: true
+  supports_fairness_constraints: false
