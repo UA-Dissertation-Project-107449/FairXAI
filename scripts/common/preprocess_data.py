@@ -19,6 +19,7 @@ import logging
 import os
 from pathlib import Path
 import json
+import yaml
 import pandas as pd
 import argparse
 
@@ -72,6 +73,89 @@ def _apply_schema_rules(df: pd.DataFrame, schema_cfg: dict, dataset_name: str) -
     if drop_cols:
         df = df.drop(columns=drop_cols)
 
+    return df
+
+
+def _load_domain_config(project_root: Path, pipeline: str) -> dict:
+    domain_path = project_root / f'configs/domain/{pipeline}.yaml'
+    with open(domain_path, 'r') as f:
+        return yaml.safe_load(f)
+
+
+# Canonical feature name -> raw column aliases across all three cardiac datasets.
+_CONSTRAINT_ALIASES: dict[str, list[str]] = {
+    'age':                       ['age_raw', 'age', 'Age'],
+    'resting_blood_pressure':    ['trestbps', 'RestingBP', 'ap_hi'],
+    'diastolic_blood_pressure':  ['ap_lo'],
+    'serum_cholesterol':         ['chol', 'Cholesterol'],
+    'max_heart_rate':            ['thalach', 'MaxHR'],
+    'st_depression':             ['oldpeak', 'Oldpeak'],
+    'height_cm':                 ['height'],
+    'weight_kg':                 ['weight'],
+}
+
+
+def _apply_clinical_constraints(
+    df: pd.DataFrame,
+    constraints_cfg: dict,
+    dataset_name: str,
+) -> pd.DataFrame:
+    """Drop (or flag) rows that violate physiological validity constraints.
+
+    Constraints are defined in configs/domain/<pipeline>.yaml under
+    ``clinical_constraints``. Each key is a canonical feature name resolved to
+    an actual column via _CONSTRAINT_ALIASES. Missing features are skipped silently
+    so the same config works across all three datasets.
+    """
+    default_action = constraints_cfg.get('default_action', 'drop')
+    n_before = len(df)
+    total_dropped = 0
+
+    for canonical, rule in constraints_cfg.items():
+        if canonical == 'default_action' or not isinstance(rule, dict):
+            continue
+
+        col = next(
+            (alias for alias in _CONSTRAINT_ALIASES.get(canonical, []) if alias in df.columns),
+            None,
+        )
+        if col is None:
+            continue  # Feature not present in this dataset -- skip silently
+
+        action = rule.get('action', default_action)
+        mask_bad = pd.Series(False, index=df.index)
+
+        if not rule.get('allow_null', True):
+            mask_bad |= df[col].isna()
+        if not rule.get('allow_zero', True):
+            mask_bad |= (df[col] == 0)
+        if 'min' in rule:
+            mask_bad |= (df[col] < rule['min'])
+        if 'max' in rule:
+            mask_bad |= (df[col] > rule['max'])
+
+        n_bad = int(mask_bad.sum())
+        if n_bad == 0:
+            logging.info(f"  [{dataset_name}] {canonical} ({col}): OK")
+            continue
+
+        pct = 100.0 * n_bad / len(df)
+        logging.warning(
+            f"  [{dataset_name}] {canonical} ({col}): {n_bad} row(s) invalid "
+            f"({pct:.1f}%) -- action={action}"
+        )
+
+        if action == 'drop':
+            df = df[~mask_bad].copy()
+            total_dropped += n_bad
+        else:  # flag
+            df[f'{col}_invalid'] = mask_bad
+
+    if total_dropped:
+        logging.info(
+            f"  [{dataset_name}] clinical constraints: "
+            f"dropped {total_dropped} / {n_before} rows ({100 * total_dropped / n_before:.1f}%)"
+        )
     return df
 
 
@@ -164,6 +248,7 @@ def main():
     )
 
     schema_cfg = _load_schema_config(project_root / pipeline_cfg['runtime']['schema_mapping_json'])
+    domain_cfg = _load_domain_config(project_root, pipeline)
 
     # Initialize preprocessor and profiler
     preprocessor_cls = _resolve_preprocessor(pipeline)
@@ -223,7 +308,7 @@ def main():
                     .reset_index(drop=True)
                 )
                 logging.info(
-                    f"  Subsampled {dataset_name}: {original_len} → {len(df)} rows "
+                    f"  Subsampled {dataset_name}: {original_len} -> {len(df)} rows "
                     f"(stratified on '{target_col}')"
                 )
 
@@ -232,9 +317,18 @@ def main():
             if 'age_raw' in df.columns and get_age_unit(dataset_name) == 'days':
                 df['age_raw'] = (df['age_raw'] / 365.25).round(2)
                 logging.info(
-                    f"  age_raw normalized: days → years for {dataset_name} "
-                    f"(range now {df['age_raw'].min():.1f}–{df['age_raw'].max():.1f} yrs)"
+                    f"  age_raw normalized: days -> years for {dataset_name} "
+                    f"(range now {df['age_raw'].min():.1f}-{df['age_raw'].max():.1f} yrs)"
                 )
+
+            # Apply clinical validity constraints (drop physiologically impossible rows).
+            # Must run after age normalization so age_raw is already in years.
+            constraints_cfg = domain_cfg.get('clinical_constraints', {})
+            if constraints_cfg:
+                df = _apply_clinical_constraints(df, constraints_cfg, dataset_name)
+                if df.empty:
+                    logging.error(f"No rows remaining after clinical constraints for {dataset_name}. Skipping.")
+                    continue
 
             # Apply age binning if specified
             if binning_strategy:
