@@ -61,6 +61,33 @@ SCORE_WEIGHTS = {
 }
 
 
+def _resolve_xgb_device(config: Dict[str, Any]) -> str:
+    """Resolve XGBoost compute device from config accelerator setting.
+
+    Returns 'cuda' if an NVIDIA GPU is available and accelerator is auto/cuda,
+    otherwise 'cpu'. AMD/ROCm is not supported by XGBoost's hist backend and
+    falls back to cpu.
+    """
+    accelerator = str(config.get('accelerator', 'auto')).strip().lower()
+    if accelerator == 'cpu':
+        return 'cpu'
+    if accelerator == 'cuda':
+        return 'cuda'
+    # auto: probe for NVIDIA GPU via nvidia-smi (no heavy import needed)
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['nvidia-smi', '--list-gpus'],
+            capture_output=True,
+            timeout=3,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return 'cuda'
+    except Exception:
+        pass
+    return 'cpu'
+
+
 def _coerce_probability_vector(values: Any) -> np.ndarray:
     """Convert probability outputs into a single positive-class score vector."""
     arr = np.asarray(values)
@@ -1068,6 +1095,11 @@ def run_combinatorial_analysis(
     
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
+
+    xgb_device = _resolve_xgb_device(config)
+    if 'model_params_by_type' in config and 'xgboost' in config['model_params_by_type']:
+        config['model_params_by_type']['xgboost']['device'] = xgb_device
+    logger.info(f"XGBoost device: {xgb_device}")
 
     xai_cfg_global = config.get('xai', {})
     xai_mode = _resolve_xai_mode(xai_cfg_global)

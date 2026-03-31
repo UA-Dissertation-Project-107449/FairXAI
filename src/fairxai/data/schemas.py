@@ -114,6 +114,17 @@ def get_age_clip_bounds(dataset: str) -> tuple[int, int]:
     return 0, int(upper)
 
 
+def get_age_unit(dataset: str) -> str:
+    """Return the age unit (``'years'`` or ``'days'``) declared for *dataset*.
+
+    Reads ``age_unit`` from ``configs/domain/cardiac.yaml``.
+    Falls back to ``'years'`` if not declared — safe default for all datasets
+    that store age in years (cleveland, kaggle_heart, and future datasets).
+    """
+    cfg = _load_domain_config()
+    return str(cfg.get("datasets", {}).get(dataset, {}).get("age_unit", "years"))
+
+
 # ── Schema harmonization ─────────────────────────────────────────────
 
 def harmonize_cardiac_schema(df: pd.DataFrame, dataset: str) -> pd.DataFrame:

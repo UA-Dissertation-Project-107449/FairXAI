@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 
 from fairxai.data.preprocessors import CardiacPreprocessor
 from fairxai.data.profilers import DataProfiler
-from fairxai.data.schemas import available_sensitive, preferred_sensitive
+from fairxai.data.schemas import available_sensitive, preferred_sensitive, get_age_unit
 from fairxai.experiments.attribute_binning import create_binning_strategy, apply_binning
 from fairxai.cli.runner_base import get_project_root, load_pipeline_config, setup_phase_logging
 
@@ -105,10 +105,21 @@ def main():
         action='store_true',
         help='Process with all binning strategies'
     )
+    parser.add_argument(
+        '--max-samples',
+        type=int,
+        default=10_000,
+        # Default 10k: consumer hardware constraint (i5-1135G7 + GTX 1650 Ti Max-Q, 16GB RAM).
+        # SVM RBF on full cardio70k (70k rows) allocates ~18GB for the kernel matrix and OOMs.
+        # Set to None or a higher value for HPC runs (cardio70k full dataset ~70k rows).
+        help='Stratified subsample cap per dataset. Datasets below the cap are unaffected. '
+             'Default 10000 targets consumer hardware; use None or higher for HPC.',
+    )
     parser.add_argument('-v', '--verbose', action='count', default=0, help='Verbosity: -v=info, -vv=debug')
     args = parser.parse_args()
 
     pipeline = args.pipeline
+    max_samples = args.max_samples
 
     # Paths
     project_root = get_project_root(Path(__file__))
@@ -199,6 +210,31 @@ def main():
             if df.empty:
                 logging.error(f"No rows available after schema rules for {dataset_name}. Skipping.")
                 continue
+
+            # Stratified subsample if dataset exceeds max_samples cap.
+            if max_samples and len(df) > max_samples:
+                original_len = len(df)
+                df = (
+                    df.groupby(target_col, group_keys=False)
+                    .apply(lambda g: g.sample(
+                        n=round(max_samples * len(g) / original_len),
+                        random_state=random_state,
+                    ))
+                    .reset_index(drop=True)
+                )
+                logging.info(
+                    f"  Subsampled {dataset_name}: {original_len} → {len(df)} rows "
+                    f"(stratified on '{target_col}')"
+                )
+
+            # Normalize age from days to years for datasets that declare age_unit: days.
+            # Must happen before any binning strategy is applied (all strategies expect years).
+            if 'age_raw' in df.columns and get_age_unit(dataset_name) == 'days':
+                df['age_raw'] = (df['age_raw'] / 365.25).round(2)
+                logging.info(
+                    f"  age_raw normalized: days → years for {dataset_name} "
+                    f"(range now {df['age_raw'].min():.1f}–{df['age_raw'].max():.1f} yrs)"
+                )
 
             # Apply age binning if specified
             if binning_strategy:

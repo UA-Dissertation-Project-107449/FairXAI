@@ -1,10 +1,23 @@
 # Combinatorial Experiment Configuration
 # Tests all combinations of: dataset × binning × mitigation × training_method
 
+# Compute accelerator for XGBoost training.
+# Options: auto | cpu | cuda
+#   auto  — detects NVIDIA GPU via nvidia-smi at startup; falls back to cpu
+#   cuda  — force GPU (requires NVIDIA GPU + CUDA drivers)
+#   cpu   — force CPU (safe default for AMD/integrated/no-CUDA environments)
+# Note: ROCm (AMD GPU) is not yet supported; AMD machines should use cpu.
+accelerator: auto
+
 # Datasets to test
+# Note: cardio70k age is stored in days and is normalized to years during preprocessing.
+# cardio70k is subsampled to 10k rows by default (--max-samples 10000 in preprocess_data.py)
+# due to consumer hardware constraints (SVM RBF OOM on full 70k; ~6 min for LR-only sweep).
+# Restore --max-samples or remove the default to run on full 70k (HPC recommended).
 datasets:
   - cleveland
   - kaggle_heart
+  - cardio70k
 
 # Age binning strategies
 binning_strategies:
@@ -15,16 +28,32 @@ binning_strategies:
   - quantile_5
 
 # Mitigation techniques
+# Justification for exclusions:
+#   ros/rus: random resampling has no fairness guarantee and discards information;
+#            methodologically weaker than SMOTE/ADASYN for clinical tabular data.
+#            Excluded to keep the sweep tractable and focused on richer methods.
+#
+# NOTE on grid_search: this is fairlearn.GridSearchReduction (lambda sweep for
+#   fairness-accuracy trade-off), NOT sklearn GridSearchCV for hyperparameter tuning.
+#   Hyperparameter tuning is handled separately via model_variants below.
 mitigation_techniques:
   - baseline
   - reweighting
   - smote
-  - ros
-  - rus
   - adasyn
   - exponentiated_gradient
-  - grid_search
+  - grid_search          # fairlearn.GridSearchReduction — fairness in-processing
   - threshold_optimizer
+  # Deferred: ros (random oversampling) — weaker than smote/adasyn, no fairness guarantee
+  # Deferred: rus (random undersampling) — information loss, no fairness guarantee
+
+# Deferred: pre + in-processing combos (e.g. smote + exponentiated_gradient).
+# These are scientifically valid but add runtime and combinatorial complexity.
+# Planned for a follow-up branch once single-method baselines are established.
+# mitigation_combos:
+#   - [smote, exponentiated_gradient]   # oversample → fairness-constrained training
+#   - [adasyn, exponentiated_gradient]  # adaptive oversample → fairness-constrained training
+#   - [smote, threshold_optimizer]      # oversample → post-hoc threshold calibration
 
 # Training methods
 training_methods:
@@ -32,7 +61,10 @@ training_methods:
   - kfold_cv
 
 # Model families to compare.
-# Note: mitigation techniques are currently executed only with logistic_regression.
+# Note: mitigation techniques are only executed with logistic_regression (see MITIGATION_SUPPORTED_MODEL_TYPES).
+# Other models run baseline-only experiments.
+# Warning: SVM on cardio70k full 70k rows OOMs on consumer hardware (RBF kernel is O(n²)).
+#          With --max-samples 10000, SVM linear is safe. For full 70k, exclude SVM or use HPC.
 model_types:
   - logistic_regression
   - random_forest
@@ -65,11 +97,14 @@ model_variants:
       params:
         kernel: linear
         C: 1.0
-    - name: svm_rbf
-      params:
-        kernel: rbf
-        C: 1.0
-        gamma: scale
+    # svm_rbf excluded for now: RBF kernel is O(n²) in training.
+    # On cardio70k (70k rows) this would take hours. Re-enable only on
+    # small datasets or with an explicit dataset-size guard in the runner.
+    # - name: svm_rbf
+    #   params:
+    #     kernel: rbf
+    #     C: 1.0
+    #     gamma: scale
 
   xgboost:
     - name: xgb_small
@@ -100,7 +135,7 @@ model_params_by_type:
 
   svm:
     C: 1.0
-    kernel: rbf
+    kernel: rbf     # overridden by svm_linear variant; rbf fallback kept for safety
     gamma: scale
     class_weight: balanced
     probability: true
@@ -116,7 +151,7 @@ model_params_by_type:
     n_jobs: -1
     random_state: 42
     eval_metric: logloss
-    tree_method: hist
+    tree_method: hist   # algorithm; device is injected at runtime from accelerator setting
 
 # Optional: override base estimator params for in-processing fairness methods
 # (e.g., set solver/penalty for fairlearn GridSearch/ExponentiatedGradient)
@@ -156,6 +191,8 @@ paths:
 
 # Parallel execution
 enable_parallelization: true
-n_jobs: -1  # -1 for all cores
+n_jobs: 6  # 6 threads; i5-1135G7 has 8 logical cores, leave 2 for OS/other work
 
-# Total combinations: 2 datasets × 5 binning × 9 mitigation × 2 training = 180 experiments
+# Total combinations (2 datasets): 2 datasets × 5 binning × 7 mitigation × 2 training = 140 experiments (LR)
+# Other models (RF/XGB/SVM-linear) run baseline only: 2 datasets × 5 binning × 1 × 2 = 20 each
+# With cardio70k added (3rd dataset): +70 LR experiments + 30 multi-model baseline experiments
