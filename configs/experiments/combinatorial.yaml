@@ -71,8 +71,9 @@ model_types:
   - svm
   - xgboost
 
-# Keep variants intentionally small for tractable runtime.
-# Each variant merges onto model_params_by_type[model_type].
+# Model variants: experiment-specific overrides merged onto base hyperparameters.
+# Base params are loaded from configs/models/<model_type>.yaml at runtime.
+# Only define keys here that differ from the model file defaults.
 model_variants:
   logistic_regression:
     - name: c_1_0
@@ -116,47 +117,6 @@ model_variants:
 # Cross-validation settings
 cv_folds: 5
 random_seed: 42
-
-# Base model parameters by model type (kept intentionally compact)
-model_params_by_type:
-  logistic_regression:
-    C: 1.0
-    max_iter: 1000
-    class_weight: balanced
-    random_state: 42
-
-  random_forest:
-    n_estimators: 300
-    max_depth: null
-    min_samples_leaf: 1
-    class_weight: balanced_subsample
-    n_jobs: -1
-    random_state: 42
-
-  svm:
-    C: 1.0
-    kernel: rbf     # overridden by svm_linear variant; rbf fallback kept for safety
-    gamma: scale
-    class_weight: balanced
-    probability: true
-    random_state: 42
-
-  xgboost:
-    n_estimators: 250
-    max_depth: 4
-    learning_rate: 0.05
-    subsample: 0.9
-    colsample_bytree: 0.9
-    reg_lambda: 1.0
-    n_jobs: -1
-    random_state: 42
-    eval_metric: logloss
-    tree_method: hist   # algorithm; device is injected at runtime from accelerator setting
-
-# Optional: override base estimator params for in-processing fairness methods
-# (e.g., set solver/penalty for fairlearn GridSearch/ExponentiatedGradient)
-# If empty or missing, defaults to model_params.
-fairness_base_model_params: {}
 
 # Sensitive / group attributes (evaluated if present in the dataset)
 sensitive_attributes:

@@ -14,8 +14,8 @@ data:
   datasets:
     - cleveland
     - kaggle_heart
-  preprocessing: "configs/pipelines/baseline.yaml"  # Use baseline preprocessing
-  
+  preprocessing: "configs/experiments/baseline.yaml"  # Use baseline preprocessing
+
 baseline:
   model: "logistic_regression"
   config: "configs/models/logistic_regression.yaml"

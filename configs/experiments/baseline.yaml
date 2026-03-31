@@ -27,6 +27,7 @@ preprocessing:
 
 model:
   type: "logistic_regression"
+  # Hyperparameters sourced from configs/models/logistic_regression.yaml
   hyperparameters:
     C: 1.0
     class_weight: "balanced"
@@ -42,7 +43,7 @@ fairness:
     - predictive_parity
     - calibration
   thresholds:
-    demographic_parity: 0.1
+    demographic_parity: 0.1    # canonical source: configs/recommendations/thresholds.yaml
     equalized_odds: 0.1
     calibration_ece: 0.05
 
