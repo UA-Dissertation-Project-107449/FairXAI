@@ -1,3 +1,6 @@
+# STATUS: PLANNED -- not yet integrated into any pipeline code.
+# Intended for future multi-dataset management (e.g., adding dermatology domain).
+#
 # Dataset registry (mandatory `type`)
 # type: tabular | image
 
