@@ -383,17 +383,14 @@ def run_analysis(
     
     experiment_cfg = load_yaml_config(str(config_path))
     pipeline_cfg = load_pipeline_config(project_root, pipeline)
-    raw_model_params = dict(pipeline_cfg.get('training', {}))
     schema_path = project_root / pipeline_cfg['runtime']['schema_mapping_json']
     with open(schema_path, 'r') as f:
         schema_cfg = json.load(f)
 
-    target_col = experiment_cfg.get('data', {}).get('target') or raw_model_params.get('target', 'heart_disease')
-    allowed_model_keys = {
-        'C', 'penalty', 'solver', 'tol', 'l1_ratio',
-        'max_iter', 'random_state', 'class_weight'
-    }
-    model_params = {k: v for k, v in raw_model_params.items() if k in allowed_model_keys}
+    _lr_cfg = load_yaml_config(str(project_root / "configs" / "models" / "logistic_regression.yaml"))
+    model_params = dict(_lr_cfg.get("hyperparameters", {}))
+
+    target_col = experiment_cfg.get('data', {}).get('target', 'heart_disease')
 
     sensitive_attrs = experiment_cfg.get('data', {}).get('sensitive_attributes', ['sex'])
 

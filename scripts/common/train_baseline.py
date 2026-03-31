@@ -35,6 +35,7 @@ from fairxai.explainability.tabular import shap_explain_tabular, lime_explain_in
 from fairxai.cli.runner_base import get_project_root, load_pipeline_config, setup_phase_logging
 from fairxai.experiments.data_io import build_schema_excludes, resolve_base_dataset
 from fairxai.cli.runner_utils import archive_latest_run
+from fairxai.utils.config import load_yaml_config
 
 
 def save_xai_outputs(
@@ -182,17 +183,10 @@ def _resolve_model_types(args_model_types: Optional[list[str]], training_cfg: di
     return [str(legacy).strip().lower()]
 
 
-def _build_model_params(model_type: str, training_cfg: dict, random_state: int) -> dict:
-    """Build model params with backwards-compatible defaults."""
-    by_type = training_cfg.get('model_params_by_type', {})
-    params = dict(by_type.get(model_type, {}))
-
-    # Backwards compatibility with existing logistic-only top-level fields.
-    if model_type == 'logistic_regression':
-        params.setdefault('C', training_cfg.get('C', 1.0))
-        params.setdefault('max_iter', training_cfg.get('max_iter', 1000))
-        params.setdefault('class_weight', training_cfg.get('class_weight', 'balanced'))
-
+def _build_model_params(model_type: str, training_cfg: dict, random_state: int, project_root: Path) -> dict:
+    """Load base hyperparameters from model config file."""
+    model_cfg_path = project_root / "configs" / "models" / f"{model_type}.yaml"
+    params = dict(load_yaml_config(str(model_cfg_path)).get("hyperparameters", {}))
     params.setdefault('random_state', random_state)
     return params
 
@@ -342,7 +336,7 @@ def main():
 
             try:
                 model_class = get_model_class(model_type)
-                model_params = _build_model_params(model_type, training_cfg, random_state)
+                model_params = _build_model_params(model_type, training_cfg, random_state, project_root)
                 model = model_class(**model_params)
             except Exception as exc:
                 logging.warning(f"Skipping model_type={model_type} for {dataset_name}: {exc}")

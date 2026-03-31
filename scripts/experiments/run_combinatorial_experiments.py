@@ -196,10 +196,23 @@ def _select_top_experiments_for_xai(
     return selected
 
 
-def _resolve_model_variants(config: Dict[str, Any], model_type: str) -> List[Dict[str, Any]]:
-    """Resolve small model variants from config with backward compatibility."""
-    base_by_type = config.get('model_params_by_type', {})
-    base_params = dict(base_by_type.get(model_type, config.get('model_params', {})))
+def _load_model_config(project_root: Path, model_type: str) -> Dict[str, Any]:
+    """Load base hyperparameters from configs/models/<model_type>.yaml."""
+    path = project_root / "configs" / "models" / f"{model_type}.yaml"
+    cfg = load_yaml_config(str(path))
+    return dict(cfg.get("hyperparameters", {}))
+
+
+def _resolve_model_variants(
+    config: Dict[str, Any],
+    model_type: str,
+    project_root: Path,
+    xgb_device: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Resolve model variants: base params from model file, overrides from config."""
+    base_params = _load_model_config(project_root, model_type)
+    if model_type == 'xgboost' and xgb_device is not None:
+        base_params['device'] = xgb_device
 
     variants = config.get('model_variants', {}).get(model_type, [])
     if not variants:
@@ -1097,8 +1110,6 @@ def run_combinatorial_analysis(
         config = yaml.safe_load(f)
 
     xgb_device = _resolve_xgb_device(config)
-    if 'model_params_by_type' in config and 'xgboost' in config['model_params_by_type']:
-        config['model_params_by_type']['xgboost']['device'] = xgb_device
     logger.info(f"XGBoost device: {xgb_device}")
 
     xai_cfg_global = config.get('xai', {})
@@ -1150,10 +1161,7 @@ def run_combinatorial_analysis(
         else:
             fairness_base_params = fairness_base_params_cfg
         if not fairness_base_params:
-            fairness_base_params = config.get('model_params_by_type', {}).get(
-                'logistic_regression',
-                config.get('model_params', {})
-            )
+            fairness_base_params = _load_model_config(project_root, 'logistic_regression')
         for binning in config['binning_strategies']:
             for mitigation in config['mitigation_techniques']:
                 for training_method in config['training_methods']:
@@ -1162,7 +1170,7 @@ def run_combinatorial_analysis(
                         if mitigation != 'baseline' and model_type not in MITIGATION_SUPPORTED_MODEL_TYPES:
                             continue
 
-                        for variant in _resolve_model_variants(config, model_type):
+                        for variant in _resolve_model_variants(config, model_type, project_root, xgb_device):
                             exp_id = versioning.generate_experiment_id()
                             exp_config = {
                                 'dataset': dataset,
