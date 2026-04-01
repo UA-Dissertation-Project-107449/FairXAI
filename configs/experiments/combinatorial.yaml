@@ -16,8 +16,8 @@ accelerator: auto
 # Restore --max-samples or remove the default to run on full 70k (HPC recommended).
 datasets:
   - cleveland
-  - kaggle_heart
-  - cardio70k
+  # - kaggle_heart
+  # - cardio70k
 
 # Age binning strategies
 binning_strategies:
@@ -47,13 +47,17 @@ mitigation_techniques:
   # Deferred: ros (random oversampling) — weaker than smote/adasyn, no fairness guarantee
   # Deferred: rus (random undersampling) — information loss, no fairness guarantee
 
-# Deferred: pre + in-processing combos (e.g. smote + exponentiated_gradient).
-# These are scientifically valid but add runtime and combinatorial complexity.
-# Planned for a follow-up branch once single-method baselines are established.
-# mitigation_combos:
-#   - [smote, exponentiated_gradient]   # oversample → fairness-constrained training
-#   - [adasyn, exponentiated_gradient]  # adaptive oversample → fairness-constrained training
-#   - [smote, threshold_optimizer]      # oversample → post-hoc threshold calibration
+# Sequential mitigation combos: pre → in or pre → post chains.
+# Each entry is a list of techniques applied in order (left to right).
+# Only logistic_regression model runs combos (same restriction as single mitigation).
+# Stage-chain rule: pre* → in? → post? (at most one in-processing and one post-processing).
+mitigation_combos:
+  - [smote, exponentiated_gradient]              # oversample → fairness-constrained training
+  - [adasyn, exponentiated_gradient]             # adaptive oversample → fairness-constrained training
+  - [smote, threshold_optimizer]                 # oversample → post-hoc threshold calibration
+  - [reweighting, threshold_optimizer]           # reweight → post-hoc threshold calibration
+  - [smote, exponentiated_gradient, threshold_optimizer]   # 3-stage: pre → in → post
+  - [adasyn, exponentiated_gradient, threshold_optimizer]  # 3-stage: pre → in → post
 
 # Training methods
 training_methods:
@@ -67,9 +71,9 @@ training_methods:
 #          With --max-samples 10000, SVM linear is safe. For full 70k, exclude SVM or use HPC.
 model_types:
   - logistic_regression
-  - random_forest
-  - svm
-  - xgboost
+  # - random_forest
+  # - svm
+  # - xgboost
 
 # Model variants: experiment-specific overrides merged onto base hyperparameters.
 # Base params are loaded from configs/models/<model_type>.yaml at runtime.
@@ -125,11 +129,17 @@ sensitive_attributes:
   - ethnicity
   - group_cluster
 
-# Fairness evaluation thresholds (for filtering results)
+# Fairness evaluation thresholds (for filtering results).
+# These override the canonical thresholds.yaml values for this experiment.
+# Keys consumed by _gates.load_gate_thresholds(): min_recall, recall_hard_floor,
+# max_fairness_violation.  Keys consumed by comparison runner only:
+# min_improvement_pct, max_performance_drop_pct.
 fairness_thresholds:
-  min_improvement_pct: 10  # Minimum fairness improvement (%)
-  max_performance_drop_pct: 15  # Maximum allowed performance drop (%)
-  min_recall: 0.70  # Minimum clinical safety threshold
+  min_improvement_pct: 10          # Minimum fairness improvement (%) — comparison runner
+  max_performance_drop_pct: 15     # Maximum allowed performance drop (%) — comparison runner
+  min_recall: 0.70                 # Clinical goal — ranking preference tier
+  recall_hard_floor: 0.60          # Hard exclusion floor — configs below this are dropped
+  max_fairness_violation: 0.10     # Demographic parity hard gate
 
 # XAI settings
 xai:
@@ -153,6 +163,26 @@ paths:
 enable_parallelization: true
 n_jobs: 6  # 6 threads; i5-1135G7 has 8 logical cores, leave 2 for OS/other work
 
-# Total combinations (2 datasets): 2 datasets × 5 binning × 7 mitigation × 2 training = 140 experiments (LR)
-# Other models (RF/XGB/SVM-linear) run baseline only: 2 datasets × 5 binning × 1 × 2 = 20 each
-# With cardio70k added (3rd dataset): +70 LR experiments + 30 multi-model baseline experiments
+# Combination counting guide (formula-based so it stays correct after config edits)
+# Symbols:
+#   D = number of datasets
+#   B = number of binning_strategies
+#   T = number of training_methods
+#   M = number of mitigation_techniques (applies fully to logistic_regression only)
+#   C = number of mitigation_combos (logistic_regression only)
+#   V_lr = number of logistic_regression variants
+#   V_other = sum of variants for non-logistic models in model_types
+#
+# Base experiments:
+#   D * B * T * (V_lr * M + V_other)
+# Combo experiments (LR only):
+#   D * B * T * (V_lr * C)
+# Total experiments:
+#   D * B * T * (V_lr * (M + C) + V_other)
+#
+# Example A (3 datasets, 5 bins, 2 training types, 5 mitigations, 6 combos,
+#            variants: LR=2, RF=2, SVM=1, XGB=1 => V_other=4):
+#   3 * 5 * 2 * (2*(5+6) + 4) = 780
+#
+# Example B (same setup but 7 mitigations):
+#   3 * 5 * 2 * (2*(7+6) + 4) = 900
