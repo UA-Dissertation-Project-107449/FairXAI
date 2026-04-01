@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 from fairxai.experiments.versioning import ExperimentVersioning
 from fairxai.cli.runner_base import get_project_root, setup_phase_logging
 from fairxai.cli.runner_utils import resolve_latest_run_dir, resolve_run_id
+from _gates import load_gate_thresholds, evaluate_recall_gate
 from fairxai.viz.experiment_plots import (
     save_comparison_heatmap,
     save_tradeoff_scatter,
@@ -271,26 +272,31 @@ def compare_mitigation_techniques(df: pd.DataFrame, output_dir: Path):
 def filter_best_configurations(
     df: pd.DataFrame,
     output_dir: Path,
-    fairness_threshold: float = 0.10,
-    performance_threshold: float = 0.15
+    gate_thresholds: dict,
+    performance_threshold: float = 0.15,
 ):
-    """
-    Filter configurations meeting fairness/performance criteria.
-    
-    Args:
-        df: Results dataframe
-        fairness_threshold: Min fairness improvement (fraction)
-        performance_threshold: Max performance drop (fraction)
+    """Filter configurations using fairness-first gate logic (consistent with combinatorial runner).
+
+    Gates (applied as hard exclusions, config-driven):
+    1. Recall hard floor: recall < ``recall_hard_floor`` → excluded
+    2. Fairness gate: ``fairness_gap > max_fairness_violation`` → excluded
+    3. Performance drop: ``(baseline_score - score) / baseline_score > performance_threshold`` → excluded
+
+    When strict gates filter everything, a fallback CSV is emitted (ranked by
+    fairness_gap asc, score desc) tagged with ``selection_mode='fallback'``.
+    The two output files are kept strictly separate.
     """
     if df.empty:
         logging.warning("No data for filtering")
-        return
-    
-    # Calculate baseline metrics for each dataset
+        return pd.DataFrame()
+
+    recall_hard_floor = gate_thresholds['recall_hard_floor']
+    min_recall = gate_thresholds['min_recall']
+    max_fairness_violation = gate_thresholds['max_fairness_violation']
+
     baseline_df = df[df['mitigation_technique'] == 'baseline']
-    
     best_configs = []
-    
+
     key_pairs = (
         df[['dataset', 'model_type']]
         .drop_duplicates()
@@ -303,75 +309,120 @@ def filter_best_configurations(
             (baseline_df['dataset'] == dataset)
             & (baseline_df['model_type'] == model_type)
         ]
-        
+
         if baseline_row.empty:
-            logging.warning(f"No baseline for {dataset}, skipping")
+            logging.warning(f"No baseline for {dataset}/{model_type}, skipping")
             continue
-        
-        # Get baseline metrics
-        metric_col = 'score_value'
-        baseline_score = baseline_row[metric_col].values[0]
-        
-        # Filter non-baseline techniques
+
+        baseline_score = baseline_row['score_value'].values[0]
         mitigated_df = dataset_df[dataset_df['mitigation_technique'] != 'baseline']
-        
+
         for _, row in mitigated_df.iterrows():
-            score = row[metric_col]
+            score = row['score_value']
             fairness_gap = row.get('fairness_gap')
-            
-            # Check performance threshold
+            recall = row.get('recall_value')
+
             if baseline_score == 0 or pd.isna(baseline_score) or pd.isna(score):
                 continue
+
             performance_drop = (baseline_score - score) / baseline_score
-            
+
+            # Gate 1: recall hard floor (two-tier: record tier, hard-exclude below floor)
+            recall_gate = evaluate_recall_gate(recall, recall_hard_floor, min_recall)
+            if not recall_gate.passed:
+                continue  # hard exclusion
+
+            # Gate 2: fairness gate
             if fairness_gap is None or pd.isna(fairness_gap):
                 continue
-            if fairness_gap > fairness_threshold:
+            if fairness_gap > max_fairness_violation:
                 continue
 
-            if performance_drop <= performance_threshold:
-                # Add to best configs
-                best_configs.append({
-                    'dataset': dataset,
-                    'model_type': model_type,
-                    'model_variant': row.get('model_variant', 'default'),
-                    'binning': row['binning_strategy'],
-                    'mitigation': row['mitigation_technique'],
-                    'training_method': row['training_method'],
-                    'score': score,
-                    'baseline_score': baseline_score,
-                    'score_drop_pct': performance_drop * 100,
-                    'fairness_gap': fairness_gap,
-                    'baseline_fairness_gap': row.get('baseline_fairness_gap'),
-                    'fairness_gain_score': row.get('fairness_gain_score'),
-                    'fairness_gain_pct': row.get('fairness_gain_pct'),
-                    'f1_score': row.get('f1_value'),
-                    'recall': row.get('recall_value'),
-                    'accuracy': row.get('accuracy_value'),
-                    'auc_roc': row.get('auc_value'),
-                    'experiment_id': row['experiment_id']
-                })
-    
+            # Gate 3: performance threshold
+            if performance_drop > performance_threshold:
+                continue
+
+            best_configs.append({
+                'dataset': dataset,
+                'model_type': model_type,
+                'model_variant': row.get('model_variant', 'default'),
+                'binning': row['binning_strategy'],
+                'mitigation': row['mitigation_technique'],
+                'training_method': row['training_method'],
+                'score': score,
+                'baseline_score': baseline_score,
+                'score_drop_pct': performance_drop * 100,
+                'fairness_gap': fairness_gap,
+                'baseline_fairness_gap': row.get('baseline_fairness_gap'),
+                'fairness_gain_score': row.get('fairness_gain_score'),
+                'fairness_gain_pct': row.get('fairness_gain_pct'),
+                'f1_score': row.get('f1_value'),
+                'recall': recall,
+                'accuracy': row.get('accuracy_value'),
+                'auc_roc': row.get('auc_value'),
+                'recall_tier': recall_gate.tier,
+                'selection_mode': 'strict',
+                'experiment_id': row['experiment_id'],
+            })
+
     best_df = pd.DataFrame(best_configs)
-    
+
     if not best_df.empty:
-        # Sort by F1 score
         best_df = best_df.sort_values(['dataset', 'score'], ascending=[True, False])
-        
         output_file = output_dir / 'best_configurations.csv'
         best_df.to_csv(output_file, index=False)
         logging.info(f"[SUCCESS] Saved best configurations: {output_file}")
-        logging.info(f"  Found {len(best_df)} configurations meeting criteria")
-    else:
-        logging.warning("No configurations met the criteria")
-    
-    return best_df
+        logging.info(f"  Found {len(best_df)} configurations meeting strict gates")
+        return best_df
+
+    # Fallback: no configs passed strict gates → emit fallback shortlist
+    logging.warning(
+        "No configurations passed strict gates "
+        f"(recall_hard_floor={recall_hard_floor:.2f}, "
+        f"max_fairness_violation={max_fairness_violation:.2f}, "
+        f"performance_threshold={performance_threshold:.2f}). "
+        "Emitting fallback shortlist ranked by fairness_gap."
+    )
+    fallback_rows = []
+    non_baseline = df[df['mitigation_technique'] != 'baseline'].copy()
+    for _, row in non_baseline.iterrows():
+        recall = row.get('recall_value')
+        fairness_gap = row.get('fairness_gap')
+        score = row.get('score_value')
+        if pd.isna(score):
+            continue
+        fallback_rows.append({
+            'dataset': row['dataset'],
+            'model_type': row.get('model_type', ''),
+            'model_variant': row.get('model_variant', 'default'),
+            'binning': row['binning_strategy'],
+            'mitigation': row['mitigation_technique'],
+            'training_method': row['training_method'],
+            'score': score,
+            'fairness_gap': fairness_gap,
+            'recall': recall,
+            'f1_score': row.get('f1_value'),
+            'selection_mode': 'fallback',
+            'experiment_id': row['experiment_id'],
+        })
+
+    fallback_df = pd.DataFrame(fallback_rows)
+    if not fallback_df.empty:
+        fallback_df = fallback_df.sort_values(
+            ['dataset', 'fairness_gap', 'score'],
+            ascending=[True, True, False],
+        )
+        fallback_file = output_dir / 'best_configurations_fallback.csv'
+        fallback_df.to_csv(fallback_file, index=False)
+        logging.warning(f"[FALLBACK] Saved fallback shortlist: {fallback_file}")
+
+    return best_df  # empty DataFrame (strict set was empty)
 
 
 def run_comparison_analysis(
     results_dir: str = None,
     pipeline: str = 'cardiac',
-    fairness_threshold: float = 0.10,
+    fairness_threshold: float = None,
     performance_threshold: float = 0.15,
     no_plots: bool = False,
     verbose: int = 0,
@@ -387,10 +438,20 @@ def run_comparison_analysis(
         run_id=run_id, stage_name='compare',
     )
     
+    # Load canonical gate thresholds; CLI --fairness-threshold overrides max_fairness_violation.
+    gate_thresholds = load_gate_thresholds({}, project_root)
+    if fairness_threshold is not None:
+        gate_thresholds['max_fairness_violation'] = float(fairness_threshold)
+
     logging.info("="*80)
     logging.info("EXPERIMENT COMPARISON")
     logging.info("="*80)
     logging.info("[PHASE] Comparison started")
+    logging.info(
+        f"Gate thresholds: recall_hard_floor={gate_thresholds['recall_hard_floor']:.2f}, "
+        f"min_recall={gate_thresholds['min_recall']:.2f}, "
+        f"max_fairness_violation={gate_thresholds['max_fairness_violation']:.2f}"
+    )
     
     base_output_dir = Path(output_root) if output_root else (project_root / f"output/{pipeline}")
     if results_dir:
@@ -521,8 +582,8 @@ def run_comparison_analysis(
     best_configs = filter_best_configurations(
         df_success,
         output_dir,
-        fairness_threshold,
-        performance_threshold
+        gate_thresholds,
+        performance_threshold,
     )
 
     # Diagnostics: repeated metrics
@@ -672,8 +733,8 @@ def main():
     parser.add_argument(
         '--fairness-threshold',
         type=float,
-        default=0.10,
-        help='Minimum fairness improvement (10%% default)'
+        default=None,
+        help='Override max_fairness_violation gate (default: from thresholds.yaml)'
     )
     parser.add_argument(
         '--performance-threshold',
