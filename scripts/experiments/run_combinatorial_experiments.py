@@ -34,6 +34,7 @@ from fairxai.cli.runner_utils import (
     resolve_run_id,
     update_latest_pointer,
 )
+from _gates import load_gate_thresholds, evaluate_recall_gate, evaluate_fairness_gate
 
 
 STAGE_MAP = {
@@ -59,6 +60,65 @@ SCORE_WEIGHTS = {
     'accuracy': 0.20,
     'auc': 0.10,
 }
+
+
+def _extract_fairness_gap(fairness_metrics: Dict[str, Any]) -> Optional[float]:
+    """Extract a scalar fairness gap from a calculate_all_metrics() result.
+
+    Returns the maximum demographic-parity ``max_difference`` across all
+    sensitive attributes, or ``None`` if the metric is unavailable.
+    """
+    group_fairness = fairness_metrics.get('group_fairness', {})
+    gaps = []
+    for attr_metrics in group_fairness.values():
+        dp = attr_metrics.get('demographic_parity', {})
+        val = dp.get('max_difference')
+        if val is not None:
+            gaps.append(float(val))
+    return max(gaps) if gaps else None
+
+
+def _annotate_gate_fields(result: Dict[str, Any], thresholds: Dict[str, float]) -> None:
+    """Evaluate and inject gate fields into an experiment result dict in-place.
+
+    Fields added:
+    - ``gate_recall_passed`` (bool)
+    - ``gate_recall_tier`` ('full_pass' | 'lower_tier' | 'fail')
+    - ``gate_recall_reason`` (str)
+    - ``gate_fairness_passed`` (bool)
+    - ``gate_fairness_reason`` (str)
+    - ``fairness_gap`` (float | None)
+    """
+    if result.get('execution', {}).get('status') != 'success':
+        result.update({
+            'gate_recall_passed': False,
+            'gate_recall_tier': 'fail',
+            'gate_recall_reason': 'experiment failed',
+            'gate_fairness_passed': False,
+            'gate_fairness_reason': 'experiment failed',
+            'fairness_gap': None,
+        })
+        return
+
+    if result.get('training_method') == 'kfold_cv':
+        recall = result.get('cv_results', {}).get('recall', {}).get('mean')
+    else:
+        recall = result.get('test_metrics', {}).get('recall')
+
+    recall_gate = evaluate_recall_gate(
+        recall,
+        thresholds['recall_hard_floor'],
+        thresholds['min_recall'],
+    )
+    result['gate_recall_passed'] = recall_gate.passed
+    result['gate_recall_tier'] = recall_gate.tier
+    result['gate_recall_reason'] = recall_gate.reason
+
+    fairness_gap = _extract_fairness_gap(result.get('fairness_metrics', {}))
+    fairness_gate = evaluate_fairness_gate(fairness_gap, thresholds['max_fairness_violation'])
+    result['gate_fairness_passed'] = fairness_gate.passed
+    result['gate_fairness_reason'] = fairness_gate.reason
+    result['fairness_gap'] = fairness_gap
 
 
 def _resolve_xgb_device(config: Dict[str, Any]) -> str:
@@ -137,8 +197,18 @@ def _is_xai_enabled_for_phase(xai_cfg: Optional[Dict[str, Any]]) -> bool:
 
 
 def _result_score(result: Dict[str, Any]) -> Optional[float]:
-    """Compute composite score compatible with comparison phase ranking."""
+    """Compute composite score compatible with comparison phase ranking.
+
+    Returns ``None`` (hard exclusion) for failed experiments or configs that
+    did not pass the recall hard floor gate (``gate_recall_tier == 'fail'``).
+    """
     if result.get('execution', {}).get('status') != 'success':
+        return None
+
+    # Hard gate: drop configs that fell below recall_hard_floor.
+    # gate_recall_tier is set by _annotate_gate_fields(); if absent (legacy
+    # results without annotation), fall through to the score computation.
+    if result.get('gate_recall_tier') == 'fail':
         return None
 
     if result.get('training_method') == 'kfold_cv':
@@ -171,6 +241,17 @@ def _select_top_experiments_for_xai(
     top_k: int,
     per_dataset: bool,
 ) -> List[Tuple[Dict[str, Any], float]]:
+    """Select top-k experiments for deferred XAI, using fairness-first ordering.
+
+    Ranking tiers (applied per-dataset when ``per_dataset=True``):
+    1. Tier 1 (strict): recall full_pass AND fairness gate passed → sorted by score desc
+    2. Tier 2 (strict): recall lower_tier AND fairness gate passed → sorted by score desc
+    3. Fallback (when strict set is empty): all scored configs → sorted by
+       fairness_gap asc then score desc; tagged ``selection_mode='fallback'``
+
+    Experiments that failed the recall hard floor gate (``gate_recall_tier='fail'``)
+    are already excluded by ``_result_score()`` returning ``None``.
+    """
     scored: List[Tuple[Dict[str, Any], float]] = []
     for result in results:
         score = _result_score(result)
@@ -180,8 +261,35 @@ def _select_top_experiments_for_xai(
     if not scored:
         return []
 
+    def _tier_rank(items: List[Tuple[Dict[str, Any], float]], top_k: int) -> List[Tuple[Dict[str, Any], float]]:
+        tier1 = [
+            (r, s) for r, s in items
+            if r.get('gate_recall_tier') == 'full_pass' and r.get('gate_fairness_passed')
+        ]
+        tier2 = [
+            (r, s) for r, s in items
+            if r.get('gate_recall_tier') == 'lower_tier' and r.get('gate_fairness_passed')
+        ]
+        strict = (
+            sorted(tier1, key=lambda x: x[1], reverse=True)
+            + sorted(tier2, key=lambda x: x[1], reverse=True)
+        )
+        if strict:
+            ranked = strict[:top_k]
+            for r, _ in ranked:
+                r['selection_mode'] = 'strict'
+            return ranked
+        # Fallback: rank by smallest fairness_gap, then score desc
+        fallback = sorted(
+            items,
+            key=lambda x: (x[0].get('fairness_gap') or 1.0, -x[1]),
+        )[:top_k]
+        for r, _ in fallback:
+            r['selection_mode'] = 'fallback'
+        return fallback
+
     if not per_dataset:
-        return sorted(scored, key=lambda item: item[1], reverse=True)[:top_k]
+        return _tier_rank(scored, top_k)
 
     selected: List[Tuple[Dict[str, Any], float]] = []
     datasets = sorted({item[0].get('configuration', {}).get('dataset', '') for item in scored})
@@ -190,9 +298,7 @@ def _select_top_experiments_for_xai(
             item for item in scored
             if item[0].get('configuration', {}).get('dataset') == dataset
         ]
-        dataset_scored.sort(key=lambda item: item[1], reverse=True)
-        selected.extend(dataset_scored[:top_k])
-
+        selected.extend(_tier_rank(dataset_scored, top_k))
     return selected
 
 
@@ -339,21 +445,32 @@ def _unwrap_for_xai(raw_model: Any) -> Optional[Any]:
     """
     candidate = raw_model
     # Fairlearn in-processing (ExponentiatedGradient, GridSearch)
-    if hasattr(raw_model, 'predictors_'):
+    # Prefer fitted predictors_ first; estimator_/estimator can be unfitted
+    # base templates in some fairlearn objects.
+    if hasattr(candidate, 'predictors_'):
         predictor = next(
-            (p for p in raw_model.predictors_ if hasattr(p, 'predict_proba')),
+            (p for p in candidate.predictors_ if hasattr(p, 'predict_proba')),
             next(
-                (p for p in raw_model.predictors_ if hasattr(p, 'predict')),
+                (p for p in candidate.predictors_ if hasattr(p, 'predict')),
                 None,
             ),
         )
         if predictor is not None:
             candidate = predictor
+    # Fairlearn post-processing wrappers (e.g. ThresholdOptimizer)
+    elif hasattr(candidate, 'estimator_'):
+        candidate = candidate.estimator_
+    elif hasattr(candidate, 'estimator'):
+        candidate = candidate.estimator
     # Custom wrappers (e.g. BaselineLogisticRegression)
     if hasattr(candidate, 'model'):
         candidate = candidate.model
     # Final check: usable by SHAP (callable or sklearn) and LIME (predict_proba)
-    if hasattr(candidate, 'predict_proba') or hasattr(candidate, 'predict'):
+    if (
+        hasattr(candidate, 'predict_proba')
+        or hasattr(candidate, 'predict')
+        or hasattr(candidate, 'decision_function')
+    ):
         return candidate
     return None
 
@@ -401,16 +518,19 @@ def save_experiment_xai(
         return _reduce(np.asarray(shap_values))
 
     def _resolve_shap_model(raw_model: Any) -> Any:
-        candidate = raw_model
-        if hasattr(raw_model, 'predictors_'):
-            predictor = next((p for p in raw_model.predictors_ if hasattr(p, 'predict_proba') or hasattr(p, 'predict')), None)
+        candidate = _unwrap_for_xai(raw_model) or raw_model
+        if hasattr(candidate, 'predictors_'):
+            predictor = next((p for p in candidate.predictors_ if hasattr(p, 'predict_proba') or hasattr(p, 'predict')), None)
             if predictor is not None:
                 candidate = predictor
-        if hasattr(raw_model, 'model'):
-            candidate = raw_model.model
+        if hasattr(candidate, 'model'):
+            candidate = candidate.model
 
         if hasattr(candidate, 'predict_proba'):
             return lambda X: candidate.predict_proba(X)
+        if hasattr(candidate, 'decision_function'):
+            wrapped = _wrap_decision_function(candidate)
+            return lambda X: wrapped.predict_proba(X)
         if hasattr(candidate, 'predict'):
             return lambda X: candidate.predict(X)
         return candidate
@@ -432,21 +552,23 @@ def save_experiment_xai(
         return _DecisionFunctionWrapper(df_model)
 
     def _resolve_lime_model(raw_model: Any) -> Optional[Any]:
-        if hasattr(raw_model, 'predict_proba'):
-            return raw_model
-        if hasattr(raw_model, 'predictors_'):
-            predictor = next((p for p in raw_model.predictors_ if hasattr(p, 'predict_proba') or hasattr(p, 'decision_function')), None)
+        candidate = _unwrap_for_xai(raw_model) or raw_model
+        if hasattr(candidate, 'predict_proba'):
+            return candidate
+        if hasattr(candidate, 'decision_function'):
+            return _wrap_decision_function(candidate)
+        if hasattr(candidate, 'predictors_'):
+            predictor = next((p for p in candidate.predictors_ if hasattr(p, 'predict_proba') or hasattr(p, 'decision_function')), None)
             if predictor is not None:
                 return predictor
-        if hasattr(raw_model, 'model') and hasattr(raw_model.model, 'predict_proba'):
-            return raw_model.model
-        if hasattr(raw_model, 'decision_function'):
-            return _wrap_decision_function(raw_model)
-        if hasattr(raw_model, 'model') and hasattr(raw_model.model, 'decision_function'):
-            return _wrap_decision_function(raw_model.model)
+        if hasattr(candidate, 'model') and hasattr(candidate.model, 'predict_proba'):
+            return candidate.model
+        if hasattr(candidate, 'model') and hasattr(candidate.model, 'decision_function'):
+            return _wrap_decision_function(candidate.model)
         return None
 
-    xai_model = base_model if base_model is not None else model
+    xai_model_raw = base_model if base_model is not None else model
+    xai_model = _unwrap_for_xai(xai_model_raw) or xai_model_raw
     if shap_enabled:
         try:
             shap_model = _resolve_shap_model(xai_model)
@@ -739,6 +861,8 @@ def run_single_split_experiment(
     if mitigation != 'baseline' and sensitive_attr is None:
         raise ValueError("Mitigation requires at least one sensitive/group column; none found in splits")
 
+    combo_chain = config.get('mitigation_combo')  # set for combo experiments; None otherwise
+
     if mitigation == 'baseline':
         # Train baseline model
         model_type = config.get('model_type', 'logistic_regression')
@@ -746,15 +870,29 @@ def run_single_split_experiment(
         model = model_class(**config.get('model_params', {}))
         train_metrics = model.train(splits['X_train'], splits['y_train'])
         test_metrics = model.evaluate(splits['X_test'], splits['y_test'])
-        
+
         # Get predictions
         y_pred = _coerce_label_vector(model.predict(splits['X_test']))
         y_proba = _coerce_probability_vector(model.predict_proba(splits['X_test']))
-        
+
         result = {
             'test_metrics': test_metrics,
             'predictions': {'y_pred': y_pred, 'y_proba': y_proba}
         }
+    elif combo_chain:
+        # Sequential combo: pre → in → post chain
+        fairness_base_params = config.get('fairness_base_model_params')
+        result = engine.apply_combo(
+            techniques=combo_chain,
+            X_train=splits['X_train'],
+            y_train=splits['y_train'],
+            X_test=splits['X_test'],
+            y_test=splits['y_test'],
+            sensitive_train=splits['sensitive_train'],
+            sensitive_test=splits['sensitive_test'],
+            sensitive_attr=sensitive_attr,
+            base_model_params=fairness_base_params,
+        )
     else:
         if stage is None:
             raise ValueError(f"Unknown mitigation technique: {mitigation}")
@@ -763,7 +901,7 @@ def run_single_split_experiment(
             base_model = BaselineLogisticRegression(**config.get('model_params', {}))
             base_model.train(splits['X_train'], splits['y_train'])
 
-        # Apply mitigation technique
+        # Apply single mitigation technique
         fairness_base_params = config.get('fairness_base_model_params')
         result = engine.apply_technique(
             technique_name=mitigation,
@@ -778,10 +916,14 @@ def run_single_split_experiment(
             base_model=base_model,
             base_model_params=fairness_base_params
         )
-    
+
     # Calculate fairness metrics
     y_pred_series = _coerce_label_vector(result['predictions']['y_pred'])
-    y_proba_series = _coerce_probability_vector(result['predictions']['y_proba'])
+    _raw_proba = result['predictions']['y_proba']
+    if _raw_proba is None:
+        y_proba_series = np.full(len(splits['y_test']), np.nan)
+    else:
+        y_proba_series = _coerce_probability_vector(_raw_proba)
     predictions_df = pd.DataFrame({
         'y_true': splits['y_test'].values,
         'y_pred': y_pred_series,
@@ -813,6 +955,7 @@ def run_single_split_experiment(
     if stage == 'post-processing' and base_model is not None:
         model_for_xai = base_model
     if model_for_xai is not None and xai_enabled:
+        model_for_xai = _unwrap_for_xai(model_for_xai) or model_for_xai
         save_experiment_xai(
             exp_id,
             model_for_xai,
@@ -915,7 +1058,8 @@ def run_cv_experiment(
         model = model_class(**config.get('model_params', {}))
         fold_predictions = cv_trainer.get_fold_predictions(model, X_full, y_full, sensitive_full)
     else:
-        if stage is None:
+        combo_chain = config.get('mitigation_combo')
+        if combo_chain is None and stage is None:
             raise ValueError(f"Unknown mitigation technique for CV: {mitigation}")
 
         engine = MitigationEngine()
@@ -941,23 +1085,37 @@ def run_cv_experiment(
             sensitive_train = sensitive_full.iloc[train_idx]
             sensitive_val = sensitive_full.iloc[val_idx]
 
-            base_model = None
-            if stage == 'post-processing':
-                base_model = BaselineLogisticRegression(**config.get('model_params', {}))
-                base_model.train(X_train, y_train)
+            if combo_chain:
+                fairness_base_params = config.get('fairness_base_model_params')
+                result = engine.apply_combo(
+                    techniques=combo_chain,
+                    X_train=X_train,
+                    y_train=y_train,
+                    X_test=X_val,
+                    y_test=y_val,
+                    sensitive_train=sensitive_train,
+                    sensitive_test=sensitive_val,
+                    sensitive_attr=sensitive_attr,
+                    base_model_params=fairness_base_params,
+                )
+            else:
+                base_model = None
+                if stage == 'post-processing':
+                    base_model = BaselineLogisticRegression(**config.get('model_params', {}))
+                    base_model.train(X_train, y_train)
 
-            result = engine.apply_technique(
-                technique_name=mitigation,
-                stage=stage,
-                X_train=X_train,
-                y_train=y_train,
-                X_test=X_val,
-                y_test=y_val,
-                sensitive_train=sensitive_train,
-                sensitive_test=sensitive_val,
-                sensitive_attr=sensitive_attr,
-                base_model=base_model
-            )
+                result = engine.apply_technique(
+                    technique_name=mitigation,
+                    stage=stage,
+                    X_train=X_train,
+                    y_train=y_train,
+                    X_test=X_val,
+                    y_test=y_val,
+                    sensitive_train=sensitive_train,
+                    sensitive_test=sensitive_val,
+                    sensitive_attr=sensitive_attr,
+                    base_model=base_model
+                )
 
             fold_result_entry = {
                 'fold_idx': fold_idx,
@@ -1109,6 +1267,15 @@ def run_combinatorial_analysis(
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
 
+    # Load gate thresholds: experiment config overrides → thresholds.yaml fallback.
+    # Must happen before any experiment result is annotated or ranked.
+    gate_thresholds = load_gate_thresholds(config, project_root)
+    logger.info(
+        f"Gate thresholds: recall_hard_floor={gate_thresholds['recall_hard_floor']:.2f}, "
+        f"min_recall={gate_thresholds['min_recall']:.2f}, "
+        f"max_fairness_violation={gate_thresholds['max_fairness_violation']:.2f}"
+    )
+
     xgb_device = _resolve_xgb_device(config)
     logger.info(f"XGBoost device: {xgb_device}")
 
@@ -1188,7 +1355,39 @@ def run_combinatorial_analysis(
                             }
 
                             experiments.append((exp_id, exp_config))
-    
+
+    # Combo experiments: pre → in → post chains, logistic_regression only.
+    for combo in config.get('mitigation_combos', []):
+        for dataset in config['datasets']:
+            if isinstance(fairness_base_params_cfg, dict) and dataset in fairness_base_params_cfg:
+                fairness_base_params = fairness_base_params_cfg.get(dataset)
+            else:
+                fairness_base_params = fairness_base_params_cfg
+            if not fairness_base_params:
+                fairness_base_params = _load_model_config(project_root, 'logistic_regression')
+            for binning in config['binning_strategies']:
+                for training_method in config['training_methods']:
+                    for variant in _resolve_model_variants(
+                        config, 'logistic_regression', project_root, xgb_device
+                    ):
+                        exp_id = versioning.generate_experiment_id()
+                        exp_config = {
+                            'dataset': dataset,
+                            'binning_strategy': binning,
+                            'mitigation_technique': '+'.join(combo),
+                            'mitigation_combo': combo,
+                            'training_method': training_method,
+                            'cv_folds': config.get('cv_folds', 5),
+                            'random_seed': config.get('random_seed', 42),
+                            'model_type': 'logistic_regression',
+                            'model_variant': variant['name'],
+                            'model_params': variant['params'],
+                            'fairness_base_model_params': fairness_base_params or None,
+                            'sensitive_attributes': sensitive_attrs,
+                            'xai': config.get('xai', {}),
+                        }
+                        experiments.append((exp_id, exp_config))
+
     total_experiments = len(experiments)
     logger.info(f"\nTotal experiments to run: {total_experiments}")
     logger.info(f"  Datasets: {len(config['datasets'])}")
@@ -1218,6 +1417,7 @@ def run_combinatorial_analysis(
         for i, (exp_id, exp_config) in enumerate(experiments, 1):
             logger.info(f"\n[{i}/{total_experiments}] Running experiment {exp_id}...")
             result = run_single_experiment(exp_id, exp_config, versioning, processed_dir, schema_cfg, logger, target_col)
+            _annotate_gate_fields(result, gate_thresholds)
             results.append(result)
             _sm = 'holdout' if result.get('training_method') == 'single_split' else 'cv'
             versioning.save_results(exp_id, result, split_method=_sm)
@@ -1229,9 +1429,10 @@ def run_combinatorial_analysis(
             delayed(run_single_experiment)(exp_id, exp_config, versioning, processed_dir, schema_cfg, logger, target_col)
             for exp_id, exp_config in experiments
         )
-        
-        # Save results
+
+        # Annotate gate fields and save results
         for result in results:
+            _annotate_gate_fields(result, gate_thresholds)
             _sm = 'holdout' if result.get('training_method') == 'single_split' else 'cv'
             versioning.save_results(result['experiment_id'], result, split_method=_sm)
 
