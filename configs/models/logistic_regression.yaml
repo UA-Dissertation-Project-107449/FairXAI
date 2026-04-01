@@ -23,18 +23,15 @@ hyperparameters:
   
   # Reproducibility
   random_state: 42
-  
-  # Multi-class (not used for binary)
-  multi_class: "auto"
 
 training:
   validation_strategy: "holdout"  # or "cross_validation"
   cv_folds: 5  # if cross_validation
-  
+
 features:
   selection: "all"  # or "top_k", "rfe"
   scaling: "standard"  # Required for logistic regression
-  
+
 explainability:
   native_interpretability: true
   coefficient_analysis: true
