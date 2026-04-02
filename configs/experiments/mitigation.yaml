@@ -14,8 +14,8 @@ data:
   datasets:
     - cleveland
     - kaggle_heart
-  preprocessing: "configs/pipelines/baseline.yaml"  # Use baseline preprocessing
-  
+  preprocessing: "configs/experiments/baseline.yaml"  # Use baseline preprocessing
+
 baseline:
   model: "logistic_regression"
   config: "configs/models/logistic_regression.yaml"
@@ -84,7 +84,7 @@ mitigation_strategies:
     parameters:
       constraints: "DemographicParity"  # or "EqualizedOdds"
       eps: 0.05
-      max_iter: 50
+      max_iter: 20  # 50 for full run; reduced to 20 for tractable timing on large datasets
       nu: 1e-6
   
   grid_search:
@@ -94,7 +94,7 @@ mitigation_strategies:
     description: "Grid search over lambda values for fairness-accuracy trade-off"
     parameters:
       constraints: "EqualizedOdds"
-      grid_size: 20
+      grid_size: 10  # 20 for full run; halved for tractable timing on large datasets
       grid_limit: 2.0
   
   adversarial_debiasing:

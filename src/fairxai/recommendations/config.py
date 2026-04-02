@@ -53,6 +53,7 @@ class TriageConfig:
         fair = raw.get("fairness", {})
         self.max_fairness_violation: float = fair.get("max_fairness_violation", 0.10)
         self.min_recall: float = fair.get("min_recall", 0.70)
+        self.recall_hard_floor: float = fair.get("recall_hard_floor", 0.60)
 
         # Task framing
         tf = raw.get("task_framing", {})

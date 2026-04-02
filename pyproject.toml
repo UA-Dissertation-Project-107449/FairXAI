@@ -30,6 +30,7 @@ experiment = [
     "scipy>=1.10.0",            # (reqs: 1.15.3) distance metrics, statistical functions
     "imbalanced-learn>=0.12.0", # (reqs: 0.14.0) SMOTE, oversampling, undersampling
     "fairlearn>=0.10.0",        # (reqs: 0.13.0) fairness metrics and mitigation algorithms
+    "xgboost>=3.2.0",           # (reqs: 3.2.0) gradient-boosted trees for model_type='xgboost'
     "interpret>=0.6.0",         # (reqs: 0.6.10) InterpretML — loads the EBM difficulty model
 ]
 

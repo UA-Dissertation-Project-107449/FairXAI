@@ -18,10 +18,9 @@ split:
   random_state: 42
 
 training:
-  model: logistic_regression
-  solver: lbfgs
-  C: 1.0
-  max_iter: 1000
+  model: logistic_regression   # default model for single-model runs
+  model_types: [logistic_regression, random_forest, svm, xgboost]
+  # Base hyperparameters for each model type live in configs/models/<type>.yaml.
   thresholds: [0.3, 0.4, 0.5, 0.6, 0.7]
 
 fairness:
@@ -33,3 +32,4 @@ xai:
   lime_instances: 3
   cv_lime_instances: 3
   global_max_samples: 1000
+  skip_shap_model_types: [svm]

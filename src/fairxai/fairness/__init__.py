@@ -6,16 +6,16 @@ experiments.
 
 from .metrics import FairnessMetrics
 from .mitigation import (
-    PreProcessingMitigation,
     InProcessingMitigation,
+    MitigationEngine,
     PostProcessingMitigation,
-    MitigationEngine
+    PreProcessingMitigation,
 )
 
 __all__ = [
-    'FairnessMetrics',
-    'PreProcessingMitigation',
-    'InProcessingMitigation',
-    'PostProcessingMitigation',
-    'MitigationEngine'
+    "FairnessMetrics",
+    "PreProcessingMitigation",
+    "InProcessingMitigation",
+    "PostProcessingMitigation",
+    "MitigationEngine",
 ]

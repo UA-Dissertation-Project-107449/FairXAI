@@ -55,7 +55,9 @@ METRIC_IMBALANCE_ALIASES = {
 }
 
 
-def _select_numeric(df: pd.DataFrame, target: str) -> tuple[np.ndarray, np.ndarray] | tuple[None, None]:
+def _select_numeric(
+    df: pd.DataFrame, target: str
+) -> tuple[np.ndarray, np.ndarray] | tuple[None, None]:
     if target not in df.columns:
         return None, None
 
@@ -81,7 +83,11 @@ def _select_numeric(df: pd.DataFrame, target: str) -> tuple[np.ndarray, np.ndarr
 def get_supported_complexity_metrics(include_aliases: bool = False) -> list[str]:
     if not include_aliases:
         return list(SUPPORTED_COMPLEXITY_METRICS)
-    aliases = [METRIC_IMBALANCE_ALIASES[m] for m in SUPPORTED_COMPLEXITY_METRICS if m in METRIC_IMBALANCE_ALIASES]
+    aliases = [
+        METRIC_IMBALANCE_ALIASES[m]
+        for m in SUPPORTED_COMPLEXITY_METRICS
+        if m in METRIC_IMBALANCE_ALIASES
+    ]
     return list(SUPPORTED_COMPLEXITY_METRICS) + aliases
 
 
@@ -90,7 +96,10 @@ def is_primary_complexity_metric(metric_name: str) -> bool:
 
 
 def is_complexity_metric_key(metric_name: str) -> bool:
-    return metric_name in SUPPORTED_COMPLEXITY_METRICS or metric_name in METRIC_IMBALANCE_ALIASES.values()
+    return (
+        metric_name in SUPPORTED_COMPLEXITY_METRICS
+        or metric_name in METRIC_IMBALANCE_ALIASES.values()
+    )
 
 
 def _encode_binary_labels(y: np.ndarray) -> np.ndarray | None:
@@ -108,7 +117,9 @@ def _with_aliases(metrics: dict[str, float | None]) -> dict[str, float | None]:
     return enriched
 
 
-def _stable_subsample(X: np.ndarray, y: np.ndarray, max_samples: int, random_seed: int) -> tuple[np.ndarray, np.ndarray]:
+def _stable_subsample(
+    X: np.ndarray, y: np.ndarray, max_samples: int, random_seed: int
+) -> tuple[np.ndarray, np.ndarray]:
     if max_samples <= 0 or len(y) <= max_samples:
         return X, y
 
@@ -206,7 +217,9 @@ def f4_overlap(X: np.ndarray, y: np.ndarray) -> float | None:
     return float((f4_c0 + f4_c1) / 2.0)
 
 
-def l1_linear_boundary_error(X: np.ndarray, y: np.ndarray, svc_max_iter: int = 1000) -> float | None:
+def l1_linear_boundary_error(
+    X: np.ndarray, y: np.ndarray, svc_max_iter: int = 1000
+) -> float | None:
     if LinearSVC is None:
         return None
     try:
@@ -248,7 +261,9 @@ def l2_linear_error(X: np.ndarray, y: np.ndarray, svc_max_iter: int = 1000) -> f
         return None
 
 
-def l3_linear_synth_error(X: np.ndarray, y: np.ndarray, random_seed: int = 42, svc_max_iter: int = 1000) -> float | None:
+def l3_linear_synth_error(
+    X: np.ndarray, y: np.ndarray, random_seed: int = 42, svc_max_iter: int = 1000
+) -> float | None:
     if LinearSVC is None:
         return None
     try:
@@ -391,7 +406,9 @@ def _t1_class_loop(class_data: np.ndarray, sorted_indices: np.ndarray, radii: np
             continue
 
         n_hyperspheres += 1
-        dist_row = pairwise_distances(class_data[idx, :].reshape(1, -1), class_data[is_remaining, :])
+        dist_row = pairwise_distances(
+            class_data[idx, :].reshape(1, -1), class_data[is_remaining, :]
+        )
         mask = dist_row > radii[idx]
         is_remaining[is_remaining] = np.logical_and(mask.flatten(), is_remaining[is_remaining])
         is_remaining[idx] = False
@@ -472,7 +489,13 @@ def raug_components(
     return r_maj_norm, r_min_norm, raug_final
 
 
-def raug_overlap(X: np.ndarray, y: np.ndarray, k: int = 5, delta: int = 2, output_variant: str = "minority_normalized") -> float | None:
+def raug_overlap(
+    X: np.ndarray,
+    y: np.ndarray,
+    k: int = 5,
+    delta: int = 2,
+    output_variant: str = "minority_normalized",
+) -> float | None:
     r_maj_norm, r_min_norm, raug_final = raug_components(X, y, k=k, delta=delta)
     if r_maj_norm is None or r_min_norm is None or raug_final is None:
         return None
@@ -485,7 +508,9 @@ def raug_overlap(X: np.ndarray, y: np.ndarray, k: int = 5, delta: int = 2, outpu
     return r_min_norm
 
 
-def bayes_imbalance(X: np.ndarray, y: np.ndarray, k: int = 5, search_depth: int = 100) -> float | None:
+def bayes_imbalance(
+    X: np.ndarray, y: np.ndarray, k: int = 5, search_depth: int = 100
+) -> float | None:
     if NearestNeighbors is None:
         return None
 
@@ -532,7 +557,9 @@ def bayes_imbalance(X: np.ndarray, y: np.ndarray, k: int = 5, search_depth: int 
     fp_balanced = (n0 / n1) * fp_values
     fn_values = m_values / (denom + 1e-12)
 
-    ibi = (fp_balanced / (fp_balanced + fn_values + 1e-12)) - (fp_values / (fp_values + fn_values + 1e-12))
+    ibi = (fp_balanced / (fp_balanced + fn_values + 1e-12)) - (
+        fp_values / (fp_values + fn_values + 1e-12)
+    )
     return float(np.mean(ibi))
 
 
@@ -580,7 +607,9 @@ def compute_complexity_metrics(
         "L2": l2_linear_error(X_main, y_main, svc_max_iter=svc_max_iter),
         "L3": l3_linear_synth_error(X_main, y_main, random_seed=seed, svc_max_iter=svc_max_iter),
         "T1": t1_structural_overlap(X_t1, y_t1),
-        "BayesImbalance": bayes_imbalance(X_main, y_main, k=config.bayes_k, search_depth=config.bayes_search_depth),
+        "BayesImbalance": bayes_imbalance(
+            X_main, y_main, k=config.bayes_k, search_depth=config.bayes_search_depth
+        ),
     }
 
     return _with_aliases(metrics)

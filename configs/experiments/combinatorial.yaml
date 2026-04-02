@@ -1,10 +1,23 @@
 # Combinatorial Experiment Configuration
 # Tests all combinations of: dataset × binning × mitigation × training_method
 
+# Compute accelerator for XGBoost training.
+# Options: auto | cpu | cuda
+#   auto  — detects NVIDIA GPU via nvidia-smi at startup; falls back to cpu
+#   cuda  — force GPU (requires NVIDIA GPU + CUDA drivers)
+#   cpu   — force CPU (safe default for AMD/integrated/no-CUDA environments)
+# Note: ROCm (AMD GPU) is not yet supported; AMD machines should use cpu.
+accelerator: auto
+
 # Datasets to test
+# Note: cardio70k age is stored in days and is normalized to years during preprocessing.
+# cardio70k is subsampled to 10k rows by default (--max-samples 10000 in preprocess_data.py)
+# due to consumer hardware constraints (SVM RBF OOM on full 70k; ~6 min for LR-only sweep).
+# Restore --max-samples or remove the default to run on full 70k (HPC recommended).
 datasets:
   - cleveland
-  - kaggle_heart
+  # - kaggle_heart
+  # - cardio70k
 
 # Age binning strategies
 binning_strategies:
@@ -15,37 +28,99 @@ binning_strategies:
   - quantile_5
 
 # Mitigation techniques
+# Justification for exclusions:
+#   ros/rus: random resampling has no fairness guarantee and discards information;
+#            methodologically weaker than SMOTE/ADASYN for clinical tabular data.
+#            Excluded to keep the sweep tractable and focused on richer methods.
+#
+# NOTE on grid_search: this is fairlearn.GridSearchReduction (lambda sweep for
+#   fairness-accuracy trade-off), NOT sklearn GridSearchCV for hyperparameter tuning.
+#   Hyperparameter tuning is handled separately via model_variants below.
 mitigation_techniques:
   - baseline
   - reweighting
   - smote
-  - ros
-  - rus
   - adasyn
   - exponentiated_gradient
-  - grid_search
+  - grid_search          # fairlearn.GridSearchReduction — fairness in-processing
   - threshold_optimizer
+  # Deferred: ros (random oversampling) — weaker than smote/adasyn, no fairness guarantee
+  # Deferred: rus (random undersampling) — information loss, no fairness guarantee
+
+# Sequential mitigation combos: pre → in or pre → post chains.
+# Each entry is a list of techniques applied in order (left to right).
+# Only logistic_regression model runs combos (same restriction as single mitigation).
+# Stage-chain rule: pre* → in? → post? (at most one in-processing and one post-processing).
+mitigation_combos:
+  - [smote, exponentiated_gradient]              # oversample → fairness-constrained training
+  - [adasyn, exponentiated_gradient]             # adaptive oversample → fairness-constrained training
+  - [smote, threshold_optimizer]                 # oversample → post-hoc threshold calibration
+  - [reweighting, threshold_optimizer]           # reweight → post-hoc threshold calibration
+  - [smote, exponentiated_gradient, threshold_optimizer]   # 3-stage: pre → in → post
+  - [adasyn, exponentiated_gradient, threshold_optimizer]  # 3-stage: pre → in → post
 
 # Training methods
 training_methods:
   - single_split
   - kfold_cv
 
+# Model families to compare.
+# Note: mitigation techniques are only executed with logistic_regression (see MITIGATION_SUPPORTED_MODEL_TYPES).
+# Other models run baseline-only experiments.
+# Warning: SVM on cardio70k full 70k rows OOMs on consumer hardware (RBF kernel is O(n²)).
+#          With --max-samples 10000, SVM linear is safe. For full 70k, exclude SVM or use HPC.
+model_types:
+  - logistic_regression
+  # - random_forest
+  # - svm
+  # - xgboost
+
+# Model variants: experiment-specific overrides merged onto base hyperparameters.
+# Base params are loaded from configs/models/<model_type>.yaml at runtime.
+# Only define keys here that differ from the model file defaults.
+model_variants:
+  logistic_regression:
+    - name: c_1_0
+      params:
+        C: 1.0
+    - name: c_0_5
+      params:
+        C: 0.5
+
+  random_forest:
+    - name: rf_shallow
+      params:
+        n_estimators: 250
+        max_depth: 8
+    - name: rf_deeper
+      params:
+        n_estimators: 350
+        max_depth: 14
+
+  svm:
+    - name: svm_linear
+      params:
+        kernel: linear
+        C: 1.0
+    # svm_rbf excluded for now: RBF kernel is O(n²) in training.
+    # On cardio70k (70k rows) this would take hours. Re-enable only on
+    # small datasets or with an explicit dataset-size guard in the runner.
+    # - name: svm_rbf
+    #   params:
+    #     kernel: rbf
+    #     C: 1.0
+    #     gamma: scale
+
+  xgboost:
+    - name: xgb_small
+      params:
+        n_estimators: 200
+        max_depth: 4
+        learning_rate: 0.05
+
 # Cross-validation settings
 cv_folds: 5
 random_seed: 42
-
-# Model parameters
-model_params:
-  C: 1.0
-  max_iter: 1000
-  class_weight: balanced
-  random_state: 42
-
-# Optional: override base estimator params for in-processing fairness methods
-# (e.g., set solver/penalty for fairlearn GridSearch/ExponentiatedGradient)
-# If empty or missing, defaults to model_params.
-fairness_base_model_params: {}
 
 # Sensitive / group attributes (evaluated if present in the dataset)
 sensitive_attributes:
@@ -54,17 +129,30 @@ sensitive_attributes:
   - ethnicity
   - group_cluster
 
-# Fairness evaluation thresholds (for filtering results)
+# Fairness evaluation thresholds (for filtering results).
+# These override the canonical thresholds.yaml values for this experiment.
+# Keys consumed by _gates.load_gate_thresholds(): min_recall, recall_hard_floor,
+# max_fairness_violation.  Keys consumed by comparison runner only:
+# min_improvement_pct, max_performance_drop_pct.
 fairness_thresholds:
-  min_improvement_pct: 10  # Minimum fairness improvement (%)
-  max_performance_drop_pct: 15  # Maximum allowed performance drop (%)
-  min_recall: 0.70  # Minimum clinical safety threshold
+  min_improvement_pct: 10          # Minimum fairness improvement (%) — comparison runner
+  max_performance_drop_pct: 15     # Maximum allowed performance drop (%) — comparison runner
+  min_recall: 0.70                 # Clinical goal — ranking preference tier
+  recall_hard_floor: 0.60          # Hard exclusion floor — configs below this are dropped
+  max_fairness_violation: 0.10     # Demographic parity hard gate
 
 # XAI settings
 xai:
   enabled: true
+  mode: top_configs          # all | top_configs | disabled
+  top_k: 3                   # interpreted per dataset when top_k_per_dataset=true
+  top_k_per_dataset: true
   max_samples: 200
+  top_max_samples: 120
   lime_instances: 2
+  skip_shap_model_types: [svm]
+  allow_svm_shap: false
+  allow_svm_shap_on_top_configs: true
 
 # Paths
 paths:
@@ -73,6 +161,28 @@ paths:
 
 # Parallel execution
 enable_parallelization: true
-n_jobs: -1  # -1 for all cores
+n_jobs: 6  # 6 threads; i5-1135G7 has 8 logical cores, leave 2 for OS/other work
 
-# Total combinations: 2 datasets × 5 binning × 9 mitigation × 2 training = 180 experiments
+# Combination counting guide (formula-based so it stays correct after config edits)
+# Symbols:
+#   D = number of datasets
+#   B = number of binning_strategies
+#   T = number of training_methods
+#   M = number of mitigation_techniques (applies fully to logistic_regression only)
+#   C = number of mitigation_combos (logistic_regression only)
+#   V_lr = number of logistic_regression variants
+#   V_other = sum of variants for non-logistic models in model_types
+#
+# Base experiments:
+#   D * B * T * (V_lr * M + V_other)
+# Combo experiments (LR only):
+#   D * B * T * (V_lr * C)
+# Total experiments:
+#   D * B * T * (V_lr * (M + C) + V_other)
+#
+# Example A (3 datasets, 5 bins, 2 training types, 5 mitigations, 6 combos,
+#            variants: LR=2, RF=2, SVM=1, XGB=1 => V_other=4):
+#   3 * 5 * 2 * (2*(5+6) + 4) = 780
+#
+# Example B (same setup but 7 mitigations):
+#   3 * 5 * 2 * (2*(7+6) + 4) = 900

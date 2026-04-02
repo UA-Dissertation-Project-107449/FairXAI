@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import json
+from pathlib import Path
+
 import yaml
 
 DEFAULT_DATASETS_BY_MEDICAL_AREA: dict[str, list[str]] = {

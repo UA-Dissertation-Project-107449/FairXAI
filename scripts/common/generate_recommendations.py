@@ -20,102 +20,102 @@ Usage:
         --format both
 """
 
-import sys
-import logging
 import argparse
 import json
+import logging
 import os
+import sys
 from pathlib import Path
 
 # Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from fairxai.cli.runner_base import get_project_root, load_pipeline_config, setup_phase_logging
-from fairxai.cli.runner_utils import resolve_run_id, get_run_root
+from fairxai.cli.runner_utils import get_run_root, resolve_run_id
 from fairxai.recommendations.engine import RecommendationEngine
-from fairxai.recommendations.ingestion import ingestion_from_schema, confirm_ingestion
+from fairxai.recommendations.ingestion import confirm_ingestion, ingestion_from_schema
 from fairxai.recommendations.output import to_json_string, to_markdown
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description='Generate fairness triage recommendations'
+    parser = argparse.ArgumentParser(description="Generate fairness triage recommendations")
+    parser.add_argument(
+        "--pipeline",
+        type=str,
+        default="cardiac",
+        choices=["cardiac", "dermatology"],
+        help="Pipeline name (e.g., cardiac, dermatology)",
     )
     parser.add_argument(
-        '--pipeline',
-        type=str,
-        default='cardiac',
-        choices=['cardiac', 'dermatology'],
-        help='Pipeline name (e.g., cardiac, dermatology)',
+        "-v", "--verbose", action="count", default=0, help="Verbosity: -v=info, -vv=debug"
     )
-    parser.add_argument('-v', '--verbose', action='count', default=0, help='Verbosity: -v=info, -vv=debug')
     parser.add_argument(
-        '--run-id',
+        "--run-id",
         type=str,
-        default=os.getenv('RUN_ID'),
-        help='Run identifier (optional, enables run-scoped outputs)',
+        default=os.getenv("RUN_ID"),
+        help="Run identifier (optional, enables run-scoped outputs)",
     )
 
     # Ad-hoc CSV mode
-    parser.add_argument('--csv', type=str, help='Path to a CSV file (ad-hoc mode)')
-    parser.add_argument('--label', type=str, help='Label/target column name')
+    parser.add_argument("--csv", type=str, help="Path to a CSV file (ad-hoc mode)")
+    parser.add_argument("--label", type=str, help="Label/target column name")
     parser.add_argument(
-        '--sensitive',
+        "--sensitive",
         type=str,
-        nargs='+',
-        help='Sensitive attribute column names',
+        nargs="+",
+        help="Sensitive attribute column names",
     )
     parser.add_argument(
-        '--identifier',
+        "--identifier",
         type=str,
-        nargs='*',
-        help='Identifier column names (to exclude from features)',
+        nargs="*",
+        help="Identifier column names (to exclude from features)",
     )
     parser.add_argument(
-        '--dataset-name',
+        "--dataset-name",
         type=str,
-        help='Human-readable dataset name',
+        help="Human-readable dataset name",
     )
 
     # Schema-based mode
     parser.add_argument(
-        '--schema',
+        "--schema",
         type=str,
-        help='Path to schema JSON (e.g., configs/schema/cardiac.json)',
+        help="Path to schema JSON (e.g., configs/schema/cardiac.json)",
     )
     parser.add_argument(
-        '--dataset-key',
+        "--dataset-key",
         type=str,
-        help='Key within schema JSON (e.g., cleveland)',
+        help="Key within schema JSON (e.g., cleveland)",
     )
 
     # Output config
     parser.add_argument(
-        '--output-dir',
+        "--output-dir",
         type=str,
-        help='Output directory (default: output/{pipeline}/recommendations/)',
+        help="Output directory (default: output/{pipeline}/recommendations/)",
     )
     parser.add_argument(
-        '--format',
+        "--format",
         type=str,
-        default='both',
-        choices=['json', 'markdown', 'both'],
-        help='Output format',
+        default="both",
+        choices=["json", "markdown", "both"],
+        help="Output format",
     )
     parser.add_argument(
-        '--overrides',
+        "--overrides",
         type=str,
         help='JSON string of column overrides, e.g. \'{"col": {"role": "sensitive"}}\'',
     )
     parser.add_argument(
-        '--config',
+        "--config",
         type=str,
-        help='Path to recommendation thresholds YAML',
+        help="Path to recommendation thresholds YAML",
     )
     parser.add_argument(
-        '--history-path',
+        "--history-path",
         type=str,
-        help='Path to results directory for historical reference',
+        help="Path to results directory for historical reference",
     )
 
     args = parser.parse_args()
@@ -125,22 +125,25 @@ def main():
     project_root = get_project_root(Path(__file__))
     run_id = resolve_run_id(args.run_id) if args.run_id else None
     setup_phase_logging(
-        project_root, 'recommendations.log', verbose=args.verbose,
-        run_id=run_id, stage_name='recommend',
+        project_root,
+        "recommendations.log",
+        verbose=args.verbose,
+        run_id=run_id,
+        stage_name="recommend",
     )
 
     # Determine output directory
     if args.output_dir:
         output_dir = Path(args.output_dir)
     elif run_id:
-        output_dir = get_run_root(project_root / f'output/{pipeline}', run_id) / 'recommendations'
+        output_dir = get_run_root(project_root / f"output/{pipeline}", run_id) / "recommendations"
     else:
-        output_dir = project_root / f'output/{pipeline}/recommendations'
+        output_dir = project_root / f"output/{pipeline}/recommendations"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Initialize engine
-    config_path = args.config or str(project_root / 'configs/recommendations/thresholds.yaml')
-    history_path = args.history_path or str(project_root / f'output/{pipeline}')
+    config_path = args.config or str(project_root / "configs/recommendations/thresholds.yaml")
+    history_path = args.history_path or str(project_root / f"output/{pipeline}")
 
     engine = RecommendationEngine(
         config_path=config_path,
@@ -192,7 +195,7 @@ def _process_adhoc(engine, args, output_dir, overrides):
         ingestion = confirm_ingestion(ingestion, overrides)
 
     report = engine.generate(ingestion)
-    name = ingestion.dataset_name or 'dataset'
+    name = ingestion.dataset_name or "dataset"
     _save_report(report, output_dir, name, args.format)
 
 
@@ -205,8 +208,9 @@ def _process_schema_dataset(engine, project_root, args, output_dir):
     logging.info(f"Processing dataset '{args.dataset_key}' from schema: {schema_path}")
 
     ingestion = engine.ingest_from_schema(
-        schema_path, args.dataset_key,
-        data_dir=str(Path(schema_path).parent.parent.parent / 'data' / 'raw' / 'cardiac'),
+        schema_path,
+        args.dataset_key,
+        data_dir=str(Path(schema_path).parent.parent.parent / "data" / "raw" / "cardiac"),
     )
     report = engine.generate(ingestion)
     _save_report(report, output_dir, args.dataset_key, args.format)
@@ -215,21 +219,25 @@ def _process_schema_dataset(engine, project_root, args, output_dir):
 def _process_pipeline_datasets(engine, project_root, pipeline, args, output_dir):
     """Process all standardized datasets in the pipeline's raw directory."""
     pipeline_cfg = load_pipeline_config(project_root, pipeline)
-    data_raw = project_root / pipeline_cfg['paths']['raw_dir']
-    schema_path = str(project_root / pipeline_cfg['runtime']['schema_mapping_json'])
-    sensitive_attrs = pipeline_cfg.get('fairness', {}).get('sensitive_attributes', ['age_group', 'sex'])
+    data_raw = project_root / pipeline_cfg["paths"]["raw_dir"]
+    schema_path = str(project_root / pipeline_cfg["runtime"]["schema_mapping_json"])
+    sensitive_attrs = pipeline_cfg.get("fairness", {}).get(
+        "sensitive_attributes", ["age_group", "sex"]
+    )
 
-    dataset_files = sorted(data_raw.glob('*_standardized.csv'))
+    dataset_files = sorted(data_raw.glob("*_standardized.csv"))
 
     if not dataset_files:
         logging.error(f"No standardized datasets found in {data_raw}")
-        logging.error("Run the load_data phase first (scripts/common/load_data.py --pipeline %s)." % pipeline)
+        logging.error(
+            "Run the load_data phase first (scripts/common/load_data.py --pipeline %s)." % pipeline
+        )
         return
 
     logging.info(f"Found {len(dataset_files)} standardized dataset(s)")
 
     for filepath in dataset_files:
-        dataset_name = filepath.stem.replace('_standardized', '')
+        dataset_name = filepath.stem.replace("_standardized", "")
         logging.info(f"\n{'='*60}")
         logging.info(f"Generating recommendations: {dataset_name}")
         logging.info(f"{'='*60}")
@@ -267,15 +275,15 @@ def _log_summary(report, dataset_name):
 
 def _save_report(report, output_dir, name, fmt):
     """Write report to disk in requested format(s)."""
-    if fmt in ('json', 'both'):
-        json_path = output_dir / f'{name}_triage.json'
-        with open(json_path, 'w', encoding='utf-8') as f:
+    if fmt in ("json", "both"):
+        json_path = output_dir / f"{name}_triage.json"
+        with open(json_path, "w", encoding="utf-8") as f:
             f.write(to_json_string(report))
         logging.info(f"[SUCCESS] JSON saved: {json_path}")
 
-    if fmt in ('markdown', 'both'):
-        md_path = output_dir / f'{name}_triage.md'
-        with open(md_path, 'w', encoding='utf-8') as f:
+    if fmt in ("markdown", "both"):
+        md_path = output_dir / f"{name}_triage.md"
+        with open(md_path, "w", encoding="utf-8") as f:
             f.write(to_markdown(report))
         logging.info(f"[SUCCESS] Markdown saved: {md_path}")
 

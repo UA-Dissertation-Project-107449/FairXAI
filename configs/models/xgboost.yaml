@@ -1,0 +1,55 @@
+# XGBoost Model Configuration
+
+model_name: "xgboost"
+model_type: "xgboost.XGBClassifier"
+
+description: |
+  Gradient-boosted decision trees via XGBoost.
+  Uses histogram-based tree method (hist) for speed; device (cpu/cuda) is
+  injected at runtime from the experiment's accelerator setting -- do not
+  hard-code device here.
+
+hyperparameters:
+  # Ensemble size and depth
+  n_estimators: 250
+  max_depth: 4
+
+  # Learning schedule
+  learning_rate: 0.05
+
+  # Stochastic sub-sampling (regularization)
+  subsample: 0.9
+  colsample_bytree: 0.9
+
+  # L2 regularization
+  reg_lambda: 1.0
+
+  # Parallelism / reproducibility
+  n_jobs: -1
+  random_state: 42
+
+  # Training objective
+  eval_metric: "logloss"
+
+  # Algorithm — device is injected at runtime (cpu / cuda / auto) by the runner;
+  # it is NOT set here to keep this file hardware-agnostic.
+  tree_method: "hist"
+
+training:
+  validation_strategy: "cross_validation"
+  cv_folds: 5
+
+features:
+  selection: "all"
+  scaling: "none"  # trees are scale-invariant
+
+explainability:
+  native_interpretability: false
+  feature_importance: true       # gain-based; more reliable than RF gini
+  supports_shap: true            # TreeExplainer (fast, exact)
+  supports_lime: true
+
+fairness:
+  supports_sample_weights: true
+  supports_class_weights: false  # XGBoost uses scale_pos_weight instead; handled separately
+  supports_fairness_constraints: false

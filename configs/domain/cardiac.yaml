@@ -99,17 +99,88 @@ fairness_context:
   protected_groups:
     - age_group
     - sex
-  
+
   known_biases:
     - "Age groups 60+ are overrepresented in positive class"
     - "Males have higher disease prevalence in Cleveland dataset"
     - "Females underrepresented in both datasets (historical bias)"
-  
+
   clinical_relevance:
     critical_metrics:
       - recall  # Minimize false negatives (missing actual disease)
       - calibration  # Probability estimates must be reliable
-    
+
     acceptable_tradeoffs:
       precision: "Can tolerate some false positives for safety"
       specificity: "Secondary to sensitivity in healthcare context"
+
+# ── Clinical validity constraints ─────────────────────────────────────
+# Applied during preprocessing, after age normalization, before binning.
+# Keys are canonical feature names; code resolves them to raw column names via
+# _CONSTRAINT_ALIASES in preprocess_data.py.
+# default_action: drop  -- remove violating rows (safe for training; log count)
+# default_action: flag  -- keep rows, add <col>_invalid boolean column instead
+#
+# SCOPE: continuous/numeric features only.
+# Categorical features (e.g. chest pain type, resting ECG, fasting blood sugar,
+# exercise angina, ST slope, thalassemia, cholesterol/glucose ordinal codes in
+# cardio70k) are intentionally excluded. Their valid values are enforced by the
+# schema harmonization stage (load_data.py / loaders.py), not here. Adding range
+# checks on ordinal codes would be redundant and fragile across dataset encodings.
+clinical_constraints:
+  default_action: drop
+
+  age:
+    min: 1          # 0 or negative is impossible; already normalised to years
+    max: 120
+    allow_null: false
+    allow_zero: false
+
+  resting_blood_pressure:
+    min: 40         # below 40 mmHg = haemorrhagic shock / recording error
+    max: 250        # above 250 = severe hypertensive crisis; likely data entry error
+    allow_null: false
+    allow_zero: false
+    note: "Maps to: trestbps (cleveland), RestingBP (kaggle_heart), ap_hi (cardio70k)"
+
+  diastolic_blood_pressure:
+    min: 30
+    max: 200
+    allow_null: false
+    allow_zero: false
+    note: "Maps to: ap_lo (cardio70k only)"
+
+  serum_cholesterol:
+    min: 100        # <100 mg/dL possible but extremely rare in practice; treat as suspect
+    max: 600        # >600 consistent with familial hypercholesterolaemia
+    allow_null: false
+    allow_zero: false   # 0 mg/dL = missing data encoded as zero; 172 rows in kaggle_heart
+    note: "Maps to: chol (cleveland), Cholesterol (kaggle_heart). cardio70k uses categorical 1/2/3 -- not applied."
+
+  max_heart_rate:
+    min: 50         # below 50 bpm at peak exercise = extreme bradycardia / recording error
+    max: 230        # theoretical human maximum; >220 almost always a recording error
+    allow_null: false
+    allow_zero: false
+    note: "Maps to: thalach (cleveland), MaxHR (kaggle_heart)"
+
+  st_depression:
+    min: -5         # negative = ST elevation, still physiologically meaningful
+    max: 10         # >10 mm is an extreme outlier / recording error
+    allow_null: false
+    allow_zero: true    # 0 mm = no depression, perfectly valid
+    note: "Maps to: oldpeak (cleveland), Oldpeak (kaggle_heart)"
+
+  height_cm:
+    min: 100        # shortest recorded adult: 54.6 cm; 100 cm is a conservative bound
+    max: 250        # tallest person recorded: 272 cm; 250 cm is a conservative upper bound
+    allow_null: false
+    allow_zero: false
+    note: "Maps to: height (cardio70k only)"
+
+  weight_kg:
+    min: 30
+    max: 300
+    allow_null: false
+    allow_zero: false
+    note: "Maps to: weight (cardio70k only)"

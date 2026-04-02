@@ -59,8 +59,15 @@ def _resolve_input_csv(filename: str, datasets_dir: str | Path | None = None) ->
 
 
 _TARGET_COLUMN_HINTS = [
-    "target", "label", "class", "outcome", "result",
-    "heart_disease", "diagnosis", "y", "output",
+    "target",
+    "label",
+    "class",
+    "outcome",
+    "result",
+    "heart_disease",
+    "diagnosis",
+    "y",
+    "output",
 ]
 
 
@@ -143,10 +150,7 @@ def _compute_pca2d(X: pd.DataFrame, y: pd.Series) -> list[list[float | int]]:
     # Pad to 2 columns if dataset has only 1 numeric feature
     if coords.shape[1] < 2:
         coords = np.hstack([coords, np.zeros((coords.shape[0], 1))])
-    return [
-        [float(row[0]), float(row[1]), int(label)]
-        for row, label in zip(coords, y.values)
-    ]
+    return [[float(row[0]), float(row[1]), int(label)] for row, label in zip(coords, y.values)]
 
 
 def _compute_feature_type_summary(X: pd.DataFrame) -> dict[str, int]:
@@ -236,7 +240,9 @@ def _build_triage_report(
     return report.to_dict(), feature_summary
 
 
-def _predict_ebm_difficulty(metrics: dict[str, Any], ebm_model_path: str | Path | None = None) -> float:
+def _predict_ebm_difficulty(
+    metrics: dict[str, Any], ebm_model_path: str | Path | None = None
+) -> float:
     missing = [name for name in EBM_FEATURE_ORDER if _to_float_or_none(metrics.get(name)) is None]
     if missing:
         raise ValueError(f"Cannot compute ebmDifficulty; missing metrics: {', '.join(missing)}")
@@ -252,7 +258,9 @@ def _predict_ebm_difficulty(metrics: dict[str, Any], ebm_model_path: str | Path 
                 "Install the FairXAI experiment dependencies in the active environment."
             ) from exc
         raise
-    input_features = np.array([float(metrics[name]) for name in EBM_FEATURE_ORDER], dtype=float).reshape(1, -1)
+    input_features = np.array(
+        [float(metrics[name]) for name in EBM_FEATURE_ORDER], dtype=float
+    ).reshape(1, -1)
     prediction = model.predict(input_features)[0]
     return float(prediction)
 
@@ -311,10 +319,13 @@ def characterize_dataset(
     for name in EBM_FEATURE_ORDER:
         metrics[name] = _round_metric(complexity.get(name))
 
-    metrics["ebmDifficulty"] = float(np.clip(
-        _predict_ebm_difficulty(metrics=metrics, ebm_model_path=ebm_model_path),
-        0.0, 1.0,
-    ))
+    metrics["ebmDifficulty"] = float(
+        np.clip(
+            _predict_ebm_difficulty(metrics=metrics, ebm_model_path=ebm_model_path),
+            0.0,
+            1.0,
+        )
+    )
 
     pca2d = _compute_pca2d(X, y)
 

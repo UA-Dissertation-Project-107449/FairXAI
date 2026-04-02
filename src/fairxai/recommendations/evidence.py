@@ -11,10 +11,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-
 # ---------------------------------------------------------------------------
 # Basic stats
 # ---------------------------------------------------------------------------
+
 
 def get_n_samples(profile: Dict) -> int:
     return profile.get("basic_stats", {}).get("n_samples", 0)
@@ -42,6 +42,7 @@ def get_imbalance_ratio(profile: Dict) -> float:
 # Sensitive attribute helpers
 # ---------------------------------------------------------------------------
 
+
 def get_sensitive_attrs(profile: Dict) -> List[str]:
     """Return the list of sensitive attributes present in the profile."""
     return list(profile.get("sensitive_attr_distribution", {}).keys())
@@ -61,6 +62,7 @@ def get_group_proportions(profile: Dict, attr: str) -> Dict[str, float]:
 # Representation balance
 # ---------------------------------------------------------------------------
 
+
 def get_size_ratio(profile: Dict, attr: str) -> Optional[float]:
     return profile.get("representation_balance", {}).get(attr, {}).get("size_ratio")
 
@@ -78,6 +80,7 @@ def get_cv(profile: Dict, attr: str) -> Optional[float]:
 # Label imbalance
 # ---------------------------------------------------------------------------
 
+
 def get_statistical_parity_diff(profile: Dict, attr: str) -> Optional[float]:
     li = profile.get("label_imbalance_by_group", {}).get(attr, {})
     return li.get("statistical_parity_difference", {}).get("max_difference")
@@ -92,6 +95,7 @@ def get_positive_rates(profile: Dict, attr: str) -> Dict[str, float]:
 # Complexity metrics (global)
 # ---------------------------------------------------------------------------
 
+
 def get_complexity_metric(profile: Dict, metric: str) -> Optional[float]:
     return profile.get("complexity_metrics", {}).get(metric)
 
@@ -104,16 +108,13 @@ def get_all_complexity(profile: Dict) -> Dict[str, Optional[float]]:
 # Group / intersection complexity
 # ---------------------------------------------------------------------------
 
-def get_group_complexity(
-    profile: Dict, attr: str, group: str, metric: str
-) -> Optional[float]:
+
+def get_group_complexity(profile: Dict, attr: str, group: str, metric: str) -> Optional[float]:
     gc = profile.get("group_complexity_metrics", {}).get(attr, {}).get(str(group), {})
     return gc.get("complexity_metrics", {}).get(metric)
 
 
-def get_group_complexity_status(
-    profile: Dict, attr: str, group: str
-) -> str:
+def get_group_complexity_status(profile: Dict, attr: str, group: str) -> str:
     gc = profile.get("group_complexity_metrics", {}).get(attr, {}).get(str(group), {})
     return gc.get("status", "unavailable")
 
@@ -141,6 +142,7 @@ def get_low_support_intersections(
 # Missing values
 # ---------------------------------------------------------------------------
 
+
 def get_total_missing(profile: Dict) -> int:
     return profile.get("missing_value_analysis", {}).get("total_missing", 0)
 
@@ -156,14 +158,13 @@ def get_missing_fraction(profile: Dict, column: str) -> float:
 # Group statistics (target prevalence per group)
 # ---------------------------------------------------------------------------
 
+
 def get_group_target_prevalence(profile: Dict, attr: str) -> Dict[str, float]:
     gs = profile.get("group_statistics", {}).get(attr, {})
     return {k: v.get("target_prevalence", 0.0) for k, v in gs.items()}
 
 
-def get_group_class_support(
-    profile: Dict, attr: str
-) -> Dict[str, Dict[str, int]]:
+def get_group_class_support(profile: Dict, attr: str) -> Dict[str, Dict[str, int]]:
     """Return ``{group: {class_label: count}}`` from group_statistics."""
     gs = profile.get("group_statistics", {}).get(attr, {})
     return {k: v.get("target_counts", {}) for k, v in gs.items()}
@@ -172,6 +173,7 @@ def get_group_class_support(
 # ---------------------------------------------------------------------------
 # Reference comparison helper
 # ---------------------------------------------------------------------------
+
 
 def compare_to_reference(
     value: Optional[float],
@@ -203,7 +205,9 @@ def compare_to_reference(
 
     # Very rough percentile approximation using IQR
     if value <= p25:
-        pct = 25.0 * (value - reference.get("min", p25)) / max(p25 - reference.get("min", p25), 1e-9)
+        pct = (
+            25.0 * (value - reference.get("min", p25)) / max(p25 - reference.get("min", p25), 1e-9)
+        )
         pct = max(0.0, min(25.0, pct))
     elif value <= median:
         pct = 25.0 + 25.0 * (value - p25) / max(median - p25, 1e-9)

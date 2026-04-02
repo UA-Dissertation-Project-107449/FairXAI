@@ -19,388 +19,405 @@ from sklearn.preprocessing import StandardScaler
 
 
 def plot_correlation_heatmap_grid(
-	corr_targets: list[tuple[str, pd.DataFrame, list[str]]],
-	categorical_feature_names: set[str] | None = None,
-	categorical_series_normalizer: Callable[[str, pd.Series], pd.Series] | None = None,
-	figsize: tuple[float, float] = (24, 6),
-	cmap: str = "coolwarm",
-	annot: bool = True,
-	annot_size: int = 8,
-	save_path: Path | None = None,
-	show: bool = False,
+    corr_targets: list[tuple[str, pd.DataFrame, list[str]]],
+    categorical_feature_names: set[str] | None = None,
+    categorical_series_normalizer: Callable[[str, pd.Series], pd.Series] | None = None,
+    figsize: tuple[float, float] = (24, 6),
+    cmap: str = "coolwarm",
+    annot: bool = True,
+    annot_size: int = 8,
+    save_path: Path | None = None,
+    show: bool = False,
 ) -> tuple[plt.Figure, np.ndarray]:
-	if not corr_targets:
-		raise ValueError("`corr_targets` must contain at least one item.")
+    if not corr_targets:
+        raise ValueError("`corr_targets` must contain at least one item.")
 
-	def numeric_for_corr(df: pd.DataFrame, features: list[str]) -> pd.DataFrame:
-		cols: dict[str, pd.Series] = {}
-		for feature in features:
-			if feature not in df.columns:
-				continue
-			series = df[feature]
-			if (
-				categorical_feature_names
-				and feature in categorical_feature_names
-				and categorical_series_normalizer is not None
-			):
-				mapped = categorical_series_normalizer(feature, series)
-				codes = pd.Series(mapped).cat.codes.replace(-1, np.nan)
-				cols[feature] = codes
-			else:
-				cols[feature] = pd.to_numeric(series, errors="coerce")
+    def numeric_for_corr(df: pd.DataFrame, features: list[str]) -> pd.DataFrame:
+        cols: dict[str, pd.Series] = {}
+        for feature in features:
+            if feature not in df.columns:
+                continue
+            series = df[feature]
+            if (
+                categorical_feature_names
+                and feature in categorical_feature_names
+                and categorical_series_normalizer is not None
+            ):
+                mapped = categorical_series_normalizer(feature, series)
+                codes = pd.Series(mapped).cat.codes.replace(-1, np.nan)
+                cols[feature] = codes
+            else:
+                cols[feature] = pd.to_numeric(series, errors="coerce")
 
-		numeric = pd.DataFrame(cols)
-		numeric = numeric.dropna(axis=1, how="all")
-		numeric = numeric.loc[:, numeric.nunique(dropna=True) > 1]
-		return numeric
+        numeric = pd.DataFrame(cols)
+        numeric = numeric.dropna(axis=1, how="all")
+        numeric = numeric.loc[:, numeric.nunique(dropna=True) > 1]
+        return numeric
 
-	fig, axes = plt.subplots(1, len(corr_targets), figsize=figsize)
-	axes = np.atleast_1d(axes).ravel()
+    fig, axes = plt.subplots(1, len(corr_targets), figsize=figsize)
+    axes = np.atleast_1d(axes).ravel()
 
-	for idx, (name, df, features) in enumerate(corr_targets):
-		numeric = numeric_for_corr(df, features) if not df.empty else pd.DataFrame()
-		if numeric.shape[1] < 2:
-			axes[idx].set_title(f"{name} correlations (insufficient numeric features)")
-			axes[idx].axis("off")
-			continue
+    for idx, (name, df, features) in enumerate(corr_targets):
+        numeric = numeric_for_corr(df, features) if not df.empty else pd.DataFrame()
+        if numeric.shape[1] < 2:
+            axes[idx].set_title(f"{name} correlations (insufficient numeric features)")
+            axes[idx].axis("off")
+            continue
 
-		corr = numeric.corr(numeric_only=True)
-		sns.heatmap(
-			corr,
-			ax=axes[idx],
-			cmap=cmap,
-			center=0,
-			vmin=-1,
-			vmax=1,
-			annot=annot,
-			fmt=".2f",
-			annot_kws={"size": annot_size},
-			cbar=True,
-		)
-		axes[idx].set_title(f"{name} correlations (n={corr.shape[0]})")
+        corr = numeric.corr(numeric_only=True)
+        sns.heatmap(
+            corr,
+            ax=axes[idx],
+            cmap=cmap,
+            center=0,
+            vmin=-1,
+            vmax=1,
+            annot=annot,
+            fmt=".2f",
+            annot_kws={"size": annot_size},
+            cbar=True,
+        )
+        axes[idx].set_title(f"{name} correlations (n={corr.shape[0]})")
 
-	plt.tight_layout()
-	if save_path:
-		save_path.parent.mkdir(parents=True, exist_ok=True)
-		fig.savefig(save_path, dpi=300, bbox_inches="tight")
-	if show:
-		plt.show()
-	return fig, axes
+    plt.tight_layout()
+    if save_path:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    if show:
+        plt.show()
+    return fig, axes
 
 
 def plot_pca_kmeans_scatter_grid(
-	datasets: dict[str, pd.DataFrame],
-	target_col: str | None = None,
-	n_clusters: int = 3,
-	sample_size: int = 1500,
-	random_state: int = 42,
-	figsize: tuple[float, float] = (15, 4),
-	save_path: Path | None = None,
-	show: bool = False,
+    datasets: dict[str, pd.DataFrame],
+    target_col: str | None = None,
+    n_clusters: int = 3,
+    sample_size: int = 1500,
+    random_state: int = 42,
+    figsize: tuple[float, float] = (15, 4),
+    save_path: Path | None = None,
+    show: bool = False,
 ) -> tuple[plt.Figure, np.ndarray]:
-	if not datasets:
-		raise ValueError("`datasets` must contain at least one dataframe.")
+    if not datasets:
+        raise ValueError("`datasets` must contain at least one dataframe.")
 
-	fig, axes = plt.subplots(1, len(datasets), figsize=figsize)
-	axes = np.atleast_1d(axes).ravel()
+    fig, axes = plt.subplots(1, len(datasets), figsize=figsize)
+    axes = np.atleast_1d(axes).ravel()
 
-	for idx, (name, df) in enumerate(datasets.items()):
-		numeric = df.select_dtypes(include=[np.number])
-		if target_col:
-			numeric = numeric.drop(columns=[target_col], errors="ignore")
-		numeric = numeric.dropna(axis=0)
+    for idx, (name, df) in enumerate(datasets.items()):
+        numeric = df.select_dtypes(include=[np.number])
+        if target_col:
+            numeric = numeric.drop(columns=[target_col], errors="ignore")
+        numeric = numeric.dropna(axis=0)
 
-		if numeric.empty:
-			axes[idx].set_title(f"{name} clustering (no data)")
-			axes[idx].axis("off")
-			continue
+        if numeric.empty:
+            axes[idx].set_title(f"{name} clustering (no data)")
+            axes[idx].axis("off")
+            continue
 
-		sampled = numeric.sample(n=min(sample_size, len(numeric)), random_state=random_state)
-		scaled = StandardScaler().fit_transform(sampled)
-		embedding = PCA(n_components=2, random_state=random_state).fit_transform(scaled)
-		clusters = KMeans(n_clusters=n_clusters, n_init=10, random_state=random_state).fit_predict(embedding)
+        sampled = numeric.sample(n=min(sample_size, len(numeric)), random_state=random_state)
+        scaled = StandardScaler().fit_transform(sampled)
+        embedding = PCA(n_components=2, random_state=random_state).fit_transform(scaled)
+        clusters = KMeans(n_clusters=n_clusters, n_init=10, random_state=random_state).fit_predict(
+            embedding
+        )
 
-		axes[idx].scatter(embedding[:, 0], embedding[:, 1], c=clusters, s=8, cmap="tab10")
-		axes[idx].set_title(f"{name} clustering (PCA)")
-		axes[idx].set_xlabel("PC1")
-		axes[idx].set_ylabel("PC2")
+        axes[idx].scatter(embedding[:, 0], embedding[:, 1], c=clusters, s=8, cmap="tab10")
+        axes[idx].set_title(f"{name} clustering (PCA)")
+        axes[idx].set_xlabel("PC1")
+        axes[idx].set_ylabel("PC2")
 
-	plt.tight_layout()
-	if save_path:
-		save_path.parent.mkdir(parents=True, exist_ok=True)
-		fig.savefig(save_path, dpi=300, bbox_inches="tight")
-	if show:
-		plt.show()
-	return fig, axes
+    plt.tight_layout()
+    if save_path:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    if show:
+        plt.show()
+    return fig, axes
 
 
 def plot_two_dataset_feature_distributions(
-	dataset_a: pd.DataFrame,
-	dataset_b: pd.DataFrame,
-	shared_features: list[str],
-	dataset_a_name: str,
-	dataset_b_name: str,
-	dataset_palette: dict[str, str],
-	units: dict[str, str] | None = None,
-	categorical_feature_names: set[str] | None = None,
-	categorical_series_normalizer: Callable[[str, pd.Series], pd.Series] | None = None,
-	categorical_order_map: dict[str, list[str]] | None = None,
-	save_path: Path | None = None,
-	show: bool = False,
+    dataset_a: pd.DataFrame,
+    dataset_b: pd.DataFrame,
+    shared_features: list[str],
+    dataset_a_name: str,
+    dataset_b_name: str,
+    dataset_palette: dict[str, str],
+    units: dict[str, str] | None = None,
+    categorical_feature_names: set[str] | None = None,
+    categorical_series_normalizer: Callable[[str, pd.Series], pd.Series] | None = None,
+    categorical_order_map: dict[str, list[str]] | None = None,
+    save_path: Path | None = None,
+    show: bool = False,
 ) -> dict[str, list[str]]:
-	units = units or {}
-	categorical_feature_names = categorical_feature_names or set()
-	categorical_order_map = categorical_order_map or {}
+    units = units or {}
+    categorical_feature_names = categorical_feature_names or set()
+    categorical_order_map = categorical_order_map or {}
 
-	numeric_features = [feature for feature in shared_features if feature not in categorical_feature_names]
-	categorical_features = [feature for feature in shared_features if feature in categorical_feature_names]
+    numeric_features = [
+        feature for feature in shared_features if feature not in categorical_feature_names
+    ]
+    categorical_features = [
+        feature for feature in shared_features if feature in categorical_feature_names
+    ]
 
-	def numeric_series(df: pd.DataFrame, feature: str) -> pd.Series:
-		return pd.to_numeric(df[feature], errors="coerce")
+    def numeric_series(df: pd.DataFrame, feature: str) -> pd.Series:
+        return pd.to_numeric(df[feature], errors="coerce")
 
-	if numeric_features:
-		fig, axes = plt.subplots(len(numeric_features), 1, figsize=(10, max(4, len(numeric_features) * 2.2)))
-		axes = np.atleast_1d(axes).ravel()
+    if numeric_features:
+        fig, axes = plt.subplots(
+            len(numeric_features), 1, figsize=(10, max(4, len(numeric_features) * 2.2))
+        )
+        axes = np.atleast_1d(axes).ravel()
 
-		for idx, feature in enumerate(numeric_features):
-			sns.kdeplot(
-				numeric_series(dataset_a, feature).dropna(),
-				ax=axes[idx],
-				label=dataset_a_name,
-				color=dataset_palette[dataset_a_name],
-				fill=True,
-				alpha=0.3,
-			)
-			sns.kdeplot(
-				numeric_series(dataset_b, feature).dropna(),
-				ax=axes[idx],
-				label=dataset_b_name,
-				color=dataset_palette[dataset_b_name],
-				fill=True,
-				alpha=0.3,
-			)
-			unit = units.get(feature)
-			title = f"{feature} distribution ({dataset_a_name} vs {dataset_b_name})" + (f" ({unit})" if unit else "")
-			axes[idx].set_title(title)
-			if unit:
-				axes[idx].set_xlabel(f"{feature} ({unit})")
-			axes[idx].legend(loc="best")
+        for idx, feature in enumerate(numeric_features):
+            sns.kdeplot(
+                numeric_series(dataset_a, feature).dropna(),
+                ax=axes[idx],
+                label=dataset_a_name,
+                color=dataset_palette[dataset_a_name],
+                fill=True,
+                alpha=0.3,
+            )
+            sns.kdeplot(
+                numeric_series(dataset_b, feature).dropna(),
+                ax=axes[idx],
+                label=dataset_b_name,
+                color=dataset_palette[dataset_b_name],
+                fill=True,
+                alpha=0.3,
+            )
+            unit = units.get(feature)
+            title = f"{feature} distribution ({dataset_a_name} vs {dataset_b_name})" + (
+                f" ({unit})" if unit else ""
+            )
+            axes[idx].set_title(title)
+            if unit:
+                axes[idx].set_xlabel(f"{feature} ({unit})")
+            axes[idx].legend(loc="best")
 
-		plt.tight_layout()
-		if save_path:
-			base = save_path.stem
-			ext = save_path.suffix or ".png"
-			numeric_path = save_path.parent / f"{base}_numeric{ext}"
-			numeric_path.parent.mkdir(parents=True, exist_ok=True)
-			fig.savefig(numeric_path, dpi=300, bbox_inches="tight")
-		if show:
-			plt.show()
+        plt.tight_layout()
+        if save_path:
+            base = save_path.stem
+            ext = save_path.suffix or ".png"
+            numeric_path = save_path.parent / f"{base}_numeric{ext}"
+            numeric_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(numeric_path, dpi=300, bbox_inches="tight")
+        if show:
+            plt.show()
 
-	if categorical_features:
-		rows = len(categorical_features)
-		fig, axes = plt.subplots(rows, 1, figsize=(10, max(4, rows * 3.2)))
-		axes = np.atleast_1d(axes).reshape(-1)
+    if categorical_features:
+        rows = len(categorical_features)
+        fig, axes = plt.subplots(rows, 1, figsize=(10, max(4, rows * 3.2)))
+        axes = np.atleast_1d(axes).reshape(-1)
 
-		for idx, feature in enumerate(categorical_features):
-			if categorical_series_normalizer is not None:
-				dataset_a_values = categorical_series_normalizer(feature, dataset_a[feature])
-				dataset_b_values = categorical_series_normalizer(feature, dataset_b[feature])
-			else:
-				dataset_a_values = dataset_a[feature].astype(str)
-				dataset_b_values = dataset_b[feature].astype(str)
+        for idx, feature in enumerate(categorical_features):
+            if categorical_series_normalizer is not None:
+                dataset_a_values = categorical_series_normalizer(feature, dataset_a[feature])
+                dataset_b_values = categorical_series_normalizer(feature, dataset_b[feature])
+            else:
+                dataset_a_values = dataset_a[feature].astype(str)
+                dataset_b_values = dataset_b[feature].astype(str)
 
-			order = categorical_order_map.get(feature)
-			dataset_a_counts = pd.Series(dataset_a_values).value_counts()
-			dataset_b_counts = pd.Series(dataset_b_values).value_counts()
-			if order:
-				dataset_a_counts = dataset_a_counts.reindex(order, fill_value=0)
-				dataset_b_counts = dataset_b_counts.reindex(order, fill_value=0)
+            order = categorical_order_map.get(feature)
+            dataset_a_counts = pd.Series(dataset_a_values).value_counts()
+            dataset_b_counts = pd.Series(dataset_b_values).value_counts()
+            if order:
+                dataset_a_counts = dataset_a_counts.reindex(order, fill_value=0)
+                dataset_b_counts = dataset_b_counts.reindex(order, fill_value=0)
 
-			counts_df = pd.DataFrame({dataset_a_name: dataset_a_counts, dataset_b_name: dataset_b_counts}).fillna(0)
-			pct_df = counts_df.div(counts_df.sum(axis=0), axis=1)
-			pct_df.plot(
-				kind="bar",
-				ax=axes[idx],
-				color=[dataset_palette[dataset_a_name], dataset_palette[dataset_b_name]],
-			)
+            counts_df = pd.DataFrame(
+                {dataset_a_name: dataset_a_counts, dataset_b_name: dataset_b_counts}
+            ).fillna(0)
+            pct_df = counts_df.div(counts_df.sum(axis=0), axis=1)
+            pct_df.plot(
+                kind="bar",
+                ax=axes[idx],
+                color=[dataset_palette[dataset_a_name], dataset_palette[dataset_b_name]],
+            )
 
-			for container_index, container in enumerate(axes[idx].containers):
-				count_series = counts_df.iloc[:, container_index]
-				labels = [f"{int(count)} ({value:.0%})" for value, count in zip(container.datavalues, count_series)]
-				axes[idx].bar_label(container, labels=labels, fontsize=9)
+            for container_index, container in enumerate(axes[idx].containers):
+                count_series = counts_df.iloc[:, container_index]
+                labels = [
+                    f"{int(count)} ({value:.0%})"
+                    for value, count in zip(container.datavalues, count_series)
+                ]
+                axes[idx].bar_label(container, labels=labels, fontsize=9)
 
-			axes[idx].set_title(f"{feature} proportions ({dataset_a_name} vs {dataset_b_name})")
-			axes[idx].set_xlabel(feature)
-			axes[idx].set_ylabel("proportion")
-			axes[idx].set_ylim(0, 1.08)
+            axes[idx].set_title(f"{feature} proportions ({dataset_a_name} vs {dataset_b_name})")
+            axes[idx].set_xlabel(feature)
+            axes[idx].set_ylabel("proportion")
+            axes[idx].set_ylim(0, 1.08)
 
-		plt.tight_layout()
-		if save_path:
-			base = save_path.stem
-			ext = save_path.suffix or ".png"
-			categorical_path = save_path.parent / f"{base}_categorical{ext}"
-			categorical_path.parent.mkdir(parents=True, exist_ok=True)
-			fig.savefig(categorical_path, dpi=300, bbox_inches="tight")
-		if show:
-			plt.show()
+        plt.tight_layout()
+        if save_path:
+            base = save_path.stem
+            ext = save_path.suffix or ".png"
+            categorical_path = save_path.parent / f"{base}_categorical{ext}"
+            categorical_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(categorical_path, dpi=300, bbox_inches="tight")
+        if show:
+            plt.show()
 
-	return {
-		"numeric_features": numeric_features,
-		"categorical_features": categorical_features,
-	}
+    return {
+        "numeric_features": numeric_features,
+        "categorical_features": categorical_features,
+    }
 
 
 def summarize_ks_test_between_datasets(
-	dataset_a: pd.DataFrame,
-	dataset_b: pd.DataFrame,
-	features: list[str],
-	dataset_a_name: str = "dataset_a",
-	dataset_b_name: str = "dataset_b",
-	alpha: float = 0.05,
-	min_unique_values: int = 2,
+    dataset_a: pd.DataFrame,
+    dataset_b: pd.DataFrame,
+    features: list[str],
+    dataset_a_name: str = "dataset_a",
+    dataset_b_name: str = "dataset_b",
+    alpha: float = 0.05,
+    min_unique_values: int = 2,
 ) -> pd.DataFrame:
-	if not features:
-		return pd.DataFrame(
-			columns=[
-				"feature",
-				"ks_stat",
-				"p_value",
-				"n_a",
-				"n_b",
-				"distributions_differ",
-			]
-		)
+    if not features:
+        return pd.DataFrame(
+            columns=[
+                "feature",
+                "ks_stat",
+                "p_value",
+                "n_a",
+                "n_b",
+                "distributions_differ",
+            ]
+        )
 
-	rows: list[dict[str, object]] = []
-	for feature in features:
-		if feature not in dataset_a.columns or feature not in dataset_b.columns:
-			continue
+    rows: list[dict[str, object]] = []
+    for feature in features:
+        if feature not in dataset_a.columns or feature not in dataset_b.columns:
+            continue
 
-		a_vals = pd.to_numeric(dataset_a[feature], errors="coerce").dropna()
-		b_vals = pd.to_numeric(dataset_b[feature], errors="coerce").dropna()
+        a_vals = pd.to_numeric(dataset_a[feature], errors="coerce").dropna()
+        b_vals = pd.to_numeric(dataset_b[feature], errors="coerce").dropna()
 
-		if a_vals.nunique() < min_unique_values or b_vals.nunique() < min_unique_values:
-			continue
+        if a_vals.nunique() < min_unique_values or b_vals.nunique() < min_unique_values:
+            continue
 
-		stat = ks_2samp(a_vals, b_vals)
-		rows.append(
-			{
-				"feature": feature,
-				"ks_stat": float(stat.statistic),
-				"p_value": float(stat.pvalue),
-				"n_a": int(a_vals.shape[0]),
-				"n_b": int(b_vals.shape[0]),
-				"distributions_differ": "Yes" if stat.pvalue < alpha else "No",
-			}
-		)
+        stat = ks_2samp(a_vals, b_vals)
+        rows.append(
+            {
+                "feature": feature,
+                "ks_stat": float(stat.statistic),
+                "p_value": float(stat.pvalue),
+                "n_a": int(a_vals.shape[0]),
+                "n_b": int(b_vals.shape[0]),
+                "distributions_differ": "Yes" if stat.pvalue < alpha else "No",
+            }
+        )
 
-	result = pd.DataFrame(rows)
-	if result.empty:
-		return result
+    result = pd.DataFrame(rows)
+    if result.empty:
+        return result
 
-	result = result.sort_values(by=["p_value", "ks_stat"], ascending=[True, False]).reset_index(drop=True)
-	result = result.rename(columns={"n_a": f"n_{dataset_a_name}", "n_b": f"n_{dataset_b_name}"})
-	return result
+    result = result.sort_values(by=["p_value", "ks_stat"], ascending=[True, False]).reset_index(
+        drop=True
+    )
+    result = result.rename(columns={"n_a": f"n_{dataset_a_name}", "n_b": f"n_{dataset_b_name}"})
+    return result
 
 
 def plot_drift_heatmap(
-	reference_dataset: pd.DataFrame,
-	comparison_datasets: dict[str, pd.DataFrame],
-	features: list[str],
-	reference_name: str = "Reference",
-	test: str = "ks",
-	threshold: float = 0.05,
-	figsize: tuple[float, float] | None = None,
-	cmap: str = "RdYlGn_r",
-	save_path: Path | None = None,
-	show: bool = False,
+    reference_dataset: pd.DataFrame,
+    comparison_datasets: dict[str, pd.DataFrame],
+    features: list[str],
+    reference_name: str = "Reference",
+    test: str = "ks",
+    threshold: float = 0.05,
+    figsize: tuple[float, float] | None = None,
+    cmap: str = "RdYlGn_r",
+    save_path: Path | None = None,
+    show: bool = False,
 ) -> tuple[plt.Figure, plt.Axes]:
-	if not comparison_datasets:
-		raise ValueError("Must provide at least one comparison dataset")
+    if not comparison_datasets:
+        raise ValueError("Must provide at least one comparison dataset")
 
-	if test != "ks":
-		raise ValueError("Only test='ks' is currently supported.")
+    if test != "ks":
+        raise ValueError("Only test='ks' is currently supported.")
 
-	drift_matrix: list[dict[str, object]] = []
-	dataset_names = list(comparison_datasets.keys())
+    drift_matrix: list[dict[str, object]] = []
+    dataset_names = list(comparison_datasets.keys())
 
-	for feature in features:
-		if feature not in reference_dataset.columns:
-			continue
+    for feature in features:
+        if feature not in reference_dataset.columns:
+            continue
 
-		ref_vals = pd.to_numeric(reference_dataset[feature], errors="coerce").dropna()
-		if ref_vals.nunique() < 2:
-			continue
+        ref_vals = pd.to_numeric(reference_dataset[feature], errors="coerce").dropna()
+        if ref_vals.nunique() < 2:
+            continue
 
-		row: dict[str, object] = {"feature": feature}
-		for name in dataset_names:
-			comp_df = comparison_datasets[name]
-			if feature not in comp_df.columns:
-				row[name] = np.nan
-				continue
+        row: dict[str, object] = {"feature": feature}
+        for name in dataset_names:
+            comp_df = comparison_datasets[name]
+            if feature not in comp_df.columns:
+                row[name] = np.nan
+                continue
 
-			comp_vals = pd.to_numeric(comp_df[feature], errors="coerce").dropna()
-			if comp_vals.nunique() < 2:
-				row[name] = np.nan
-				continue
+            comp_vals = pd.to_numeric(comp_df[feature], errors="coerce").dropna()
+            if comp_vals.nunique() < 2:
+                row[name] = np.nan
+                continue
 
-			stat, pval = ks_2samp(ref_vals, comp_vals)
-			_ = stat
-			row[name] = float(pval)
+            stat, pval = ks_2samp(ref_vals, comp_vals)
+            _ = stat
+            row[name] = float(pval)
 
-		drift_matrix.append(row)
+        drift_matrix.append(row)
 
-	if not drift_matrix:
-		raise ValueError("No valid features for drift analysis")
+    if not drift_matrix:
+        raise ValueError("No valid features for drift analysis")
 
-	drift_df = pd.DataFrame(drift_matrix).set_index("feature")
+    drift_df = pd.DataFrame(drift_matrix).set_index("feature")
 
-	if figsize is None:
-		figsize = (max(6, len(dataset_names) * 2), max(4, drift_df.shape[0] * 0.45))
+    if figsize is None:
+        figsize = (max(6, len(dataset_names) * 2), max(4, drift_df.shape[0] * 0.45))
 
-	fig, ax = plt.subplots(figsize=figsize)
+    fig, ax = plt.subplots(figsize=figsize)
 
-	display_matrix = -np.log10(drift_df.to_numpy(dtype=float).clip(min=1e-10))
+    display_matrix = -np.log10(drift_df.to_numpy(dtype=float).clip(min=1e-10))
 
-	sns.heatmap(
-		display_matrix,
-		xticklabels=drift_df.columns,
-		yticklabels=drift_df.index,
-		cmap=cmap,
-		center=-np.log10(threshold),
-		cbar_kws={"label": "-log10(p-value)"},
-		annot=True,
-		fmt=".2f",
-		ax=ax,
-	)
+    sns.heatmap(
+        display_matrix,
+        xticklabels=drift_df.columns,
+        yticklabels=drift_df.index,
+        cmap=cmap,
+        center=-np.log10(threshold),
+        cbar_kws={"label": "-log10(p-value)"},
+        annot=True,
+        fmt=".2f",
+        ax=ax,
+    )
 
-	threshold_val = -np.log10(threshold)
-	ax.text(
-		0.02,
-		0.98,
-		f"Threshold: p={threshold}\n(-log10 = {threshold_val:.2f})",
-		transform=ax.transAxes,
-		bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
-		fontsize=9,
-		verticalalignment="top",
-	)
+    threshold_val = -np.log10(threshold)
+    ax.text(
+        0.02,
+        0.98,
+        f"Threshold: p={threshold}\n(-log10 = {threshold_val:.2f})",
+        transform=ax.transAxes,
+        bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+        fontsize=9,
+        verticalalignment="top",
+    )
 
-	ax.set_title(
-		f"Feature Drift: {reference_name} vs Comparison Datasets\n"
-		f"Red = Significant Drift (p < {threshold})",
-		fontsize=12,
-		fontweight="bold",
-	)
-	ax.set_xlabel("Dataset")
-	ax.set_ylabel("Feature")
+    ax.set_title(
+        f"Feature Drift: {reference_name} vs Comparison Datasets\n"
+        f"Red = Significant Drift (p < {threshold})",
+        fontsize=12,
+        fontweight="bold",
+    )
+    ax.set_xlabel("Dataset")
+    ax.set_ylabel("Feature")
 
-	plt.tight_layout()
+    plt.tight_layout()
 
-	if save_path:
-		save_path.parent.mkdir(parents=True, exist_ok=True)
-		fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    if save_path:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
 
-	if show:
-		plt.show()
+    if show:
+        plt.show()
 
-	return fig, ax
+    return fig, ax

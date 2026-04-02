@@ -7,11 +7,46 @@ Runtime behavior (sample caps, enable/disable toggles, CV usage) is configured
 by caller scripts via YAML `xai` sections.
 """
 
+import warnings
 from dataclasses import dataclass
 from typing import Any, Iterable, List, Optional, Union
-import warnings
+
 import numpy as np
 import pandas as pd
+
+
+def _is_svm_like_model(model: Any) -> bool:
+    """Best-effort check for SVM estimators where generic SHAP is unstable/slow."""
+    model_name = type(model).__name__.lower()
+    return "svc" in model_name or model_name.startswith("svm")
+
+
+def _normalize_shap_values(raw_values: Any) -> np.ndarray:
+    """Normalize SHAP outputs to a 2D array [n_samples, n_features]."""
+    if isinstance(raw_values, list):
+        arrays = [np.asarray(v) for v in raw_values if v is not None]
+        if not arrays:
+            raise ValueError("Received empty SHAP values list")
+        # Binary classification convention: prefer positive class attribution.
+        if len(arrays) == 2:
+            arr = arrays[1]
+        else:
+            arr = np.mean(np.stack(arrays, axis=0), axis=0)
+    else:
+        arr = np.asarray(raw_values)
+
+    if arr.ndim == 1:
+        return arr.reshape(-1, 1)
+    if arr.ndim == 2:
+        return arr
+    if arr.ndim == 3:
+        if arr.shape[2] == 1:
+            return arr[:, :, 0]
+        if arr.shape[2] == 2:
+            return arr[:, :, 1]
+        return np.mean(arr, axis=2)
+
+    return arr.reshape(arr.shape[0], -1)
 
 
 @dataclass
@@ -28,6 +63,7 @@ def shap_explain_tabular(
     data: pd.DataFrame,
     feature_names: Optional[Iterable[str]] = None,
     max_samples: int = 1000,
+    allow_svm: bool = False,
 ) -> ShapExplanation:
     """Compute SHAP values for a tabular model.
 
@@ -36,6 +72,7 @@ def shap_explain_tabular(
         data: Feature dataframe (unscaled or scaled as desired for explainer).
         feature_names: Optional feature name list; defaults to dataframe columns.
         max_samples: Subsample cap for speed.
+        allow_svm: Allow SHAP on SVM-like estimators.
     """
     try:
         import shap
@@ -47,6 +84,12 @@ def shap_explain_tabular(
     df = data.copy()
     if len(df) > max_samples:
         df = df.sample(n=max_samples, random_state=42)
+
+    if _is_svm_like_model(model) and not allow_svm:
+        raise ValueError(
+            "SHAP is skipped for SVM models by default due high runtime and fragile"
+            " additivity behavior; use LIME outputs for SVM interpretability."
+        )
 
     # Suppress sklearn stratified-fold warnings emitted during PermutationExplainer
     # runs (model called on tiny subsets → imbalanced folds). These are expected
@@ -64,10 +107,23 @@ def shap_explain_tabular(
         category=UserWarning,
     )
 
-    explainer = shap.Explainer(model, df)
-    shap_values = explainer(df)
+    try:
+        explainer = shap.Explainer(model, df)
+    except TypeError:
+        if hasattr(model, "predict_proba"):
+            explainer = shap.Explainer(lambda X: model.predict_proba(X), df)
+        elif hasattr(model, "predict"):
+            explainer = shap.Explainer(lambda X: model.predict(X), df)
+        else:
+            raise
+    try:
+        shap_values = explainer(df, check_additivity=False)
+    except TypeError:
+        shap_values = explainer(df)
+
+    normalized_values = _normalize_shap_values(getattr(shap_values, "values", shap_values))
     return ShapExplanation(
-        shap_values=shap_values.values,
+        shap_values=normalized_values,
         base_values=shap_values.base_values,
         expected_value=getattr(shap_values, "expected_value", None),
         feature_names=list(feature_names),
@@ -120,9 +176,9 @@ def lime_explain_instance(
 
     def _predict_proba(X: np.ndarray) -> np.ndarray:
         X_df = _to_frame(X)
-        if hasattr(model, 'predict_proba'):
+        if hasattr(model, "predict_proba"):
             return _to_proba_matrix(model.predict_proba(X_df))
-        if hasattr(model, 'decision_function'):
+        if hasattr(model, "decision_function"):
             raw = model.decision_function(X_df)
             raw = np.asarray(raw)
             if raw.ndim == 1:
@@ -144,6 +200,7 @@ def lime_explain_instance(
         _predict_proba,
         num_features=num_features,
     )
+
     def _extract_first(value: Any) -> float:
         if value is None:
             return 0.0

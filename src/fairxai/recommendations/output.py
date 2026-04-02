@@ -8,10 +8,10 @@ from typing import Any, Dict
 
 from .models import Priority, ReadinessStatus, TriageReport
 
-
 # ===================================================================
 # JSON output
 # ===================================================================
+
 
 def to_json(report: TriageReport) -> Dict[str, Any]:
     """Serialise a ``TriageReport`` to a JSON-compatible dict.
@@ -57,7 +57,9 @@ def to_markdown(report: TriageReport) -> str:
     lines.append(f"**Rows × Columns:** {ds.get('n_rows', '?')} × {ds.get('n_cols', '?')}  ")
     lines.append(f"**Label column:** `{ds.get('label_column', '-')}`  ")
     sens = ds.get("sensitive_columns", [])
-    lines.append(f"**Sensitive attributes:** {', '.join(f'`{s}`' for s in sens) if sens else 'none declared'}  ")
+    lines.append(
+        f"**Sensitive attributes:** {', '.join(f'`{s}`' for s in sens) if sens else 'none declared'}  "
+    )
     lines.append(f"**Classes:** {ds.get('n_classes', '?')}  ")
     lines.append("")
 
@@ -129,7 +131,9 @@ def to_markdown(report: TriageReport) -> str:
         lines.append("## Suggested Visualisations")
         lines.append("")
         for vp in report.visual_panels:
-            lines.append(f"- **{vp.get('id', '?')}** ({vp.get('type', '?')}): {vp.get('description', '')}")
+            lines.append(
+                f"- **{vp.get('id', '?')}** ({vp.get('type', '?')}): {vp.get('description', '')}"
+            )
         lines.append("")
 
     # --- Footer ---

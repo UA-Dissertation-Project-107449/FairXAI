@@ -11,10 +11,10 @@ Verbosity levels
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from typing import Any, Dict, Optional, Union
 import logging
 import warnings
+from pathlib import Path
+from typing import Any, Dict, Optional, Union
 
 
 class _PhaseFilter(logging.Filter):
@@ -24,11 +24,7 @@ class _PhaseFilter(logging.Filter):
         if record.levelno >= logging.WARNING:
             return True
         msg = record.getMessage()
-        return (
-            msg.startswith("[PHASE]")
-            or msg.startswith("[SUCCESS]")
-            or msg.startswith("[ERROR]")
-        )
+        return msg.startswith("[PHASE]") or msg.startswith("[SUCCESS]") or msg.startswith("[ERROR]")
 
 
 class _WarningFormatter(logging.Formatter):
@@ -76,9 +72,7 @@ def _normalise_verbosity(verbose: Union[bool, int]) -> int:
     return max(0, min(int(verbose), 2))
 
 
-def setup_logging(
-    log_file: Path, verbose: Union[bool, int] = 0
-) -> logging.Logger:
+def setup_logging(log_file: Path, verbose: Union[bool, int] = 0) -> logging.Logger:
     """Configure logging to file (full) and console (filtered by verbosity).
 
     Parameters
@@ -169,6 +163,7 @@ def setup_logging(
 # Post-run summary
 # ---------------------------------------------------------------------------
 
+
 def _count_log_lines(path: Path) -> int:
     """Count non-empty lines in a log file — one line ≈ one record."""
     if not path.exists():
@@ -205,12 +200,8 @@ def summarize_run_logs(run_log_dir: Path) -> Dict[str, Any]:
         if not phase_dir.is_dir():
             continue
 
-        warn_count = sum(
-            _count_log_lines(f) for f in phase_dir.glob("*_warnings.log")
-        )
-        err_count = sum(
-            _count_log_lines(f) for f in phase_dir.glob("*_errors.log")
-        )
+        warn_count = sum(_count_log_lines(f) for f in phase_dir.glob("*_warnings.log"))
+        err_count = sum(_count_log_lines(f) for f in phase_dir.glob("*_errors.log"))
 
         summary["phases"][phase_dir.name] = {
             "warnings": warn_count,

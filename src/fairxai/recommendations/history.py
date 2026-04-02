@@ -24,34 +24,59 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _LITERATURE_DEFAULTS: Dict[str, Dict[str, float]] = {
-    "F2":   {"min": 0.0, "p25": 0.02, "median": 0.05, "p75": 0.15, "max": 1.0},
-    "F3":   {"min": 0.0, "p25": 0.01, "median": 0.04, "p75": 0.10, "max": 1.0},
-    "F4":   {"min": 0.0, "p25": 0.00, "median": 0.02, "p75": 0.08, "max": 1.0},
-    "N2":   {"min": 0.0, "p25": 0.50, "median": 0.70, "p75": 0.85, "max": 1.0},
-    "N3":   {"min": 0.0, "p25": 0.15, "median": 0.25, "p75": 0.35, "max": 1.0},
-    "N4":   {"min": 0.0, "p25": 0.10, "median": 0.20, "p75": 0.30, "max": 1.0},
+    "F2": {"min": 0.0, "p25": 0.02, "median": 0.05, "p75": 0.15, "max": 1.0},
+    "F3": {"min": 0.0, "p25": 0.01, "median": 0.04, "p75": 0.10, "max": 1.0},
+    "F4": {"min": 0.0, "p25": 0.00, "median": 0.02, "p75": 0.08, "max": 1.0},
+    "N2": {"min": 0.0, "p25": 0.50, "median": 0.70, "p75": 0.85, "max": 1.0},
+    "N3": {"min": 0.0, "p25": 0.15, "median": 0.25, "p75": 0.35, "max": 1.0},
+    "N4": {"min": 0.0, "p25": 0.10, "median": 0.20, "p75": 0.30, "max": 1.0},
     "Raug": {"min": 0.0, "p25": 0.20, "median": 0.35, "p75": 0.50, "max": 1.0},
-    "L1":   {"min": 0.0, "p25": 0.10, "median": 0.20, "p75": 0.35, "max": 1.0},
-    "L2":   {"min": 0.0, "p25": 0.10, "median": 0.20, "p75": 0.35, "max": 1.0},
-    "L3":   {"min": 0.0, "p25": 0.10, "median": 0.20, "p75": 0.35, "max": 1.0},
-    "T1":   {"min": 0.0, "p25": 0.05, "median": 0.15, "p75": 0.30, "max": 1.0},
+    "L1": {"min": 0.0, "p25": 0.10, "median": 0.20, "p75": 0.35, "max": 1.0},
+    "L2": {"min": 0.0, "p25": 0.10, "median": 0.20, "p75": 0.35, "max": 1.0},
+    "L3": {"min": 0.0, "p25": 0.10, "median": 0.20, "p75": 0.35, "max": 1.0},
+    "T1": {"min": 0.0, "p25": 0.05, "median": 0.15, "p75": 0.30, "max": 1.0},
     "BayesImbalance": {"min": 0.0, "p25": 0.05, "median": 0.15, "p75": 0.40, "max": 1.0},
 }
 
 # Fairness metric defaults (from acceptable/violation ranges)
 _FAIRNESS_DEFAULTS: Dict[str, Dict[str, float]] = {
-    "demographic_parity_difference": {"min": 0.0, "p25": 0.03, "median": 0.08, "p75": 0.15, "max": 0.50},
-    "equalized_odds_tpr_diff":       {"min": 0.0, "p25": 0.03, "median": 0.08, "p75": 0.15, "max": 0.50},
-    "equalized_odds_fpr_diff":       {"min": 0.0, "p25": 0.02, "median": 0.06, "p75": 0.12, "max": 0.40},
-    "equal_opportunity_difference":  {"min": 0.0, "p25": 0.03, "median": 0.08, "p75": 0.15, "max": 0.50},
-    "predictive_parity_difference":  {"min": 0.0, "p25": 0.03, "median": 0.08, "p75": 0.15, "max": 0.50},
-    "statistical_parity_difference": {"min": 0.0, "p25": 0.05, "median": 0.10, "p75": 0.20, "max": 0.60},
+    "demographic_parity_difference": {
+        "min": 0.0,
+        "p25": 0.03,
+        "median": 0.08,
+        "p75": 0.15,
+        "max": 0.50,
+    },
+    "equalized_odds_tpr_diff": {"min": 0.0, "p25": 0.03, "median": 0.08, "p75": 0.15, "max": 0.50},
+    "equalized_odds_fpr_diff": {"min": 0.0, "p25": 0.02, "median": 0.06, "p75": 0.12, "max": 0.40},
+    "equal_opportunity_difference": {
+        "min": 0.0,
+        "p25": 0.03,
+        "median": 0.08,
+        "p75": 0.15,
+        "max": 0.50,
+    },
+    "predictive_parity_difference": {
+        "min": 0.0,
+        "p25": 0.03,
+        "median": 0.08,
+        "p75": 0.15,
+        "max": 0.50,
+    },
+    "statistical_parity_difference": {
+        "min": 0.0,
+        "p25": 0.05,
+        "median": 0.10,
+        "p75": 0.20,
+        "max": 0.60,
+    },
 }
 
 
 # ---------------------------------------------------------------------------
 # Reference stats container
 # ---------------------------------------------------------------------------
+
 
 class ReferenceStats:
     """Simple container for a metric's reference distribution."""
@@ -78,6 +103,7 @@ class ReferenceStats:
 # ---------------------------------------------------------------------------
 # Historical reference builder
 # ---------------------------------------------------------------------------
+
 
 class HistoricalReference:
     """Load and query historical run data for metric reference distributions.
@@ -173,25 +199,25 @@ class HistoricalReference:
 
                     eo = attr_data.get("equalized_odds", {})
                     if "tpr_max_difference" in eo:
-                        self._fairness_values.setdefault(
-                            "equalized_odds_tpr_diff", []
-                        ).append(float(eo["tpr_max_difference"]))
+                        self._fairness_values.setdefault("equalized_odds_tpr_diff", []).append(
+                            float(eo["tpr_max_difference"])
+                        )
                     if "fpr_max_difference" in eo:
-                        self._fairness_values.setdefault(
-                            "equalized_odds_fpr_diff", []
-                        ).append(float(eo["fpr_max_difference"]))
+                        self._fairness_values.setdefault("equalized_odds_fpr_diff", []).append(
+                            float(eo["fpr_max_difference"])
+                        )
 
                     eop = attr_data.get("equal_opportunity", {})
                     if "max_difference" in eop:
-                        self._fairness_values.setdefault(
-                            "equal_opportunity_difference", []
-                        ).append(float(eop["max_difference"]))
+                        self._fairness_values.setdefault("equal_opportunity_difference", []).append(
+                            float(eop["max_difference"])
+                        )
 
                     pp = attr_data.get("predictive_parity", {})
                     if "max_difference" in pp:
-                        self._fairness_values.setdefault(
-                            "predictive_parity_difference", []
-                        ).append(float(pp["max_difference"]))
+                        self._fairness_values.setdefault("predictive_parity_difference", []).append(
+                            float(pp["max_difference"])
+                        )
             except Exception:
                 logger.debug("Could not read fairness %s", p, exc_info=True)
 
@@ -224,11 +250,13 @@ class HistoricalReference:
     @staticmethod
     def _stats_from_values(values: List[float]) -> ReferenceStats:
         arr = np.array(values, dtype=float)
-        return ReferenceStats({
-            "min": float(np.nanmin(arr)),
-            "p25": float(np.nanpercentile(arr, 25)),
-            "median": float(np.nanmedian(arr)),
-            "p75": float(np.nanpercentile(arr, 75)),
-            "max": float(np.nanmax(arr)),
-            "n_observations": len(arr),
-        })
+        return ReferenceStats(
+            {
+                "min": float(np.nanmin(arr)),
+                "p25": float(np.nanpercentile(arr, 25)),
+                "median": float(np.nanmedian(arr)),
+                "p75": float(np.nanpercentile(arr, 75)),
+                "max": float(np.nanmax(arr)),
+                "n_observations": len(arr),
+            }
+        )

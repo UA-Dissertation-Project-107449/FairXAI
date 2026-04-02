@@ -38,7 +38,8 @@ readiness:
 
 fairness:
   max_fairness_violation: 0.10       # demographic parity threshold  (from mitigation.yaml)
-  min_recall: 0.70                   # healthcare safety floor  (from mitigation.yaml)
+  min_recall: 0.70                   # healthcare safety floor — ranking preference tier
+  recall_hard_floor: 0.60            # hard exclusion floor — configs below this are dropped entirely
 
 task_framing:
   multiclass_minority_support: 20    # minimum support per class in sensitive slices
