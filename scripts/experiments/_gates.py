@@ -10,10 +10,11 @@ All threshold values must come from config files. No defaults are defined here.
 
 from __future__ import annotations
 
-import yaml
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+import yaml
 
 _THRESHOLDS_REL = "configs/recommendations/thresholds.yaml"
 

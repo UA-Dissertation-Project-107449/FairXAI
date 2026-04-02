@@ -18,10 +18,10 @@ from .history import HistoricalReference
 from .ingestion import DatasetIngestor, confirm_ingestion, ingestion_from_schema
 from .models import (
     DatasetIngestion,
+    Priority,
     ReadinessStatus,
     Recommendation,
     TriageReport,
-    Priority,
 )
 from .rules import run_all_checks
 
@@ -54,9 +54,7 @@ class RecommendationEngine:
         # Historical reference (optional)
         self.history: Optional[HistoricalReference] = None
         if self.config.use_historical:
-            h_path = history_base_path or (
-                str(root / "output" / "cardiac") if root else None
-            )
+            h_path = history_base_path or (str(root / "output" / "cardiac") if root else None)
             if h_path and Path(h_path).exists():
                 self.history = HistoricalReference(
                     base_path=h_path,
@@ -132,9 +130,7 @@ class RecommendationEngine:
         )
 
         # --- Step 3: derive readiness status ---
-        readiness_rec = next(
-            (r for r in recommendations if r.category.value == "F"), None
-        )
+        readiness_rec = next((r for r in recommendations if r.category.value == "F"), None)
         if readiness_rec:
             status_str = readiness_rec.evidence.get("readiness_status", "")
             try:
@@ -259,9 +255,7 @@ class RecommendationEngine:
                 "metrics may be affected."
             )
 
-        unconfirmed = [
-            c.name for c in ingestion.columns if not c.user_confirmed
-        ]
+        unconfirmed = [c.name for c in ingestion.columns if not c.user_confirmed]
         if unconfirmed:
             limitations.append(
                 f"{len(unconfirmed)} column(s) have auto-detected roles/types "
@@ -278,39 +272,49 @@ class RecommendationEngine:
         """Return metadata references for TRIAGE_PLAN §5 visuals."""
         panels = []
 
-        panels.append({
-            "id": "triage_scorecard",
-            "type": "table",
-            "description": "Fairness triage scorecard",
-        })
+        panels.append(
+            {
+                "id": "triage_scorecard",
+                "type": "table",
+                "description": "Fairness triage scorecard",
+            }
+        )
 
         if ingestion.sensitive_columns:
-            panels.append({
-                "id": "subgroup_support_heatmap",
-                "type": "heatmap",
-                "description": "Sensitive group × class sample counts",
-                "sensitive_columns": ingestion.sensitive_columns,
-            })
+            panels.append(
+                {
+                    "id": "subgroup_support_heatmap",
+                    "type": "heatmap",
+                    "description": "Sensitive group × class sample counts",
+                    "sensitive_columns": ingestion.sensitive_columns,
+                }
+            )
 
         if profile.get("complexity_metrics"):
-            panels.append({
-                "id": "complexity_radar",
-                "type": "radar",
-                "description": "Complexity family metrics vs. reference",
-            })
+            panels.append(
+                {
+                    "id": "complexity_radar",
+                    "type": "radar",
+                    "description": "Complexity family metrics vs. reference",
+                }
+            )
 
-        panels.append({
-            "id": "readiness_gauge",
-            "type": "gauge",
-            "description": "Overall readiness status",
-        })
+        panels.append(
+            {
+                "id": "readiness_gauge",
+                "type": "gauge",
+                "description": "Overall readiness status",
+            }
+        )
 
         if profile.get("intersection_complexity_metrics"):
-            panels.append({
-                "id": "intersectional_risk_map",
-                "type": "matrix",
-                "description": "Intersectional subgroup support + class prevalence",
-            })
+            panels.append(
+                {
+                    "id": "intersectional_risk_map",
+                    "type": "matrix",
+                    "description": "Intersectional subgroup support + class prevalence",
+                }
+            )
 
         return panels
 

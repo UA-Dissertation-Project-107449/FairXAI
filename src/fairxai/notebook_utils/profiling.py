@@ -6,16 +6,16 @@ import json
 import logging
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
-import matplotlib.pyplot as plt
+
 from ..profiling import (
     compute_complexity_metrics,
     get_supported_complexity_metrics,
     is_complexity_metric_key,
     is_primary_complexity_metric,
 )
-
 from . import PALETTE_DATASET, PALETTE_SEX
 
 logger = logging.getLogger(__name__)
@@ -61,7 +61,9 @@ def load_profiles(files: dict[str, Path]) -> dict[str, dict]:
                 profile = json.load(f)
 
             complexity = profile.get("complexity_metrics", {})
-            has_primary_metrics = any(is_primary_complexity_metric(key) for key in complexity.keys())
+            has_primary_metrics = any(
+                is_primary_complexity_metric(key) for key in complexity.keys()
+            )
             if not has_primary_metrics:
                 legacy_complexity = path.parent / f"{name}_complexity.json"
                 if legacy_complexity.exists():
@@ -82,12 +84,14 @@ def dataset_overview_rows(profiles: dict[str, dict], datasets: list[str]) -> pd.
     for name in datasets:
         profile = profiles.get(name, {})
         basic = profile.get("basic_stats", {})
-        rows.append({
-            "dataset": name,
-            "samples": basic.get("n_samples"),
-            "features": basic.get("n_features"),
-            "target_prevalence": basic.get("target_prevalence"),
-        })
+        rows.append(
+            {
+                "dataset": name,
+                "samples": basic.get("n_samples"),
+                "features": basic.get("n_features"),
+                "target_prevalence": basic.get("target_prevalence"),
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -108,14 +112,16 @@ def sensitive_distribution_rows(
                 pct = proportions.get(group)
                 if pct is None and total:
                     pct = count / total
-                rows.append({
-                    "dataset": name,
-                    "attribute": attr,
-                    "group": group,
-                    "count": count,
-                    "pct": pct,
-                    "underrepresented": pct is not None and pct < 0.10,
-                })
+                rows.append(
+                    {
+                        "dataset": name,
+                        "attribute": attr,
+                        "group": group,
+                        "count": count,
+                        "pct": pct,
+                        "underrepresented": pct is not None and pct < 0.10,
+                    }
+                )
     return pd.DataFrame(rows)
 
 
@@ -130,7 +136,9 @@ def plot_sensitive_proportions(
     if subset.empty:
         logger.warning("No data for %s", attribute)
         return
-    pivot = subset.pivot_table(index="dataset", columns="group", values="pct", aggfunc="sum").fillna(0)
+    pivot = subset.pivot_table(
+        index="dataset", columns="group", values="pct", aggfunc="sum"
+    ).fillna(0)
     pivot = pivot.reindex(datasets)
     ax = pivot.plot(kind="bar", stacked=True, figsize=(8, 4))
     ax.set_title(f"{attribute} proportions")
@@ -152,14 +160,16 @@ def representation_balance_rows(
         profile = profiles.get(name, {})
         for attr in attributes:
             balance = profile.get("representation_balance", {}).get(attr, {})
-            rows.append({
-                "dataset": name,
-                "attribute": attr,
-                "cv": balance.get("coefficient_of_variation"),
-                "min_group": balance.get("min_group_size"),
-                "max_group": balance.get("max_group_size"),
-                "size_ratio": balance.get("size_ratio"),
-            })
+            rows.append(
+                {
+                    "dataset": name,
+                    "attribute": attr,
+                    "cv": balance.get("coefficient_of_variation"),
+                    "min_group": balance.get("min_group_size"),
+                    "max_group": balance.get("max_group_size"),
+                    "size_ratio": balance.get("size_ratio"),
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -195,7 +205,9 @@ def plot_size_ratio_heatmap(
     if ratio_df.empty:
         logger.warning("No size ratio data available.")
         return
-    heat = ratio_df.pivot(index="dataset", columns="attribute", values="size_ratio").reindex(datasets)
+    heat = ratio_df.pivot(index="dataset", columns="attribute", values="size_ratio").reindex(
+        datasets
+    )
     fig, ax = plt.subplots(figsize=(6, 3))
     sns.heatmap(heat, annot=True, fmt=".2f", cmap="Reds", ax=ax)
     ax.set_title("Group size ratio (max/min)")
@@ -215,13 +227,15 @@ def group_statistics_rows(
         for attr in attributes:
             groups = profile.get("group_statistics", {}).get(attr, {})
             for group, stats in groups.items():
-                rows.append({
-                    "dataset": name,
-                    "attribute": attr,
-                    "group": group,
-                    "n": stats.get("n_samples"),
-                    "prevalence": stats.get("target_prevalence"),
-                })
+                rows.append(
+                    {
+                        "dataset": name,
+                        "attribute": attr,
+                        "group": group,
+                        "n": stats.get("n_samples"),
+                        "prevalence": stats.get("target_prevalence"),
+                    }
+                )
     return pd.DataFrame(rows)
 
 
@@ -276,13 +290,19 @@ def spd_rows(
     for name in datasets:
         profile = profiles.get(name, {})
         for attr in attributes:
-            spd = profile.get("label_imbalance_by_group", {}).get(attr, {}).get("statistical_parity_difference", {})
-            rows.append({
-                "dataset": name,
-                "attribute": attr,
-                "max_spd": spd.get("max_difference"),
-                "max_ratio": spd.get("max_ratio"),
-            })
+            spd = (
+                profile.get("label_imbalance_by_group", {})
+                .get(attr, {})
+                .get("statistical_parity_difference", {})
+            )
+            rows.append(
+                {
+                    "dataset": name,
+                    "attribute": attr,
+                    "max_spd": spd.get("max_difference"),
+                    "max_ratio": spd.get("max_ratio"),
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -301,7 +321,13 @@ def plot_spd_bars(
     axes[0].set_title("Max SPD")
     axes[0].set_ylim(0, max(0.2, plot_spd["max_spd"].max() * 1.2))
     if plot_spd["max_ratio"].notna().any():
-        sns.barplot(data=plot_spd.dropna(subset=["max_ratio"]), x="dataset", y="max_ratio", hue="attribute", ax=axes[1])
+        sns.barplot(
+            data=plot_spd.dropna(subset=["max_ratio"]),
+            x="dataset",
+            y="max_ratio",
+            hue="attribute",
+            ax=axes[1],
+        )
         axes[1].set_title("Max ratio")
     else:
         axes[1].axis("off")
@@ -319,7 +345,12 @@ def positive_rate_rows(
 ) -> pd.DataFrame:
     rows = []
     for name in datasets:
-        rates = profiles.get(name, {}).get("label_imbalance_by_group", {}).get(attribute, {}).get("positive_rates", {})
+        rates = (
+            profiles.get(name, {})
+            .get("label_imbalance_by_group", {})
+            .get(attribute, {})
+            .get("positive_rates", {})
+        )
         for group, value in rates.items():
             rows.append(
                 {
@@ -344,7 +375,15 @@ def plot_positive_rates_by_age(
         return
     df["age_group"] = pd.Categorical(df["age_group"], categories=age_order, ordered=True)
     fig, ax = plt.subplots(figsize=(7, 4))
-    sns.lineplot(data=df, x="age_group", y="prevalence", hue="dataset", marker="o", ax=ax, palette=PALETTE_DATASET)
+    sns.lineplot(
+        data=df,
+        x="age_group",
+        y="prevalence",
+        hue="dataset",
+        marker="o",
+        ax=ax,
+        palette=PALETTE_DATASET,
+    )
     ax.set_title("Positive rate by age group")
     ax.set_ylabel("prevalence")
     ax.set_ylim(0, 1.0)
@@ -383,12 +422,16 @@ def complexity_missing_rows(
     for name in datasets:
         complexity = profiles.get(name, {}).get("complexity_metrics", {})
         available = _primary_metric_keys(complexity)
-        alias_metrics = sorted([key for key in complexity.keys() if is_complexity_metric_key(key) and not is_primary_complexity_metric(key)])
-        metadata_fields = sorted([
-            key
-            for key in complexity.keys()
-            if key not in available and key not in alias_metrics
-        ])
+        alias_metrics = sorted(
+            [
+                key
+                for key in complexity.keys()
+                if is_complexity_metric_key(key) and not is_primary_complexity_metric(key)
+            ]
+        )
+        metadata_fields = sorted(
+            [key for key in complexity.keys() if key not in available and key not in alias_metrics]
+        )
         missing = sorted([metric for metric in expected if metric not in available])
         extra = sorted([metric for metric in available if metric not in expected])
         rows.append(

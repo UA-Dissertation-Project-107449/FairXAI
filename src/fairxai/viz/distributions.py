@@ -1,9 +1,9 @@
 from pathlib import Path
 from typing import Callable
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import seaborn as sns
 
 
@@ -36,12 +36,12 @@ def plot_categorical_distribution_grid(
 ) -> tuple[plt.Figure, np.ndarray]:
     """
     Create a grid of categorical distribution plots for multiple datasets.
-    
+
     Educational Features:
     - Auto-generates interpretive subtitle if distributions differ significantly
     - Highlights imbalanced categories (potential fairness issue)
     - Optionally adds fairness context annotation
-    
+
     Parameters
     ----------
     datasets : dict[str, pd.DataFrame]
@@ -64,13 +64,13 @@ def plot_categorical_distribution_grid(
         Figure size (auto-calculated based on dataset count if None)
     save_path : Path, optional
         Save figure to this path
-        
+
     Returns
     -------
     fig : matplotlib.figure.Figure
     axes : np.ndarray
         Array of subplot axes
-        
+
     Examples
     --------
     >>> # Simple usage
@@ -79,7 +79,7 @@ def plot_categorical_distribution_grid(
     ...     column='sex_cat',
     ...     title="Sex Distribution: Train vs Test"
     ... )
-    
+
     >>> # With fairness annotations
     >>> plot_categorical_distribution_grid(
     ...     datasets={'Cleveland': clev, 'Kaggle': kag},
@@ -95,14 +95,14 @@ def plot_categorical_distribution_grid(
     _ensure_column_exists(datasets, column)
 
     n_datasets = len(datasets)
-    
+
     # Auto-calculate layout
     ncols = min(3, n_datasets)  # Max 3 columns
     nrows = (n_datasets + ncols - 1) // ncols
-    
+
     if figsize is None:
         figsize = (5 * ncols, 4 * nrows + 1)  # +1 for title space
-    
+
     fig, axes = plt.subplots(nrows, ncols, figsize=figsize)
     axes = np.atleast_1d(axes).ravel()
 
@@ -111,23 +111,23 @@ def plot_categorical_distribution_grid(
         for _, df in datasets.items():
             category_values.update(df[column].dropna().astype(str).unique())
         category_order = sorted(category_values)
-    
+
     # Compute distribution stats for subtitle generation
     dist_stats = {}
     for name, df in datasets.items():
         counts = df[column].astype(str).value_counts(normalize=True)
         dist_stats[name] = counts
-    
+
     # Auto-generate subtitle if not provided
     if subtitle is None and n_datasets > 1:
         subtitle = _generate_distribution_subtitle(dist_stats, column)
-    
+
     # Plot each dataset
     for idx, (name, df) in enumerate(datasets.items()):
         ax = axes[idx]
         series = df[column].astype(str)
         total = len(series)
-        
+
         if as_proportion:
             proportions = series.value_counts(normalize=True).reindex(category_order, fill_value=0)
             if palette:
@@ -137,7 +137,9 @@ def plot_categorical_distribution_grid(
                     bar_colors = [palette.get(cat, "#7f7f7f") for cat in category_order]
             else:
                 bar_colors = None
-            sns.barplot(x=proportions.index.astype(str), y=proportions.values, palette=bar_colors, ax=ax)
+            sns.barplot(
+                x=proportions.index.astype(str), y=proportions.values, palette=bar_colors, ax=ax
+            )
             ax.set_ylabel("proportion")
             ax.set_ylim(0, 1.08)
         else:
@@ -152,25 +154,37 @@ def plot_categorical_distribution_grid(
                     )
                 else:
                     bar_colors = [palette.get(cat, "#7f7f7f") for cat in category_order]
-                    sns.countplot(data=df.astype({column: str}), x=column, order=category_order, palette=bar_colors, ax=ax)
+                    sns.countplot(
+                        data=df.astype({column: str}),
+                        x=column,
+                        order=category_order,
+                        palette=bar_colors,
+                        ax=ax,
+                    )
             else:
                 sns.countplot(data=df.astype({column: str}), x=column, order=category_order, ax=ax)
             ax.set_ylabel("Count")
-        
-        ax.set_title(f"{name}\n(n={len(df):,})", fontsize=12, fontweight='bold')
+
+        ax.set_title(f"{name}\n(n={len(df):,})", fontsize=12, fontweight="bold")
         ax.set_xlabel("")
-        
+
         # Add percentage annotations
         if show_percentages:
             counts = series.value_counts().reindex(category_order, fill_value=0)
             for container in ax.containers:
                 if as_proportion:
                     if show_counts_in_labels:
-                        labels = [f"{v:.1%}\n({int(counts.loc[cat])})" for cat, v in zip(category_order, container.datavalues)]
+                        labels = [
+                            f"{v:.1%}\n({int(counts.loc[cat])})"
+                            for cat, v in zip(category_order, container.datavalues)
+                        ]
                     else:
                         labels = [f"{v:.1%}" for v in container.datavalues]
                 else:
-                    labels = [f'{(v/total*100 if total else 0):.1f}%\n({int(v)})' for v in container.datavalues]
+                    labels = [
+                        f"{(v/total*100 if total else 0):.1f}%\n({int(v)})"
+                        for v in container.datavalues
+                    ]
                 ax.bar_label(container, labels=labels, fontsize=9)
 
             if as_proportion:
@@ -179,53 +193,57 @@ def plot_categorical_distribution_grid(
             else:
                 ymax = max((container.datavalues.max() for container in ax.containers), default=0)
                 ax.set_ylim(0, float(ymax) * 1.18 if ymax else 1.0)
-        
+
         # Imbalance warning box
         if annotate_imbalance:
             max_pct = df[column].value_counts(normalize=True).max()
             if max_pct > 0.65:  # Fairness threshold
                 ax.text(
-                    0.98, 0.98, '⚠️ Imbalanced',
+                    0.98,
+                    0.98,
+                    "⚠️ Imbalanced",
                     transform=ax.transAxes,
-                    bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.7),
-                    fontsize=9, ha='right', va='top'
+                    bbox=dict(boxstyle="round", facecolor="yellow", alpha=0.7),
+                    fontsize=9,
+                    ha="right",
+                    va="top",
                 )
-    
+
     # Hide unused subplots
     for idx in range(n_datasets, len(axes)):
         axes[idx].set_visible(False)
-    
+
     # Main title and subtitle
     layout_top = 0.95
     if title:
-        fig.suptitle(title, fontsize=16, fontweight='bold', y=1.01)
+        fig.suptitle(title, fontsize=16, fontweight="bold", y=1.01)
         layout_top = 0.88
     if subtitle:
-        fig.text(
-            0.5, 0.925, subtitle,
-            ha='center', fontsize=11, style='italic', color='#555555'
-        )
+        fig.text(0.5, 0.925, subtitle, ha="center", fontsize=11, style="italic", color="#555555")
         layout_top = 0.80 if title else 0.88
-    
+
     # Fairness context box
     if fairness_context:
         fig.text(
-            0.5, 0.02, f"📊 Fairness Note: {fairness_context}",
-            ha='center', fontsize=10,
-            bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.3),
-            wrap=True
+            0.5,
+            0.02,
+            f"📊 Fairness Note: {fairness_context}",
+            ha="center",
+            fontsize=10,
+            bbox=dict(boxstyle="round", facecolor="lightblue", alpha=0.3),
+            wrap=True,
         )
-    
+
     layout_bottom = 0.08 if fairness_context else 0.03
     plt.tight_layout(rect=[0, layout_bottom, 1, layout_top])
-    
+
     if save_path:
         save_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
 
     if show:
         plt.show()
-    
+
     return fig, axes
 
 
@@ -340,7 +358,9 @@ def plot_target_distribution_by_group(
                 sns.barplot(data=grouped, x=group_col, y=target_col, ax=ax)
 
             for container in ax.containers:
-                ax.bar_label(container, labels=[f"{v:.0%}" for v in container.datavalues], fontsize=9)
+                ax.bar_label(
+                    container, labels=[f"{v:.0%}" for v in container.datavalues], fontsize=9
+                )
         else:
             sns.lineplot(data=grouped, x=group_col, y=target_col, ax=ax, marker="o")
             for x_idx, value in enumerate(grouped[target_col]):
@@ -418,7 +438,9 @@ def plot_stacked_group_distribution_grid(
             }
         )
 
-        grouped = temp.groupby([group_col, stack_col], observed=True).size().reset_index(name="count")
+        grouped = (
+            temp.groupby([group_col, stack_col], observed=True).size().reset_index(name="count")
+        )
         pivoted = grouped.pivot(index=group_col, columns=stack_col, values="count").fillna(0)
 
         if group_order_by_dataset and name in group_order_by_dataset:
@@ -699,10 +721,7 @@ def plot_outlier_analysis(
     return fig, axes
 
 
-def _generate_distribution_subtitle(
-    dist_stats: dict[str, pd.Series],
-    column: str
-) -> str:
+def _generate_distribution_subtitle(dist_stats: dict[str, pd.Series], column: str) -> str:
     """
     Auto-generate interpretive subtitle based on distribution differences.
 
@@ -733,9 +752,9 @@ def _generate_distribution_subtitle(
         max_diff = max(max_diff, diff)
 
     # Thresholds for interpretation
-    SIMILAR_THRESHOLD = 0.05   # <5% difference
+    SIMILAR_THRESHOLD = 0.05  # <5% difference
     MODERATE_THRESHOLD = 0.15  # 5–15%
-    
+
     # If very similar
     if max_diff < SIMILAR_THRESHOLD:
         return f"{column} distributions are similar across all datasets."
@@ -748,23 +767,15 @@ def _generate_distribution_subtitle(
         top_pct = series.max() * 100
 
         if top_pct >= 50:
-            dominance_statements.append(
-                f"{name} is {top_pct:.0f}% {top_category}"
-            )
+            dominance_statements.append(f"{name} is {top_pct:.0f}% {top_category}")
         else:
-            dominance_statements.append(
-                f"{name} is relatively balanced"
-            )
+            dominance_statements.append(f"{name} is relatively balanced")
 
     if max_diff < MODERATE_THRESHOLD:
-        return (
-            f"Minor distribution differences observed. "
-            + ", ".join(dominance_statements) + "."
-        )
+        return f"Minor distribution differences observed. " + ", ".join(dominance_statements) + "."
     else:
         return (
-            f"Notable distribution differences detected. "
-            + ", ".join(dominance_statements) + "."
+            f"Notable distribution differences detected. " + ", ".join(dominance_statements) + "."
         )
 
 
@@ -784,7 +795,9 @@ def plot_mixed_feature_batches(
         return figures
 
     units = units or {}
-    batches = [features[index:index + batch_size] for index in range(0, len(features), batch_size)]
+    batches = [
+        features[index : index + batch_size] for index in range(0, len(features), batch_size)
+    ]
 
     for batch in batches:
         fig, axes = plt.subplots(1, len(batch), figsize=(4 * len(batch), 3))
@@ -801,7 +814,11 @@ def plot_mixed_feature_batches(
                 ymax = counts.max() if len(counts) else 0
                 ax.set_ylim(0, float(ymax) * 1.15 if ymax else 1.0)
                 for container in ax.containers:
-                    ax.bar_label(container, labels=[str(int(value)) for value in container.datavalues], fontsize=9)
+                    ax.bar_label(
+                        container,
+                        labels=[str(int(value)) for value in container.datavalues],
+                        fontsize=9,
+                    )
             else:
                 sns.histplot(series, bins=20, ax=ax, color=color)
                 unit = units.get(feature)

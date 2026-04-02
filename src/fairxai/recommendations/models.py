@@ -7,13 +7,14 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-
 # ---------------------------------------------------------------------------
 # Column metadata
 # ---------------------------------------------------------------------------
 
+
 class ColumnType(str, Enum):
     """Detected or declared column data type."""
+
     NUMERICAL = "numerical"
     CATEGORICAL = "categorical"
     BINARY = "binary"
@@ -25,6 +26,7 @@ class ColumnType(str, Enum):
 
 class ColumnRole(str, Enum):
     """Semantic role a column plays in the dataset."""
+
     FEATURE = "feature"
     LABEL = "label"
     SENSITIVE = "sensitive"
@@ -35,6 +37,7 @@ class ColumnRole(str, Enum):
 @dataclass
 class ColumnMeta:
     """Metadata about a single column in a dataset."""
+
     name: str
     detected_type: ColumnType = ColumnType.UNKNOWN
     role: ColumnRole = ColumnRole.FEATURE
@@ -59,9 +62,11 @@ class ColumnMeta:
 # Dataset ingestion descriptor
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class DatasetIngestion:
     """Fully described dataset ready for profiling and recommendation."""
+
     filepath: str
     columns: List[ColumnMeta] = field(default_factory=list)
     label_column: Optional[str] = None
@@ -108,8 +113,10 @@ class DatasetIngestion:
 # Triage recommendations
 # ---------------------------------------------------------------------------
 
+
 class Priority(str, Enum):
     """Recommendation priority / severity."""
+
     P0 = "P0"  # Critical – fairness assessment validity at risk
     P1 = "P1"  # High – strong overlap/imbalance distorts fairness interpretation
     P2 = "P2"  # Medium – explainability reliability concerns
@@ -118,6 +125,7 @@ class Priority(str, Enum):
 
 class Confidence(str, Enum):
     """Confidence in a recommendation based on evidence quality."""
+
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
@@ -125,17 +133,19 @@ class Confidence(str, Enum):
 
 class TriageCategory(str, Enum):
     """Categories from the TRIAGE_PLAN."""
-    A_TASK_FRAMING = "A"          # Task framing readiness
-    B_SENSITIVE_ADEQUACY = "B"    # Sensitive-attribute adequacy
-    C_REPRESENTATION = "C"        # Representation and subgroup support risk
-    D_OVERLAP_AMBIGUITY = "D"     # Overlap and local ambiguity risk
-    E_EXPLAINABILITY = "E"        # Explainability suitability
-    F_READINESS = "F"             # Fairness benchmark readiness status
+
+    A_TASK_FRAMING = "A"  # Task framing readiness
+    B_SENSITIVE_ADEQUACY = "B"  # Sensitive-attribute adequacy
+    C_REPRESENTATION = "C"  # Representation and subgroup support risk
+    D_OVERLAP_AMBIGUITY = "D"  # Overlap and local ambiguity risk
+    E_EXPLAINABILITY = "E"  # Explainability suitability
+    F_READINESS = "F"  # Fairness benchmark readiness status
 
 
 @dataclass
 class Recommendation:
     """A single triage recommendation with evidence and action."""
+
     category: TriageCategory
     priority: Priority
     evidence: Dict[str, Any]
@@ -164,8 +174,10 @@ class Recommendation:
 # Readiness status
 # ---------------------------------------------------------------------------
 
+
 class ReadinessStatus(str, Enum):
     """Overall fairness benchmark readiness."""
+
     READY = "Ready"
     READY_WITH_CAVEATS = "Ready with caveats"
     NOT_READY = "Not ready"
@@ -175,9 +187,11 @@ class ReadinessStatus(str, Enum):
 # Triage report (top-level output)
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class TriageReport:
     """Complete triage output: readiness + recommendations + metadata."""
+
     readiness_status: ReadinessStatus
     recommendations: List[Recommendation] = field(default_factory=list)
     visual_panels: List[Dict[str, Any]] = field(default_factory=list)

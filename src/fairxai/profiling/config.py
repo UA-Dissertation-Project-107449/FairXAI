@@ -45,15 +45,25 @@ class ComplexityConfig:
         raw = raw or {}
 
         self.max_samples: int = int(raw.get("max_samples", _BUILTIN_DEFAULTS["max_samples"]))
-        self.t1_max_samples: int = int(raw.get("t1_max_samples", _BUILTIN_DEFAULTS["t1_max_samples"]))
+        self.t1_max_samples: int = int(
+            raw.get("t1_max_samples", _BUILTIN_DEFAULTS["t1_max_samples"])
+        )
         self.raug_k: int = int(raw.get("raug_k", _BUILTIN_DEFAULTS["raug_k"]))
         self.raug_delta: int = int(raw.get("raug_delta", _BUILTIN_DEFAULTS["raug_delta"]))
-        self.raug_output_variant: str = str(raw.get("raug_output_variant", _BUILTIN_DEFAULTS["raug_output_variant"]))
+        self.raug_output_variant: str = str(
+            raw.get("raug_output_variant", _BUILTIN_DEFAULTS["raug_output_variant"])
+        )
         self.random_seed: int = int(raw.get("random_seed", _BUILTIN_DEFAULTS["random_seed"]))
         self.bayes_k: int = int(raw.get("bayes_k", _BUILTIN_DEFAULTS["bayes_k"]))
-        self.bayes_search_depth: int = int(raw.get("bayes_search_depth", _BUILTIN_DEFAULTS["bayes_search_depth"]))
-        self.linear_svc_max_iter: int = int(raw.get("linear_svc_max_iter", _BUILTIN_DEFAULTS["linear_svc_max_iter"]))
-        self.default_target: str = str(raw.get("default_target", _BUILTIN_DEFAULTS["default_target"]))
+        self.bayes_search_depth: int = int(
+            raw.get("bayes_search_depth", _BUILTIN_DEFAULTS["bayes_search_depth"])
+        )
+        self.linear_svc_max_iter: int = int(
+            raw.get("linear_svc_max_iter", _BUILTIN_DEFAULTS["linear_svc_max_iter"])
+        )
+        self.default_target: str = str(
+            raw.get("default_target", _BUILTIN_DEFAULTS["default_target"])
+        )
 
     # Convenience: allow ``dict(cfg)`` for callers that need plain dicts.
     def to_dict(self) -> dict[str, object]:

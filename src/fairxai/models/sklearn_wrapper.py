@@ -82,7 +82,9 @@ class SklearnClassifierWrapper:
         }
         return metrics
 
-    def _calculate_metrics(self, y_true: pd.Series, y_pred: np.ndarray, y_proba: np.ndarray) -> Dict:
+    def _calculate_metrics(
+        self, y_true: pd.Series, y_pred: np.ndarray, y_proba: np.ndarray
+    ) -> Dict:
         auc = 0.0
         try:
             if len(np.unique(y_proba)) > 1:
@@ -128,7 +130,9 @@ class SklearnClassifierWrapper:
                 }
             ).sort_values("abs_coefficient", ascending=False)
 
-        logging.warning(f"{self.model_name} does not expose direct feature importance coefficients.")
+        logging.warning(
+            f"{self.model_name} does not expose direct feature importance coefficients."
+        )
         return pd.DataFrame(
             {
                 "feature": self.feature_names,

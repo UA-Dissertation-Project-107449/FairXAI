@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Cardiac phase runner: train baseline."""
-from pathlib import Path
+
 import runpy
 import sys
+from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 TARGET = ROOT_DIR / "scripts" / "common" / "train_baseline.py"

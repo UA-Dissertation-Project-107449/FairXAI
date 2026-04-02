@@ -47,11 +47,7 @@ def save_tradeoff_scatter(
     if df is None or df.empty:
         return None
 
-    plot_df = (
-        df[[x_col, y_col, hue_col, style_col]]
-        .dropna(subset=[x_col, y_col])
-        .copy()
-    )
+    plot_df = df[[x_col, y_col, hue_col, style_col]].dropna(subset=[x_col, y_col]).copy()
     if plot_df.empty:
         return None
 

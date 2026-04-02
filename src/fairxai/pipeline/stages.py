@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 # Stage dataclass
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class PipelineStage:
     """Immutable descriptor for one pipeline phase."""
@@ -98,9 +99,7 @@ STAGES: tuple[PipelineStage, ...] = (
         name="assess",
         aliases=("fairness", "assessment"),
         description="Assess post-prediction fairness",
-        checkpoint_artifacts=(
-            "{run_root}/baseline/fairness/*_fairness_assessment.json",
-        ),
+        checkpoint_artifacts=("{run_root}/baseline/fairness/*_fairness_assessment.json",),
     ),
     PipelineStage(
         number=7,
@@ -142,6 +141,7 @@ for _s in STAGES:
 # Resolution helpers
 # ---------------------------------------------------------------------------
 
+
 def resolve_stage(identifier: str) -> PipelineStage:
     """
     Resolve a user-supplied stage identifier to a ``PipelineStage``.
@@ -164,7 +164,7 @@ def resolve_stage(identifier: str) -> PipelineStage:
     # Try stripping common prefixes
     for prefix in ("phase", "stage", "step"):
         if raw.startswith(prefix):
-            suffix = raw[len(prefix):]
+            suffix = raw[len(prefix) :]
             if suffix.isdigit() and int(suffix) in STAGE_BY_NUMBER:
                 return STAGE_BY_NUMBER[int(suffix)]
 
@@ -173,10 +173,7 @@ def resolve_stage(identifier: str) -> PipelineStage:
         return STAGE_BY_NAME[raw]
 
     names = ", ".join(f"{s.number}={s.name}" for s in STAGES)
-    raise ValueError(
-        f"Unknown pipeline stage '{identifier}'. "
-        f"Valid stages: {names}"
-    )
+    raise ValueError(f"Unknown pipeline stage '{identifier}'. " f"Valid stages: {names}")
 
 
 def get_stage_range(
@@ -249,6 +246,7 @@ def get_completed_stages(run_root: Path) -> List[PipelineStage]:
 # Artifact-based validation for resume
 # ---------------------------------------------------------------------------
 
+
 def _expand_artifact_globs(
     patterns: Sequence[str],
     project_root: Path,
@@ -301,9 +299,7 @@ def validate_prior_stages(
 
         # 2. Artifact globs (if declared)
         if stage.checkpoint_artifacts:
-            matches = _expand_artifact_globs(
-                stage.checkpoint_artifacts, project_root, run_root
-            )
+            matches = _expand_artifact_globs(stage.checkpoint_artifacts, project_root, run_root)
             if not matches:
                 patterns_str = ", ".join(stage.checkpoint_artifacts)
                 errors.append(

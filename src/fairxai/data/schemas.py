@@ -25,12 +25,20 @@ _domain_cfg: dict | None = None
 # Built-in fallbacks (used when YAML is not found).
 _FALLBACK_DATASETS = {"cleveland", "kaggle_heart", "cardio70k"}
 _FALLBACK_SENSITIVE_ATTRS: Sequence[str] = (
-    "age_group", "sex", "ethnicity", "group_cluster",
+    "age_group",
+    "sex",
+    "ethnicity",
+    "group_cluster",
 )
 _FALLBACK_SEX_NUMERIC = {0: "Female", 1: "Male", 2: "Male"}
 _FALLBACK_SEX_STRING = {
-    "F": "Female", "Female": "Female", "0": "Female",
-    "M": "Male", "Male": "Male", "1": "Male", "2": "Male",
+    "F": "Female",
+    "Female": "Female",
+    "0": "Female",
+    "M": "Male",
+    "Male": "Male",
+    "1": "Male",
+    "2": "Male",
 }
 _FALLBACK_AGE_CLIP_YEARS = 120
 _FALLBACK_AGE_CLIP_DAYS = 43830
@@ -67,6 +75,7 @@ def _load_domain_config() -> dict:
 
 
 # ── Public accessors (replace former module-level constants) ──────────
+
 
 def get_cardiac_datasets() -> set[str]:
     """Return the set of known cardiac dataset names from domain config."""
@@ -127,6 +136,7 @@ def get_age_unit(dataset: str) -> str:
 
 # ── Schema harmonization ─────────────────────────────────────────────
 
+
 def harmonize_cardiac_schema(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
     """Harmonize cardiac datasets to a unified schema.
 
@@ -178,6 +188,7 @@ def harmonize_cardiac_schema(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
 
 
 # ── Sensitive-column helpers ──────────────────────────────────────────
+
 
 def preferred_sensitive(preferred: Iterable[str] | None = None) -> list[str]:
     """Return the preferred sensitive/group columns in priority order."""

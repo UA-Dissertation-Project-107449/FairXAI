@@ -10,21 +10,23 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-from .schemas import harmonize_cardiac_schema, get_sex_mapping
+from .schemas import get_sex_mapping, harmonize_cardiac_schema
 
 
 class CardiacDataLoader:
     """Loader for cardiac disease datasets with schema mapping."""
 
     def __init__(self, config_path: str, feature_map_path: str | None = None):
-        with open(config_path, 'r') as f:
+        with open(config_path, "r") as f:
             self.config = json.load(f)
-        self.datasets = self.config.get('datasets', {})
-        self.cardiac_datasets = self.config.get('cardiac_relevant_datasets', ["cleveland", "kaggle_heart"])
+        self.datasets = self.config.get("datasets", {})
+        self.cardiac_datasets = self.config.get(
+            "cardiac_relevant_datasets", ["cleveland", "kaggle_heart"]
+        )
         self.feature_map = None
         if feature_map_path:
             try:
-                with open(feature_map_path, 'r') as f:
+                with open(feature_map_path, "r") as f:
                     self.feature_map = yaml.safe_load(f) or {}
             except FileNotFoundError:
                 logging.warning(f"Feature map not found: {feature_map_path}")
@@ -33,22 +35,22 @@ class CardiacDataLoader:
         if dataset_name not in self.datasets:
             raise ValueError(f"Unknown dataset: {dataset_name}")
         dataset_config = self.datasets[dataset_name]
-        filename = dataset_config.get('filename')
+        filename = dataset_config.get("filename")
 
         # Prefer data/external/cardiac/{filename}, then data/external/{filename}
-        p1 = Path(data_dir) / 'cardiac' / filename
+        p1 = Path(data_dir) / "cardiac" / filename
         p2 = Path(data_dir) / filename
         filepath = p1 if p1.exists() else p2
         if not filepath.exists():
             raise FileNotFoundError(f"Dataset file not found: {filepath}")
 
         logging.info(f"Loading {dataset_name} from {filepath}")
-        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             header_line = f.readline()
-        sep = ';' if header_line.count(';') > header_line.count(',') else ','
+        sep = ";" if header_line.count(";") > header_line.count(",") else ","
         df = pd.read_csv(filepath, sep=sep)
-        df['_dataset_source'] = dataset_name
-        df['_dataset_file'] = filename
+        df["_dataset_source"] = dataset_name
+        df["_dataset_file"] = filename
 
         # Harmonize base schema and apply sensitive/target standardization
         df = harmonize_cardiac_schema(df, dataset_name)
@@ -71,30 +73,33 @@ class CardiacDataLoader:
         return datasets
 
     def _apply_sensitive_standardization(self, df: pd.DataFrame, dataset_name: str) -> pd.DataFrame:
-        sens = self.datasets.get(dataset_name, {}).get('sensitive_attributes', {})
+        sens = self.datasets.get(dataset_name, {}).get("sensitive_attributes", {})
 
         # Age binning to age_group if age_raw exists
-        age_key = 'age' if 'age' in sens else 'Age' if 'Age' in sens else None
-        if age_key and 'age_raw' in df.columns:
-            bins = sens[age_key].get('bins', [0, 40, 50, 60, 70, 120])
-            labels = sens[age_key].get('labels', ['<40', '40-49', '50-59', '60-69', '70+'])
-            df['age_group'] = pd.cut(df['age_raw'], bins=bins, labels=labels, include_lowest=True)
+        age_key = "age" if "age" in sens else "Age" if "Age" in sens else None
+        if age_key and "age_raw" in df.columns:
+            bins = sens[age_key].get("bins", [0, 40, 50, 60, 70, 120])
+            labels = sens[age_key].get("labels", ["<40", "40-49", "50-59", "60-69", "70+"])
+            df["age_group"] = pd.cut(df["age_raw"], bins=bins, labels=labels, include_lowest=True)
 
         # Sex mapping (normalize to 0/1 in `sex`, keep labels in `sex_extended`)
         # Canonical fallback mappings come from configs/domain/cardiac.yaml via
         # schemas.get_sex_mapping(); per-dataset overrides in the schema JSON
         # take precedence when present.
         sex_key = (
-            'sex' if 'sex' in sens else
-            'Sex' if 'Sex' in sens else
-            'Gender' if 'Gender' in sens else
-            'gender' if 'gender' in sens else None
+            "sex"
+            if "sex" in sens
+            else (
+                "Sex"
+                if "Sex" in sens
+                else "Gender" if "Gender" in sens else "gender" if "gender" in sens else None
+            )
         )
         if sex_key and sex_key in df.columns:
             raw = df[sex_key]
-            mapping_cfg = sens.get(sex_key, {}).get('mapping', {})
+            mapping_cfg = sens.get(sex_key, {}).get("mapping", {})
             if pd.api.types.is_numeric_dtype(raw):
-                raw_num = pd.to_numeric(raw, errors='coerce')
+                raw_num = pd.to_numeric(raw, errors="coerce")
                 if mapping_cfg:
                     mapping_num = {int(k): v for k, v in mapping_cfg.items()}
                     sex_label = raw_num.map(mapping_num)
@@ -112,36 +117,46 @@ class CardiacDataLoader:
                 raw_str = raw.astype(str).str.strip()
                 sex_label = raw_str.map(get_sex_mapping("string"))
 
-            df['sex_extended'] = sex_label
-            df['sex'] = sex_label.map({'Female': 0, 'Male': 1})
-            df['sex_bin'] = df['sex']
+            df["sex_extended"] = sex_label
+            df["sex"] = sex_label.map({"Female": 0, "Male": 1})
+            df["sex_bin"] = df["sex"]
 
         return df
 
     def _apply_target_standardization(self, df: pd.DataFrame, dataset_name: str) -> pd.DataFrame:
         cfg = self.datasets.get(dataset_name, {})
-        tgt_col = cfg.get('label') or cfg.get('target')
-        mapping = cfg.get('target_mapping')
+        tgt_col = cfg.get("label") or cfg.get("target")
+        mapping = cfg.get("target_mapping")
         if tgt_col and tgt_col in df.columns:
             if mapping:
                 mapped = df[tgt_col].astype(str).map(mapping)
-                df['heart_disease'] = mapped.map({'no_disease': 0, 'disease': 1})
+                df["heart_disease"] = mapped.map({"no_disease": 0, "disease": 1})
             else:
-                df['heart_disease'] = pd.to_numeric(df[tgt_col], errors='coerce')
+                df["heart_disease"] = pd.to_numeric(df[tgt_col], errors="coerce")
         return df
 
     def _apply_feature_rules(self, df: pd.DataFrame, dataset_name: str) -> pd.DataFrame:
         cfg = self.datasets.get(dataset_name, {})
-        unified = self.config.get('unified_schema', {})
+        unified = self.config.get("unified_schema", {})
 
-        include = cfg.get('include_features') or []
-        exclude = cfg.get('exclude_features') or []
-        unified_exclude = unified.get('exclude_features') or []
-        label_col = cfg.get('label') or cfg.get('target')
+        include = cfg.get("include_features") or []
+        exclude = cfg.get("exclude_features") or []
+        unified_exclude = unified.get("exclude_features") or []
+        label_col = cfg.get("label") or cfg.get("target")
 
         required_cols = set(
-            ['heart_disease', 'age_raw', 'age_group', 'sex', 'sex_extended', 'sex_bin',
-             'ethnicity', 'group_cluster', '_dataset_source', '_dataset_file']
+            [
+                "heart_disease",
+                "age_raw",
+                "age_group",
+                "sex",
+                "sex_extended",
+                "sex_bin",
+                "ethnicity",
+                "group_cluster",
+                "_dataset_source",
+                "_dataset_file",
+            ]
         )
 
         if include:
@@ -150,7 +165,7 @@ class CardiacDataLoader:
             df = df[keep_cols].copy()
 
         drop_cols = set(exclude) | set(unified_exclude)
-        if label_col and label_col != 'heart_disease':
+        if label_col and label_col != "heart_disease":
             drop_cols.add(label_col)
 
         drop_cols = [col for col in drop_cols if col in df.columns]
@@ -166,21 +181,21 @@ class CardiacDataLoader:
         def _extract_mappings(section: dict) -> dict[str, list]:
             mappings: dict[str, list] = {}
             for entry in section.values():
-                canonical = entry.get('canonical')
-                aliases = entry.get('aliases') or []
+                canonical = entry.get("canonical")
+                aliases = entry.get("aliases") or []
                 if canonical:
                     mappings[canonical] = list(dict.fromkeys([canonical] + aliases))
             return mappings
 
         mappings = {}
-        mappings.update(_extract_mappings(self.feature_map.get('sensitive', {})))
-        mappings.update(_extract_mappings(self.feature_map.get('target', {})))
-        mappings.update(_extract_mappings(self.feature_map.get('common', {})))
+        mappings.update(_extract_mappings(self.feature_map.get("sensitive", {})))
+        mappings.update(_extract_mappings(self.feature_map.get("target", {})))
+        mappings.update(_extract_mappings(self.feature_map.get("common", {})))
 
-        dataset_specific = self.feature_map.get('dataset_specific', {})
+        dataset_specific = self.feature_map.get("dataset_specific", {})
         for entry in dataset_specific.get(dataset_name, {}).values():
-            canonical = entry.get('canonical')
-            aliases = entry.get('aliases') or []
+            canonical = entry.get("canonical")
+            aliases = entry.get("aliases") or []
             if canonical:
                 mappings[canonical] = list(dict.fromkeys([canonical] + aliases))
 
@@ -209,33 +224,39 @@ class CardiacDataLoader:
         def _collect_aliases(section: dict) -> set:
             aliases = set()
             for entry in section.values():
-                canonical = entry.get('canonical')
+                canonical = entry.get("canonical")
                 if canonical:
                     aliases.add(canonical)
-                for alias in entry.get('aliases') or []:
+                for alias in entry.get("aliases") or []:
                     aliases.add(alias)
             return aliases
 
         known = set()
-        known |= _collect_aliases(self.feature_map.get('sensitive', {}))
-        known |= _collect_aliases(self.feature_map.get('target', {}))
-        known |= _collect_aliases(self.feature_map.get('common', {}))
+        known |= _collect_aliases(self.feature_map.get("sensitive", {}))
+        known |= _collect_aliases(self.feature_map.get("target", {}))
+        known |= _collect_aliases(self.feature_map.get("common", {}))
 
-        dataset_specific = self.feature_map.get('dataset_specific', {})
+        dataset_specific = self.feature_map.get("dataset_specific", {})
         if dataset_name in dataset_specific:
             known |= _collect_aliases(dataset_specific.get(dataset_name, {}))
 
         cfg = self.datasets.get(dataset_name, {})
-        label_col = cfg.get('label') or cfg.get('target')
+        label_col = cfg.get("label") or cfg.get("target")
         if label_col:
             known.add(label_col)
 
         known |= {
-            'heart_disease', 'age_raw', 'age_group', 'sex', 'sex_extended', 'sex_bin',
-            '_dataset_source', '_dataset_file'
+            "heart_disease",
+            "age_raw",
+            "age_group",
+            "sex",
+            "sex_extended",
+            "sex_bin",
+            "_dataset_source",
+            "_dataset_file",
         }
 
-        unmapped = [col for col in df.columns if col not in known and not col.startswith('_')]
+        unmapped = [col for col in df.columns if col not in known and not col.startswith("_")]
         if unmapped:
             logging.info(f"Unmapped columns for {dataset_name}: {sorted(unmapped)}")
 
@@ -249,11 +270,11 @@ class CardiacDataLoader:
 def get_dataset_summary(df: pd.DataFrame, dataset_name: str) -> dict[str, object]:
     """Basic summary used by loading script."""
     return {
-        'dataset_name': dataset_name,
-        'n_samples': int(len(df)),
-        'n_features': int(len(df.columns)),
-        'columns': list(df.columns),
-        'missing_total': int(df.isnull().sum().sum())
+        "dataset_name": dataset_name,
+        "n_samples": int(len(df)),
+        "n_features": int(len(df.columns)),
+        "columns": list(df.columns),
+        "missing_total": int(df.isnull().sum().sum()),
     }
 
 
@@ -267,7 +288,9 @@ def load_standardized_raw(dataset: str, root: str) -> pd.DataFrame:
     return harmonize_cardiac_schema(df, dataset)
 
 
-def load_processed_splits(dataset: str, root: str, scaled: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
+def load_processed_splits(
+    dataset: str, root: str, scaled: bool = True
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Load processed train/test splits for a cardiac dataset.
     scaled=True loads *_train_scaled.csv and *_test_scaled.csv; otherwise loads *_train.csv and *_test.csv
@@ -303,5 +326,7 @@ def load_processed_dataset(
     train_path = data_dir / f"{dataset}_train{suffix}.csv"
     test_path = data_dir / f"{dataset}_test{suffix}.csv"
     if not train_path.exists() or not test_path.exists():
-        raise FileNotFoundError(f"Processed split not found under {data_dir} (looked for {train_path.name} & {test_path.name})")
+        raise FileNotFoundError(
+            f"Processed split not found under {data_dir} (looked for {train_path.name} & {test_path.name})"
+        )
     return pd.read_csv(train_path), pd.read_csv(test_path)

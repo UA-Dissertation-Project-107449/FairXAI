@@ -7,9 +7,10 @@ Runtime behavior (sample caps, enable/disable toggles, CV usage) is configured
 by caller scripts via YAML `xai` sections.
 """
 
+import warnings
 from dataclasses import dataclass
 from typing import Any, Iterable, List, Optional, Union
-import warnings
+
 import numpy as np
 import pandas as pd
 
@@ -17,7 +18,7 @@ import pandas as pd
 def _is_svm_like_model(model: Any) -> bool:
     """Best-effort check for SVM estimators where generic SHAP is unstable/slow."""
     model_name = type(model).__name__.lower()
-    return 'svc' in model_name or model_name.startswith('svm')
+    return "svc" in model_name or model_name.startswith("svm")
 
 
 def _normalize_shap_values(raw_values: Any) -> np.ndarray:
@@ -109,9 +110,9 @@ def shap_explain_tabular(
     try:
         explainer = shap.Explainer(model, df)
     except TypeError:
-        if hasattr(model, 'predict_proba'):
+        if hasattr(model, "predict_proba"):
             explainer = shap.Explainer(lambda X: model.predict_proba(X), df)
-        elif hasattr(model, 'predict'):
+        elif hasattr(model, "predict"):
             explainer = shap.Explainer(lambda X: model.predict(X), df)
         else:
             raise
@@ -120,7 +121,7 @@ def shap_explain_tabular(
     except TypeError:
         shap_values = explainer(df)
 
-    normalized_values = _normalize_shap_values(getattr(shap_values, 'values', shap_values))
+    normalized_values = _normalize_shap_values(getattr(shap_values, "values", shap_values))
     return ShapExplanation(
         shap_values=normalized_values,
         base_values=shap_values.base_values,
@@ -175,9 +176,9 @@ def lime_explain_instance(
 
     def _predict_proba(X: np.ndarray) -> np.ndarray:
         X_df = _to_frame(X)
-        if hasattr(model, 'predict_proba'):
+        if hasattr(model, "predict_proba"):
             return _to_proba_matrix(model.predict_proba(X_df))
-        if hasattr(model, 'decision_function'):
+        if hasattr(model, "decision_function"):
             raw = model.decision_function(X_df)
             raw = np.asarray(raw)
             if raw.ndim == 1:
@@ -199,6 +200,7 @@ def lime_explain_instance(
         _predict_proba,
         num_features=num_features,
     )
+
     def _extract_first(value: Any) -> float:
         if value is None:
             return 0.0

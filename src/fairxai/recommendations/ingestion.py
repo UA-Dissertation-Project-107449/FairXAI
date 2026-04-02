@@ -22,21 +22,38 @@ logger = logging.getLogger(__name__)
 
 # Heuristic constants
 _IDENTIFIER_UNIQUENESS_RATIO = 0.99  # ≥ 99 % unique → likely identifier
-_CATEGORICAL_MAX_CARDINALITY = 20    # numeric col with ≤ 20 unique → categorical
-_BINARY_VALUES = 2                   # exactly 2 unique non-null values
+_CATEGORICAL_MAX_CARDINALITY = 20  # numeric col with ≤ 20 unique → categorical
+_BINARY_VALUES = 2  # exactly 2 unique non-null values
 _LABEL_NAME_HINTS = {
-    "target", "label", "class", "outcome", "y", "diagnosis",
-    "disease", "heart_disease", "condition", "result",
+    "target",
+    "label",
+    "class",
+    "outcome",
+    "y",
+    "diagnosis",
+    "disease",
+    "heart_disease",
+    "condition",
+    "result",
 }
 _SENSITIVE_NAME_HINTS = {
-    "sex", "gender", "age", "age_group", "race", "ethnicity",
-    "religion", "nationality", "disability", "marital_status",
+    "sex",
+    "gender",
+    "age",
+    "age_group",
+    "race",
+    "ethnicity",
+    "religion",
+    "nationality",
+    "disability",
+    "marital_status",
 }
 
 
 # ---------------------------------------------------------------------------
 # CSV inspection helpers
 # ---------------------------------------------------------------------------
+
 
 def _detect_separator(sample: str) -> str:
     """Guess CSV separator from a text sample."""
@@ -71,6 +88,7 @@ def _is_float(value: str) -> bool:
 # ---------------------------------------------------------------------------
 # Column type detection
 # ---------------------------------------------------------------------------
+
 
 def _detect_column_type(series: pd.Series, n_rows: int) -> ColumnType:
     """Infer the type of a single column from its values."""
@@ -138,6 +156,7 @@ def _detect_column_role(
 # ---------------------------------------------------------------------------
 # Public API: auto-detection
 # ---------------------------------------------------------------------------
+
 
 class DatasetIngestor:
     """Detect column metadata from a raw CSV file."""
@@ -231,9 +250,7 @@ class DatasetIngestor:
                     c.user_confirmed = True
 
         # ---- derive convenience lists ----
-        resolved_label = next(
-            (c.name for c in columns if c.role == ColumnRole.LABEL), None
-        )
+        resolved_label = next((c.name for c in columns if c.role == ColumnRole.LABEL), None)
         resolved_sensitive = [c.name for c in columns if c.role == ColumnRole.SENSITIVE]
         resolved_identifiers = [c.name for c in columns if c.role == ColumnRole.IDENTIFIER]
 
@@ -254,6 +271,7 @@ class DatasetIngestor:
 # ---------------------------------------------------------------------------
 # Schema-based fast path (for already-registered datasets)
 # ---------------------------------------------------------------------------
+
 
 def ingestion_from_schema(
     schema_path: str,
@@ -356,6 +374,7 @@ def ingestion_from_schema(
 # ---------------------------------------------------------------------------
 # User override / confirmation helper
 # ---------------------------------------------------------------------------
+
 
 def confirm_ingestion(
     ingestion: DatasetIngestion,

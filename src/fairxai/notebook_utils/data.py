@@ -7,7 +7,9 @@ from pathlib import Path
 import pandas as pd
 
 
-def load_external_datasets(external_files: dict[str, Path], detect_csv_sep) -> dict[str, pd.DataFrame]:
+def load_external_datasets(
+    external_files: dict[str, Path], detect_csv_sep
+) -> dict[str, pd.DataFrame]:
     loaded: dict[str, pd.DataFrame] = {}
     for name, path in external_files.items():
         sep = detect_csv_sep(path)
@@ -19,7 +21,9 @@ def load_raw_datasets(raw_dir: Path, datasets: list[str]) -> dict[str, pd.DataFr
     return {name: pd.read_csv(raw_dir / f"{name}_standardized.csv") for name in datasets}
 
 
-def load_processed_scaled_datasets(processed_dir: Path, datasets: list[str]) -> dict[str, dict[str, pd.DataFrame]]:
+def load_processed_scaled_datasets(
+    processed_dir: Path, datasets: list[str]
+) -> dict[str, dict[str, pd.DataFrame]]:
     processed: dict[str, dict[str, pd.DataFrame]] = {}
     for name in datasets:
         base = processed_dir / name
@@ -49,7 +53,9 @@ def summarize_stage(dfs: dict[str, pd.DataFrame], stage: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def canonical_features_for_columns(columns: list[str], dataset_name: str, feature_map: dict) -> set[str]:
+def canonical_features_for_columns(
+    columns: list[str], dataset_name: str, feature_map: dict
+) -> set[str]:
     canonical: set[str] = set()
 
     def add_from_section(section: dict) -> None:

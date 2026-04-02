@@ -5,7 +5,7 @@ profiling metrics and, when available, historical experiment evidence.
 """
 
 from .engine import RecommendationEngine
-from .models import TriageReport, Recommendation, ReadinessStatus, DatasetIngestion
+from .models import DatasetIngestion, ReadinessStatus, Recommendation, TriageReport
 
 __all__ = [
     "RecommendationEngine",

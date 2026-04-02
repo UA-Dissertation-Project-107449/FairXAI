@@ -4,17 +4,25 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Iterable
+
 import numpy as np
 import pandas as pd
-from fairxai.viz.style import PALETTE_DATASET, PALETTE_SEX, PALETTE_TARGET, UNITS
+
 from fairxai.data.schemas import get_sex_mapping
-from .context import resolve_root_dir, load_domain_config, get_relevant_datasets, make_figure_path_builder
+from fairxai.viz.style import PALETTE_DATASET, PALETTE_SEX, PALETTE_TARGET, UNITS
+
+from .context import (
+    get_relevant_datasets,
+    load_domain_config,
+    make_figure_path_builder,
+    resolve_root_dir,
+)
 from .data import (
-    load_external_datasets,
-    load_raw_datasets,
-    load_processed_scaled_datasets,
-    summarize_stage,
     canonical_features_for_columns,
+    load_external_datasets,
+    load_processed_scaled_datasets,
+    load_raw_datasets,
+    summarize_stage,
 )
 
 __all__ = [
@@ -103,7 +111,9 @@ def age_group_order(dataset_name: str, schema_cfg: dict | None = None) -> list[s
     return ["<40", "40-49", "50-59", "60-69", "70+"]
 
 
-def apply_age_group_order(series: pd.Series, dataset_name: str, schema_cfg: dict | None = None) -> pd.Series:
+def apply_age_group_order(
+    series: pd.Series, dataset_name: str, schema_cfg: dict | None = None
+) -> pd.Series:
     order = age_group_order(dataset_name, schema_cfg)
     return pd.Categorical(series.astype(str), categories=order, ordered=True)
 
@@ -132,13 +142,20 @@ def resolve_sex_series(df: pd.DataFrame) -> pd.Series | None:
     if "gender" in df.columns:
         if pd.api.types.is_numeric_dtype(df["gender"]):
             return df["gender"].map({1: "Female", 2: "Male", 0: "Female"}).astype("object")
-        return df["gender"].astype(str).str.strip().map({
-            "1": "Female",
-            "2": "Male",
-            "0": "Female",
-            "Female": "Female",
-            "Male": "Male",
-        })
+        return (
+            df["gender"]
+            .astype(str)
+            .str.strip()
+            .map(
+                {
+                    "1": "Female",
+                    "2": "Male",
+                    "0": "Female",
+                    "Female": "Female",
+                    "Male": "Male",
+                }
+            )
+        )
     return None
 
 
