@@ -147,7 +147,8 @@ xai:
   mode: top_configs          # all | top_configs | disabled
   top_k: 3                   # interpreted per dataset when top_k_per_dataset=true
   top_k_per_dataset: true
-  max_samples: 200
+  max_samples: 200            # SHAP cap for small datasets (≤10k rows)
+  large_dataset_max_samples: 80  # SHAP cap for large datasets (>10k rows, e.g. cardio70k)
   top_max_samples: 120
   lime_instances: 2
   skip_shap_model_types: [svm]
