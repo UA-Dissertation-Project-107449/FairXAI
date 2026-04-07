@@ -160,7 +160,44 @@ Two helper scripts live at the **project root** (not inside `scripts/`):
 - **`setup.sh`** — bootstraps the virtual environment, checks Python ≥ 3.10, installs `requirements.txt`.
 - **`cleanup.sh`** — removes generated outputs (`output/`, `data/processed/`, `data/raw/`, `logs/`). Flags: `--output-only`, `--keep-latest`, `--nuke-env`, `--dry-run`, `-y`.
 
+## Experiments
+
+| Script | Purpose |
+|--------|---------|
+| `experiments/run_hpo.py` | Hyperparameter optimization (GridSearchCV / RandomizedSearchCV). Run before combinatorial sweep. Outputs `output/<pipeline>/hpo/best_params_{dataset}_{model}.json`. |
+| `experiments/run_combinatorial_experiments.py` | Full experiment matrix. Auto-loads HPO params from `output/<pipeline>/hpo/` if present. Accepts `--feature-selection-mode` (see data/README.md). |
+| `experiments/run_attribute_binning_analysis.py` | Age-binning sweep (26 strategies across 5 families). |
+| `experiments/run_mitigation_comparison.py` | Focused mitigation strategy comparison. |
+| `experiments/run_experiment_comparison.py` | Cross-experiment comparison (Pareto frontier, trade-off scatter). |
+
+### HPO workflow
+
+HPO should run before the main combinatorial sweep:
+
+```bash
+python scripts/experiments/run_hpo.py --pipeline cardiac
+# → writes output/cardiac/hpo/best_params_<dataset>_<model>.json
+
+python scripts/experiments/run_combinatorial_experiments.py --pipeline cardiac
+# → auto-loads HPO params if output/cardiac/hpo/ exists
+```
+
+HPO uses `n_jobs=-1` (it is the only process running). The combinatorial sweep then uses the
+HPO-found params as model defaults, with hardware overrides (`device`, `n_jobs`) re-applied on
+top so HPO cannot clobber GPU or threading settings.
+
+### Feature selection mode
+
+`train_baseline.py` accepts `--feature-selection-mode` and `--rfe-top-k`:
+
+```bash
+python scripts/common/train_baseline.py --pipeline cardiac --feature-selection-mode include_all_sensitive
+python scripts/common/train_baseline.py --pipeline cardiac --feature-selection-mode rfe_top_k --rfe-top-k 10
+```
+
+See `src/fairxai/data/README.md` for all mode descriptions.
+
 ## Notes
 
 - `RUN_ID` should be a single value for the whole run to keep outputs grouped.
-- Dermatology pipeline runners are TODO.
+- **Dermatology pipeline**: data acquisition scaffolded; pipeline not yet implemented. Cardiac only.

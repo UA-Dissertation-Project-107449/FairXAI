@@ -44,12 +44,22 @@ configs/
 | File | Status | Purpose |
 |------|--------|---------|
 | `baseline.yaml` | Active | Single LR baseline experiment |
-| `age_binning.yaml` | Active | Attribute binning strategy sweep (22 strategies) |
+| `age_binning.yaml` | Active | Attribute binning strategy sweep (26 strategies across 5 method families) |
 | `mitigation.yaml` | Active | Fairness mitigation techniques comparison |
-| `combinatorial.yaml` | Active | Full cross-product sweep (dataset x binning x mitigation x model) |
+| `combinatorial.yaml` | Active | Full cross-product sweep (dataset × binning × mitigation × model) |
+| `hpo.yaml` | Active | Hyperparameter optimization (grid/random search per model). Run before combinatorial. |
+| `feature_selection_study.yaml` | Active | Sensitive-attribute ablation (6 feature selection modes on small datasets) |
 | `clustering.yaml` | **DEFERRED** | Subgroup discovery via clustering (design complete, not implemented) |
+
+## Domain configs (`domain/`)
+
+`domain/cardiac.yaml` includes a `clinical_constraints` block that controls physiological
+validity filtering during preprocessing. Rows violating these constraints (e.g. heart rate > 300,
+age < 0) are dropped or flagged before model training. This runs in `scripts/common/preprocess_data.py`
+via `_apply_clinical_constraints()`. Missing features are skipped silently so the same config
+works across all three cardiac datasets.
 
 ## Notes
 
-- `schema/` is not modified by config refactors -- format is fixed for WebApp compatibility.
-- Dermatology configs are TBD (registry.yaml placeholder exists under `datasets/`).
+- `schema/` is not modified by config refactors — format is fixed for WebApp compatibility.
+- **Dermatology pipeline**: data acquisition scaffolded; pipeline not yet implemented. Cardiac only.
