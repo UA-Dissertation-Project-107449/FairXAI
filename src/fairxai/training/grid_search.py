@@ -98,8 +98,10 @@ def run_hpo(
 
     # Guard: skip RBF SVM on large datasets
     if model_type == "svm" and len(X_train) > _RBF_SVM_MAX_ROWS:
-        filtered = {k: [v for v in vals if not (k == "kernel" and v == "rbf")]
-                    for k, vals in param_grid.items()}
+        filtered = {
+            k: [v for v in vals if not (k == "kernel" and v == "rbf")]
+            for k, vals in param_grid.items()
+        }
         if filtered != param_grid:
             logger.warning(
                 f"HPO: RBF kernel removed from SVM grid (n_train={len(X_train)} > "

@@ -94,9 +94,7 @@ class RandomForestModel(SklearnClassifierWrapper):
             logger.info(f"  Training samples: {len(X_train)}")
             logger.info(f"  Positive class: {y_train.sum()} ({y_train.mean():.2%})")
 
-            sample_weight = compute_sample_weight(
-                self._class_weight or "balanced", y_train.values
-            )
+            sample_weight = compute_sample_weight(self._class_weight or "balanced", y_train.values)
             self.model.fit(X_train.values, y_train.values, sample_weight=sample_weight)
 
             y_train_pred = self.predict(X_train)

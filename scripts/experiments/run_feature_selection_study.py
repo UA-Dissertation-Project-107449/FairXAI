@@ -23,8 +23,8 @@ import logging
 import os
 import subprocess
 import sys
-import time
 import threading
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
@@ -107,12 +107,18 @@ def _run_one(
         sys.executable,
         "-u",
         str(project_root / "scripts" / "common" / "train_baseline.py"),
-        "--pipeline", pipeline,
-        "--model-types", model_type,
-        "--feature-selection-mode", mode,
-        "--rfe-top-k", str(rfe_top_k),
-        "--model-n-jobs", str(model_n_jobs),
-        "--cv-n-jobs", "1",
+        "--pipeline",
+        pipeline,
+        "--model-types",
+        model_type,
+        "--feature-selection-mode",
+        mode,
+        "--rfe-top-k",
+        str(rfe_top_k),
+        "--model-n-jobs",
+        str(model_n_jobs),
+        "--cv-n-jobs",
+        "1",
     ]
     if verbose:
         cmd.append("-v")
@@ -124,12 +130,14 @@ def _run_one(
     }
     if threads_per_worker > 0:
         cap = str(threads_per_worker)
-        env.update({
-            "OMP_NUM_THREADS":      cap,
-            "MKL_NUM_THREADS":      cap,
-            "OPENBLAS_NUM_THREADS": cap,
-            "NUMEXPR_NUM_THREADS":  cap,
-        })
+        env.update(
+            {
+                "OMP_NUM_THREADS": cap,
+                "MKL_NUM_THREADS": cap,
+                "OPENBLAS_NUM_THREADS": cap,
+                "NUMEXPR_NUM_THREADS": cap,
+            }
+        )
 
     logger.info(f"[PHASE] RUN mode={mode} model={model_type} (RUN_ID={run_id})")
     logger.info(f"[PHASE] OUTPUT results={results_dir}")
@@ -164,8 +172,13 @@ def _run_one(
                 f"[ERROR] RUN mode={mode} model={model_type} "
                 f"(exit {process.returncode}) — see {run_root}"
             )
-            return {"mode": mode, "model": model_type,
-                    "status": "failed", "exit_code": process.returncode, "duration_s": duration}
+            return {
+                "mode": mode,
+                "model": model_type,
+                "status": "failed",
+                "exit_code": process.returncode,
+                "duration_s": duration,
+            }
         logger.info(f"[SUCCESS] RUN mode={mode} model={model_type} ({duration:.1f}s)")
         return {"mode": mode, "model": model_type, "status": "success", "duration_s": duration}
     except subprocess.TimeoutExpired:
@@ -177,12 +190,23 @@ def _run_one(
         if process is not None:
             _stop_process(process)
         logger.warning(f"[PHASE] INTERRUPTED mode={mode} model={model_type}")
-        return {"mode": mode, "model": model_type, "status": "interrupted", "duration_s": time.monotonic() - t0}
+        return {
+            "mode": mode,
+            "model": model_type,
+            "status": "interrupted",
+            "duration_s": time.monotonic() - t0,
+        }
     except Exception as exc:
         if process is not None and process.poll() is None:
             _stop_process(process)
         logger.error(f"[ERROR] {exc}")
-        return {"mode": mode, "model": model_type, "status": "error", "error": str(exc), "duration_s": 0}
+        return {
+            "mode": mode,
+            "model": model_type,
+            "status": "error",
+            "error": str(exc),
+            "duration_s": 0,
+        }
     finally:
         if process is not None:
             _unregister_process(process)
@@ -226,8 +250,10 @@ def main():
 
     project_root = get_project_root(Path(__file__))
     setup_phase_logging(
-        project_root, "feature_selection_study.log",
-        verbose=args.verbose, stage_name="feature_selection_study",
+        project_root,
+        "feature_selection_study.log",
+        verbose=args.verbose,
+        stage_name="feature_selection_study",
     )
 
     study_cfg_path = project_root / args.config
@@ -240,7 +266,9 @@ def main():
 
     # Summary JSON goes here; actual training outputs go to
     # output/<pipeline>/runs/fs_study_<mode>/ via RUN_ID.
-    summary_dir = project_root / study_cfg.get("output_dir", f"output/{args.pipeline}/feature_selection_study")
+    summary_dir = project_root / study_cfg.get(
+        "output_dir", f"output/{args.pipeline}/feature_selection_study"
+    )
     summary_dir.mkdir(parents=True, exist_ok=True)
     summary_path = summary_dir / "study_summary.json"
     manifest_path = summary_dir / "study_manifest.json"
@@ -259,7 +287,9 @@ def main():
     logger.info(f"[PHASE] Models: {model_types}")
     logger.info(f"[PHASE] Modes: {modes}")
     logger.info(f"[PHASE] rfe_top_k: {rfe_top_k}")
-    logger.info(f"[PHASE] Jobs: {args.jobs}  model_n_jobs={model_n_jobs}  threads_per_worker={threads_per_worker or 'uncapped'}")
+    logger.info(
+        f"[PHASE] Jobs: {args.jobs}  model_n_jobs={model_n_jobs}  threads_per_worker={threads_per_worker or 'uncapped'}"
+    )
     logger.info(f"[PHASE] Summary path: {summary_path}")
     logger.info(f"[PHASE] Manifest path: {manifest_path}")
 
@@ -372,9 +402,18 @@ def main():
             {
                 **run,
                 "run_id": _build_run_id(run["mode"], run["model"]),
-                "run_root": str(project_root / f"output/{args.pipeline}/runs/{_build_run_id(run['mode'], run['model'])}"),
-                "results_dir": str(project_root / f"output/{args.pipeline}/runs/{_build_run_id(run['mode'], run['model'])}/baseline/results"),
-                "models_dir": str(project_root / f"output/{args.pipeline}/runs/{_build_run_id(run['mode'], run['model'])}/baseline/models"),
+                "run_root": str(
+                    project_root
+                    / f"output/{args.pipeline}/runs/{_build_run_id(run['mode'], run['model'])}"
+                ),
+                "results_dir": str(
+                    project_root
+                    / f"output/{args.pipeline}/runs/{_build_run_id(run['mode'], run['model'])}/baseline/results"
+                ),
+                "models_dir": str(
+                    project_root
+                    / f"output/{args.pipeline}/runs/{_build_run_id(run['mode'], run['model'])}/baseline/models"
+                ),
             }
             for run in results
         ],

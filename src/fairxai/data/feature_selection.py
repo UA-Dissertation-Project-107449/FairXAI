@@ -77,11 +77,8 @@ def build_feature_set(
     elif mode.startswith("include_") and mode.endswith("_only"):
         # e.g. "include_sex_only" → keep only "sex" (or "sex_*") from sensitive_attrs
         # e.g. "include_age_only" → keeps age_group, age_raw, etc. (prefix match)
-        attr_name = mode[len("include_"):-len("_only")]
-        matched = [
-            c for c in present_sensitive
-            if c == attr_name or c.startswith(attr_name + "_")
-        ]
+        attr_name = mode[len("include_") : -len("_only")]
+        matched = [c for c in present_sensitive if c == attr_name or c.startswith(attr_name + "_")]
         if not matched:
             available = present_sensitive or sensitive_attrs
             raise ValueError(
@@ -91,9 +88,7 @@ def build_feature_set(
             )
         drop = [c for c in present_sensitive if c not in matched]
         kept = [c for c in all_cols if c not in drop]
-        logger.debug(
-            f"[feature_selection] {mode}: kept {matched}, dropped {drop}"
-        )
+        logger.debug(f"[feature_selection] {mode}: kept {matched}, dropped {drop}")
 
     elif mode == "rfe_top_k":
         kept = _rfe_top_k(X, all_cols, present_sensitive, top_k, trained_model)

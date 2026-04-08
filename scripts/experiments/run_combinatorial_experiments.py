@@ -1431,8 +1431,13 @@ def run_combinatorial_analysis(
                             continue
 
                         for variant in _resolve_model_variants(
-                            config, model_type, project_root, xgb_device,
-                            outer_n_jobs=n_jobs, dataset=dataset, hpo_dir=hpo_dir,
+                            config,
+                            model_type,
+                            project_root,
+                            xgb_device,
+                            outer_n_jobs=n_jobs,
+                            dataset=dataset,
+                            hpo_dir=hpo_dir,
                         ):
                             exp_id = versioning.generate_experiment_id()
                             exp_config = {
@@ -1464,8 +1469,13 @@ def run_combinatorial_analysis(
             for binning in config["binning_strategies"]:
                 for training_method in config["training_methods"]:
                     for variant in _resolve_model_variants(
-                        config, "logistic_regression", project_root, xgb_device,
-                        outer_n_jobs=n_jobs, dataset=dataset, hpo_dir=hpo_dir,
+                        config,
+                        "logistic_regression",
+                        project_root,
+                        xgb_device,
+                        outer_n_jobs=n_jobs,
+                        dataset=dataset,
+                        hpo_dir=hpo_dir,
                     ):
                         exp_id = versioning.generate_experiment_id()
                         exp_config = {

@@ -15,8 +15,8 @@ Usage:
 """
 
 import argparse
-import json
 import inspect
+import json
 import logging
 import os
 import sys
@@ -199,7 +199,9 @@ def _resolve_model_types(args_model_types: Optional[list[str]], training_cfg: di
     return [str(legacy).strip().lower()]
 
 
-def _apply_model_thread_override(model_class: Any, model_params: dict, model_n_jobs: Optional[int]) -> dict:
+def _apply_model_thread_override(
+    model_class: Any, model_params: dict, model_n_jobs: Optional[int]
+) -> dict:
     """Apply an explicit n_jobs override only when the model accepts it."""
     if model_n_jobs is None:
         return model_params
@@ -244,14 +246,11 @@ def _build_model_params(
     if hpo_dir is not None and dataset_name is not None:
         hpo_best = load_hpo_params(hpo_dir, dataset_name, model_type)
         if hpo_best:
-            logging.info(
-                f"  [HPO] Loaded best params for {model_type}/{dataset_name}: {hpo_best}"
-            )
+            logging.info(f"  [HPO] Loaded best params for {model_type}/{dataset_name}: {hpo_best}")
             params.update(hpo_best)
         else:
             logging.debug(
-                f"  [HPO] No saved params found for {model_type}/{dataset_name}; "
-                "using defaults."
+                f"  [HPO] No saved params found for {model_type}/{dataset_name}; " "using defaults."
             )
     return params
 
@@ -468,14 +467,18 @@ def main():
 
             try:
                 model_class = get_model_class(model_type)
-                hpo_dir = (
-                    project_root / f"output/{pipeline}/hpo" if args.use_hpo else None
-                )
+                hpo_dir = project_root / f"output/{pipeline}/hpo" if args.use_hpo else None
                 model_params = _build_model_params(
-                    model_type, training_cfg, random_state, project_root,
-                    hpo_dir=hpo_dir, dataset_name=dataset_name,
+                    model_type,
+                    training_cfg,
+                    random_state,
+                    project_root,
+                    hpo_dir=hpo_dir,
+                    dataset_name=dataset_name,
                 )
-                model_params = _apply_model_thread_override(model_class, model_params, args.model_n_jobs)
+                model_params = _apply_model_thread_override(
+                    model_class, model_params, args.model_n_jobs
+                )
                 model = model_class(**model_params)
             except Exception as exc:
                 logging.warning(f"Skipping model_type={model_type} for {dataset_name}: {exc}")
@@ -487,7 +490,9 @@ def main():
 
             if fs_mode == "rfe_top_k":
                 # Two-pass: quick first fit on all features → importances → reduce → retrain
-                logging.info(f"  [rfe_top_k] first-pass fit on {len(X_train_full.columns)} features")
+                logging.info(
+                    f"  [rfe_top_k] first-pass fit on {len(X_train_full.columns)} features"
+                )
                 first_pass = model_class(**model_params)
                 first_pass.train(X_train_full, y_train)
                 X_train, feature_cols = build_feature_set(
