@@ -1,0 +1,59 @@
+# Hyperparameter Optimisation (HPO) configuration
+#
+# NOTE: This is sklearn GridSearchCV / RandomizedSearchCV for *performance* tuning.
+#       It is NOT fairlearn's GridSearchReduction (which is a fairness-constrained
+#       in-processing technique listed under mitigation_techniques in combinatorial.yaml).
+#
+# Flow:
+#   1. Run scripts/experiments/run_hpo.py → output/cardiac/hpo/best_params_<dataset>_<model>.json
+#   2. The combinatorial runner / train_baseline.py loads those files and uses
+#      them as model defaults, so every subsequent experiment benefits from tuned params.
+#
+# Parameter keys must match the **sklearn** estimator's constructor args, not the
+# FairXAI wrapper.  Values that should always be fixed (random_state, n_jobs) are
+# set by the runner, not searched here.
+
+scoring: f1          # Primary optimisation metric
+cv_folds: 5
+recall_hard_floor: 0.60   # Warn when best CV recall is below this
+
+# Maximum n_rows for which RBF SVM search is tractable (O(n²) memory).
+max_rows_for_rbf_svm: 5000
+
+grids:
+  logistic_regression:
+    search: grid    # Small grid → exhaustive is fast
+    params:
+      C: [0.01, 0.1, 1.0, 10.0]
+      penalty: [l2]
+      solver: [lbfgs]
+      max_iter: [1000]
+
+  random_forest:
+    search: random  # Large grid → random sampling
+    n_iter: 20
+    params:
+      n_estimators: [100, 200, 300, 400]
+      max_depth: [null, 8, 14, 20]
+      min_samples_leaf: [1, 2, 4]
+      max_features: [sqrt, log2]
+
+  svm:
+    search: grid    # Small grid (linear only for large datasets; rbf added when safe)
+    params:
+      C: [0.1, 1.0, 10.0]
+      kernel: [linear, rbf]   # rbf removed automatically for n_rows > max_rows_for_rbf_svm
+      gamma: [scale]
+
+  xgboost:
+    search: random
+    n_iter: 20
+    params:
+      n_estimators: [100, 200, 300]
+      max_depth: [3, 4, 6]
+      learning_rate: [0.01, 0.05, 0.1]
+      subsample: [0.7, 0.9]
+      colsample_bytree: [0.7, 0.9]
+
+# Output directory (relative to project root)
+output_dir: output/cardiac/hpo

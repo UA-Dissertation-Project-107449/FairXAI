@@ -47,7 +47,8 @@ The following functions are intentionally scaffolded and currently raise
 - `plot_before_after_distributions`
 - `plot_scaling_effects`
 
-Planned implementation target: **Q2 2026**.
+These functions will raise `NotImplementedError` at runtime. Implementation is deferred
+(see `docs/ROADMAP.md` for current project status).
 
 ## Usage Example
 

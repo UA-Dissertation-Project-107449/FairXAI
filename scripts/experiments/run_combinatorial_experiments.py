@@ -34,13 +34,21 @@ from fairxai.experiments.data_io import (
 )
 from fairxai.experiments.data_io import load_schema_config as load_schema_config_shared
 from fairxai.experiments.versioning import ExperimentVersioning
-from fairxai.explainability.tabular import lime_explain_instance, shap_explain_tabular
+from fairxai.explainability.tabular import (
+    adaptive_shap_sample_cap,
+    build_lime_explainer,
+    lime_explain_instance,
+    shap_explain_tabular,
+)
 from fairxai.fairness.metrics import FairnessMetrics
 from fairxai.fairness.mitigation import MitigationEngine
 from fairxai.models import get_model_class
 from fairxai.models.baseline import BaselineLogisticRegression
 from fairxai.models.cv_trainer import CVTrainer
 from fairxai.utils.config import load_yaml_config
+from fairxai.utils.gpu import detect_accelerator
+
+logger = logging.getLogger(__name__)
 
 STAGE_MAP = {
     "reweighting": "pre-processing",
@@ -131,29 +139,26 @@ def _annotate_gate_fields(result: Dict[str, Any], thresholds: Dict[str, float]) 
 def _resolve_xgb_device(config: Dict[str, Any]) -> str:
     """Resolve XGBoost compute device from config accelerator setting.
 
-    Returns 'cuda' if an NVIDIA GPU is available and accelerator is auto/cuda,
-    otherwise 'cpu'. AMD/ROCm is not supported by XGBoost's hist backend and
-    falls back to cpu.
+    Returns 'cuda' when an NVIDIA GPU is detected (or explicitly requested),
+    otherwise 'cpu'. AMD/ROCm is not supported and falls back to 'cpu'.
     """
-    accelerator = str(config.get("accelerator", "auto")).strip().lower()
-    if accelerator == "cpu":
-        return "cpu"
-    if accelerator == "cuda":
-        return "cuda"
-    # auto: probe for NVIDIA GPU via nvidia-smi (no heavy import needed)
-    try:
-        import subprocess
+    return detect_accelerator(config.get("accelerator", "auto"))
 
-        result = subprocess.run(
-            ["nvidia-smi", "--list-gpus"],
-            capture_output=True,
-            timeout=3,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return "cuda"
-    except Exception:
-        pass
-    return "cpu"
+
+def _resolve_model_n_jobs(outer_n_jobs: int) -> int:
+    """Return the n_jobs value to pass to individual model constructors.
+
+    When the outer experiment loop already runs multiple workers in parallel,
+    each model should use a single thread to avoid CPU/RAM over-subscription.
+    Only allow the model to use all cores when experiments run sequentially.
+
+    Args:
+        outer_n_jobs: Number of parallel experiment workers (from config/CLI).
+
+    Returns:
+        ``1`` when ``outer_n_jobs > 1``, ``-1`` (all cores) otherwise.
+    """
+    return 1 if outer_n_jobs > 1 else -1
 
 
 def _coerce_probability_vector(values: Any) -> np.ndarray:
@@ -321,11 +326,34 @@ def _resolve_model_variants(
     model_type: str,
     project_root: Path,
     xgb_device: Optional[str] = None,
+    outer_n_jobs: int = 1,
+    dataset: Optional[str] = None,
+    hpo_dir: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """Resolve model variants: base params from model file, overrides from config."""
+    from fairxai.training.grid_search import load_hpo_params
+
     base_params = _load_model_config(project_root, model_type)
     if model_type == "xgboost" and xgb_device is not None:
         base_params["device"] = xgb_device
+    if model_type == "random_forest" and xgb_device == "cuda":
+        # Enable RAPIDS cuML GPU backend when a CUDA device is available.
+        base_params["use_gpu"] = True
+    # Prevent CPU/RAM over-subscription: when outer experiment workers > 1,
+    # each model must use a single thread (not all cores).
+    if model_type in {"random_forest", "xgboost"} and "n_jobs" in base_params:
+        base_params["n_jobs"] = _resolve_model_n_jobs(outer_n_jobs)
+    # Merge HPO best params when available (override defaults, keep GPU/n_jobs overrides after).
+    if hpo_dir is not None and dataset is not None:
+        hpo_best = load_hpo_params(hpo_dir, dataset, model_type)
+        if hpo_best:
+            logger.debug(f"[HPO] Loaded params for {model_type}/{dataset}: {hpo_best}")
+            base_params.update(hpo_best)
+            # Re-apply hardware overrides that must not be clobbered by HPO.
+            if model_type == "xgboost" and xgb_device is not None:
+                base_params["device"] = xgb_device
+            if model_type in {"random_forest", "xgboost"} and "n_jobs" in base_params:
+                base_params["n_jobs"] = _resolve_model_n_jobs(outer_n_jobs)
 
     variants = config.get("model_variants", {}).get(model_type, [])
     if not variants:
@@ -502,7 +530,11 @@ def save_experiment_xai(
     lime_dir = dataset_xai_dir / "lime"
     shap_dir.mkdir(parents=True, exist_ok=True)
     lime_dir.mkdir(parents=True, exist_ok=True)
-    max_samples = int(xai_cfg.get("max_samples", 200))
+    max_samples = adaptive_shap_sample_cap(
+        n_rows=len(X_ref),
+        base_cap=int(xai_cfg.get("max_samples", 200)),
+        large_cap=int(xai_cfg.get("large_dataset_max_samples", 80)),
+    )
     lime_instances = int(xai_cfg.get("lime_instances", 2))
     allow_svm_shap = bool(xai_cfg.get("allow_svm_shap", False))
     shap_enabled = _is_shap_enabled_for_model(model_type, xai_cfg)
@@ -632,6 +664,12 @@ def save_experiment_xai(
         if lime_instances > 0 and lime_model is not None:
             lime_rows = X_lime.sample(n=min(lime_instances, len(X_lime)), random_state=42)
             lime_results = []
+            # Build explainer once and reuse across all LIME instances.
+            lime_expl = build_lime_explainer(
+                X_ref,
+                feature_names=list(X_ref.columns),
+                class_names=["no_disease", "disease"],
+            )
             for idx, row in lime_rows.iterrows():
                 exp = lime_explain_instance(
                     model=lime_model,
@@ -640,6 +678,7 @@ def save_experiment_xai(
                     feature_names=list(X_ref.columns),
                     class_names=["no_disease", "disease"],
                     num_features=10,
+                    explainer=lime_expl,
                 )
                 for feat, weight in exp.weights:
                     lime_results.append(
@@ -1060,7 +1099,11 @@ def run_cv_experiment(
     allow_svm_shap = bool(xai_cfg.get("allow_svm_shap", False))
     tracked_indices = None
     feature_names = list(X_full.columns)
-    shap_max_samples = int(xai_cfg.get("max_samples", 200))
+    shap_max_samples = adaptive_shap_sample_cap(
+        n_rows=len(X_full),
+        base_cap=int(xai_cfg.get("max_samples", 200)),
+        large_cap=int(xai_cfg.get("large_dataset_max_samples", 80)),
+    )
     if xai_enabled:
         lime_n = int(xai_cfg.get("lime_instances", 2))
         rng = np.random.RandomState(config.get("random_seed", 42))
@@ -1360,6 +1403,11 @@ def run_combinatorial_analysis(
 
     # Generate all experiment combinations
     experiments = []
+    # HPO: load best params directory (auto-detected; silently skipped when absent).
+    hpo_output_dir = project_root / f"output/{pipeline}/hpo"
+    hpo_dir: Optional[Path] = hpo_output_dir if hpo_output_dir.exists() else None
+    if hpo_dir:
+        logger.info(f"[HPO] Using pre-computed HPO params from: {hpo_dir}")
     fairness_base_params_cfg = config.get("fairness_base_model_params")
     model_types = [
         str(m).strip().lower() for m in config.get("model_types", ["logistic_regression"])
@@ -1383,7 +1431,13 @@ def run_combinatorial_analysis(
                             continue
 
                         for variant in _resolve_model_variants(
-                            config, model_type, project_root, xgb_device
+                            config,
+                            model_type,
+                            project_root,
+                            xgb_device,
+                            outer_n_jobs=n_jobs,
+                            dataset=dataset,
+                            hpo_dir=hpo_dir,
                         ):
                             exp_id = versioning.generate_experiment_id()
                             exp_config = {
@@ -1415,7 +1469,13 @@ def run_combinatorial_analysis(
             for binning in config["binning_strategies"]:
                 for training_method in config["training_methods"]:
                     for variant in _resolve_model_variants(
-                        config, "logistic_regression", project_root, xgb_device
+                        config,
+                        "logistic_regression",
+                        project_root,
+                        xgb_device,
+                        outer_n_jobs=n_jobs,
+                        dataset=dataset,
+                        hpo_dir=hpo_dir,
                     ):
                         exp_id = versioning.generate_experiment_id()
                         exp_config = {

@@ -15,6 +15,25 @@ import numpy as np
 import pandas as pd
 
 
+def adaptive_shap_sample_cap(n_rows: int, base_cap: int = 1000, large_cap: int = 200) -> int:
+    """Return a SHAP sample cap appropriate for the dataset size.
+
+    Keeps SHAP tractable on large datasets (e.g. cardio70k with 70 k rows)
+    without reducing it unnecessarily on small ones.
+
+    Args:
+        n_rows: Number of rows in the dataset being explained.
+        base_cap: Cap used for small datasets (n_rows ≤ 10 000).
+        large_cap: Cap used for large datasets (n_rows > 10 000).
+
+    Returns:
+        The smaller of ``base_cap`` / ``large_cap`` and ``n_rows``.
+    """
+    threshold = 10_000
+    cap = base_cap if n_rows <= threshold else large_cap
+    return min(cap, n_rows)
+
+
 def _is_svm_like_model(model: Any) -> bool:
     """Best-effort check for SVM estimators where generic SHAP is unstable/slow."""
     model_name = type(model).__name__.lower()
@@ -139,6 +158,41 @@ class LimeExplanation:
     local_pred: float
 
 
+def build_lime_explainer(
+    training_data: pd.DataFrame,
+    feature_names: Optional[Iterable[str]] = None,
+    class_names: Optional[List[str]] = None,
+) -> Any:
+    """Build a :class:`~lime.lime_tabular.LimeTabularExplainer` for reuse.
+
+    Pre-building the explainer and passing it to :func:`lime_explain_instance`
+    avoids the cost of reconstructing it on every single-instance call — which
+    is especially noticeable in CV loops where the same training set is reused
+    across multiple tracked instances in the same fold.
+
+    Args:
+        training_data: Background training set (as used for the current fold).
+        feature_names: Column names; defaults to ``training_data.columns``.
+        class_names: Class labels for display (e.g. ``['no_disease', 'disease']``).
+
+    Returns:
+        A ``LimeTabularExplainer`` instance ready to call ``explain_instance``.
+    """
+    try:
+        from lime.lime_tabular import LimeTabularExplainer
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError("lime is required for LIME explanations. pip install lime") from exc
+
+    names = list(feature_names) if feature_names is not None else list(training_data.columns)
+    return LimeTabularExplainer(
+        training_data.values,
+        feature_names=names,
+        class_names=class_names,
+        discretize_continuous=True,
+        mode="classification",
+    )
+
+
 def lime_explain_instance(
     model: Any,
     data_row: pd.Series,
@@ -146,13 +200,24 @@ def lime_explain_instance(
     feature_names: Optional[Iterable[str]] = None,
     class_names: Optional[List[str]] = None,
     num_features: int = 10,
+    explainer: Optional[Any] = None,
 ) -> LimeExplanation:
-    """Compute a single-instance LIME explanation for tabular data."""
-    try:
-        from lime.lime_tabular import LimeTabularExplainer
-    except ImportError as exc:  # pragma: no cover
-        raise ImportError("lime is required for LIME explanations. pip install lime") from exc
+    """Compute a single-instance LIME explanation for tabular data.
 
+    Args:
+        model: Trained model with ``predict_proba`` or ``decision_function``.
+        data_row: Single row to explain (as a ``pd.Series``).
+        training_data: Background dataset for the explainer.
+        feature_names: Column names (defaults to ``training_data.columns``).
+        class_names: Class labels for display.
+        num_features: Number of top features to return.
+        explainer: Pre-built ``LimeTabularExplainer`` to reuse across calls.
+            When provided, ``training_data``, ``feature_names``, and
+            ``class_names`` are ignored for explainer construction — pass
+            them only for the first call or use :func:`build_lime_explainer`.
+            Reusing avoids the overhead of rebuilding discretisation bins on
+            every invocation (important in CV fold loops).
+    """
     if feature_names is None:
         feature_names = list(training_data.columns)
 
@@ -188,13 +253,9 @@ def lime_explain_instance(
             return exp_scores / np.sum(exp_scores, axis=1, keepdims=True)
         raise ValueError("Model must provide predict_proba or decision_function for LIME")
 
-    explainer = LimeTabularExplainer(
-        training_data.values,
-        feature_names=list(feature_names),
-        class_names=class_names,
-        discretize_continuous=True,
-        mode="classification",
-    )
+    if explainer is None:
+        explainer = build_lime_explainer(training_data, feature_names, class_names)
+
     exp = explainer.explain_instance(
         data_row.values,
         _predict_proba,

@@ -10,4 +10,5 @@ __all__ = [
     "preprocessors",
     "profilers",
     "schemas",
+    "feature_selection",
 ]

@@ -1,0 +1,46 @@
+# Feature Selection Study — sensitive-attribute ablation
+#
+# Research question: is access to sensitive attributes (age_group, sex, ethnicity)
+# essential for fair model performance?
+#
+# Run this study SEPARATELY from the main combinatorial sweep — it reuses the same
+# preprocessed data and trained models but varies which features are visible.
+#
+# Usage
+# -----
+# python scripts/experiments/run_feature_selection_study.py --pipeline cardiac
+#
+# Datasets: small datasets only (fast comparison, no cardio70k).
+# Models:   all four, but logistic_regression is the primary reference (most interpretable).
+#
+# Modes
+# -----
+# exclude_sensitive     — model-blind baseline: no demographic proxies visible
+# include_all_sensitive — model-aware: all sensitive attrs included (research target)
+# include_sex_only      — ablation: only sex visible
+# include_age_only      — ablation: only age_group visible
+# include_ethnicity_only — ablation: only ethnicity visible (where present)
+# rfe_top_k             — importance-ranked top-k (agnostic to sensitive attrs)
+
+datasets: [cleveland, kaggle_heart]
+
+binning_strategy: fixed_10yr
+
+models: [logistic_regression, random_forest, svm, xgboost]
+
+feature_selection_modes:
+  - exclude_sensitive
+  - include_all_sensitive
+  - include_sex_only
+  - include_age_only
+  - rfe_top_k
+  # include_ethnicity_only: omitted — cardiac datasets have no ethnicity column.
+  # Add back if a dataset with ethnicity is introduced.
+
+rfe_top_k: 10
+
+cv_folds: 5
+random_seed: 42
+
+# Output relative to project root
+output_dir: output/cardiac/feature_selection_study

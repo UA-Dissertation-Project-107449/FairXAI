@@ -11,15 +11,35 @@ configuration loading.
 |------|---------|
 | `config.py` | YAML config loading helpers |
 | `logging_utils.py` | Centralized logging setup (console + file handlers, verbosity levels) |
+| `gpu.py` | GPU/accelerator detection utility |
 | `__init__.py` | Public re-exports for utility APIs |
 
 ## Public API
 
 - `setup_logging(log_file, verbose=0)`
   - Configures project logging handlers and verbosity behavior.
+- `detect_accelerator(requested='auto') -> str`
+  - Returns `'cuda'` or `'cpu'`. `'auto'` probes `nvidia-smi`; falls back to `'cpu'` on any error.
+  - Pass `'cuda'` or `'cpu'` explicitly to skip detection.
 
 Additional utilities are imported directly from submodules as needed:
 - `load_yaml_config` from `config.py`
+
+## GPU Detection
+
+`gpu.py` is used by the combinatorial experiment runner and model wrappers (XGBoost, cuML RF)
+to determine which compute backend to use at runtime:
+
+```python
+from fairxai.utils.gpu import detect_accelerator
+
+device = detect_accelerator("auto")   # 'cuda' if nvidia-smi succeeds, else 'cpu'
+device = detect_accelerator("cuda")   # explicit override — no probe
+device = detect_accelerator("cpu")    # force CPU path
+```
+
+The function is side-effect free and safe to call multiple times. It does not import any GPU
+libraries — it only probes `nvidia-smi` to avoid import errors on CPU-only machines.
 
 ## Logging Notes
 

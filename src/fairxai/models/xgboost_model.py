@@ -20,6 +20,7 @@ class XGBoostModel(SklearnClassifierWrapper):
         n_jobs: int = -1,
         eval_metric: str = "logloss",
         tree_method: str = "hist",
+        device: str = "cpu",
     ):
         try:
             from xgboost import XGBClassifier
@@ -27,6 +28,9 @@ class XGBoostModel(SklearnClassifierWrapper):
             raise ImportError(
                 "xgboost is not installed. Install it before selecting model_type='xgboost'."
             ) from exc
+
+        # XGBoost ≥2.0: tree_method must be 'hist' when device='cuda'
+        resolved_tree_method = "hist" if device == "cuda" else tree_method
 
         estimator = XGBClassifier(
             n_estimators=n_estimators,
@@ -38,6 +42,7 @@ class XGBoostModel(SklearnClassifierWrapper):
             random_state=random_state,
             n_jobs=n_jobs,
             eval_metric=eval_metric,
-            tree_method=tree_method,
+            tree_method=resolved_tree_method,
+            device=device,
         )
         super().__init__(estimator=estimator, model_name="XGBoost")

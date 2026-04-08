@@ -5,8 +5,38 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import StratifiedKFold
+
+
+def _train_fold_worker(
+    fold_idx: int,
+    train_idx: np.ndarray,
+    val_idx: np.ndarray,
+    X: pd.DataFrame,
+    y: pd.Series,
+    model_class: Any,
+    model_params: Dict,
+) -> Dict:
+    """Stateless, picklable worker that trains and evaluates one CV fold.
+
+    Used by :meth:`CVTrainer.run_cv_experiment` when ``cv_n_jobs != 1`` and
+    XAI is disabled (XAI requires the live model object and cannot be
+    parallelised this way).
+    """
+    X_train, y_train = X.iloc[train_idx], y.iloc[train_idx]
+    X_val, y_val = X.iloc[val_idx], y.iloc[val_idx]
+    model = model_class(**model_params)
+    model.train(X_train, y_train)
+    val_metrics = model.evaluate(X_val, y_val)
+    return {
+        "fold_idx": fold_idx,
+        "train_indices": train_idx,
+        "val_indices": val_idx,
+        "train_metrics": model.training_metrics,
+        "val_metrics": val_metrics,
+    }
 
 
 class CVTrainer:
@@ -163,6 +193,7 @@ class CVTrainer:
         tracked_indices: Optional[List[int]] = None,
         feature_names: Optional[List[str]] = None,
         shap_max_samples: int = 1000,
+        cv_n_jobs: int = 1,
     ) -> Dict:
         """
         Run full cross-validation experiment.
@@ -181,6 +212,12 @@ class CVTrainer:
                 lands in the validation set.
             feature_names: Feature names for XAI output (defaults to X.columns).
             shap_max_samples: Cap for SHAP background / computation samples.
+            cv_n_jobs: Number of parallel workers for the fold loop.
+                ``1`` (default) keeps folds sequential — required when the
+                caller already runs multiple experiments in parallel, or when
+                ``xai_enabled=True`` (XAI needs the live model object and
+                cannot be parallelised).  Pass ``-1`` to use all cores when
+                running standalone with no outer parallelism.
 
         Returns:
             Dictionary with aggregated CV results (and XAI data when enabled).
@@ -200,49 +237,71 @@ class CVTrainer:
         # Create folds
         folds = self.create_stratified_folds(X, y, sensitive_attrs)
 
-        # Store results for each fold
-        fold_results = []
-
-        for fold_idx, (train_idx, val_idx) in enumerate(folds):
-            self.logger.info(f"\nTraining fold {fold_idx + 1}/{self.n_folds}...")
-
-            # Split data
-            X_train = X.iloc[train_idx]
-            y_train = y.iloc[train_idx]
-            X_val = X.iloc[val_idx]
-            y_val = y.iloc[val_idx]
-
-            # Create fresh model instance for this fold
-            model = model_class(**model_params)
-
-            # Train and evaluate
-            fold_result = self.train_fold(model, X_train, y_train, X_val, y_val)
-            fold_result["fold_idx"] = fold_idx
-            fold_result["train_indices"] = train_idx
-            fold_result["val_indices"] = val_idx
-
-            # --- XAI (while model is still alive) ---
-            if xai_enabled:
-                fold_result["xai"] = self._run_xai_for_fold(
-                    model=model,
-                    X_train=X_train,
-                    X_val=X_val,
-                    feature_names=feature_names,
-                    tracked_indices=tracked_indices,
-                    val_indices=val_idx,
-                    fold_idx=fold_idx,
-                    max_samples=shap_max_samples,
-                    shap_enabled=shap_enabled,
-                    allow_svm_shap=allow_svm_shap,
+        # --- Parallel fold execution (metrics only, no XAI) ---
+        # XAI requires the live model object per fold and cannot be
+        # parallelised via joblib without significant complexity.
+        use_parallel = cv_n_jobs != 1 and not xai_enabled
+        if use_parallel:
+            self.logger.info(
+                f"Running {self._last_effective_folds} folds in parallel (cv_n_jobs={cv_n_jobs})"
+            )
+            fold_results = Parallel(n_jobs=cv_n_jobs)(
+                delayed(_train_fold_worker)(i, ti, vi, X, y, model_class, model_params)
+                for i, (ti, vi) in enumerate(folds)
+            )
+            for fr in fold_results:
+                self.logger.info(
+                    f"  [FOLD {fr['fold_idx'] + 1}/{self._last_effective_folds}] "
+                    f"Accuracy: {fr['val_metrics']['accuracy']:.3f}  "
+                    f"Recall: {fr['val_metrics']['recall']:.3f}  "
+                    f"F1: {fr['val_metrics']['f1_score']:.3f}"
+                )
+        else:
+            # Sequential fold loop (required for XAI or when outer parallel is active)
+            fold_results = []
+            for fold_idx, (train_idx, val_idx) in enumerate(folds):
+                self.logger.info(
+                    f"\n[FOLD {fold_idx + 1}/{self._last_effective_folds}] Training..."
                 )
 
-            fold_results.append(fold_result)
+                X_train = X.iloc[train_idx]
+                y_train = y.iloc[train_idx]
+                X_val = X.iloc[val_idx]
+                y_val = y.iloc[val_idx]
 
-            # Log fold performance
-            self.logger.info(f"  Fold {fold_idx} val metrics:")
-            self.logger.info(f"    Accuracy: {fold_result['val_metrics']['accuracy']:.3f}")
-            self.logger.info(f"    Recall: {fold_result['val_metrics']['recall']:.3f}")
-            self.logger.info(f"    F1: {fold_result['val_metrics']['f1_score']:.3f}")
+                model = model_class(**model_params)
+                fold_result = self.train_fold(model, X_train, y_train, X_val, y_val)
+                fold_result["fold_idx"] = fold_idx
+                fold_result["train_indices"] = train_idx
+                fold_result["val_indices"] = val_idx
+
+                if xai_enabled:
+                    fold_result["xai"] = self._run_xai_for_fold(
+                        model=model,
+                        X_train=X_train,
+                        X_val=X_val,
+                        feature_names=feature_names,
+                        tracked_indices=tracked_indices,
+                        val_indices=val_idx,
+                        fold_idx=fold_idx,
+                        max_samples=shap_max_samples,
+                        shap_enabled=shap_enabled,
+                        allow_svm_shap=allow_svm_shap,
+                    )
+
+                fold_results.append(fold_result)
+                self.logger.info(
+                    f"  [FOLD {fold_idx + 1}/{self._last_effective_folds}] "
+                    f"Accuracy: {fold_result['val_metrics']['accuracy']:.3f}"
+                )
+                self.logger.info(
+                    f"  [FOLD {fold_idx + 1}/{self._last_effective_folds}] "
+                    f"Recall: {fold_result['val_metrics']['recall']:.3f}"
+                )
+                self.logger.info(
+                    f"  [FOLD {fold_idx + 1}/{self._last_effective_folds}] "
+                    f"F1: {fold_result['val_metrics']['f1_score']:.3f}"
+                )
 
         # Aggregate results
         aggregated = self.aggregate_fold_results(fold_results)
@@ -326,6 +385,7 @@ class CVTrainer:
             'lime_results': list[dict]}``
         """
         from fairxai.explainability.tabular import (
+            build_lime_explainer,
             lime_explain_instance,
             shap_explain_tabular,
         )
@@ -382,6 +442,19 @@ class CVTrainer:
             targets_in_fold = [idx for idx in tracked_indices if idx in val_set]
 
             inner_model = getattr(model, "model", model)
+            # Build the explainer once for this fold so it is reused across
+            # all tracked instances (avoids redundant discretisation rebuilds).
+            lime_expl = None
+            if targets_in_fold:
+                try:
+                    lime_expl = build_lime_explainer(
+                        X_train,
+                        feature_names=feature_names,
+                        class_names=["no_disease", "disease"],
+                    )
+                except Exception as exc:
+                    self.logger.warning(f"  Fold {fold_idx}: LIME explainer build failed — {exc}")
+
             for idx in targets_in_fold:
                 try:
                     # Locate the row in X_val by its global index
@@ -397,6 +470,7 @@ class CVTrainer:
                         feature_names=feature_names,
                         class_names=["no_disease", "disease"],
                         num_features=10,
+                        explainer=lime_expl,
                     )
                     for feat, weight in exp.weights:
                         xai_result["lime_results"].append(

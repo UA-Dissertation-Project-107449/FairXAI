@@ -15,6 +15,7 @@ Usage:
 """
 
 import argparse
+import inspect
 import json
 import logging
 import os
@@ -31,8 +32,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from fairxai.cli.runner_base import get_project_root, load_pipeline_config, setup_phase_logging
 from fairxai.cli.runner_utils import archive_latest_run
+from fairxai.data.feature_selection import build_feature_set
 from fairxai.experiments.data_io import build_schema_excludes, resolve_base_dataset
-from fairxai.explainability.tabular import lime_explain_instance, shap_explain_tabular
+from fairxai.explainability.tabular import (
+    build_lime_explainer,
+    lime_explain_instance,
+    shap_explain_tabular,
+)
 from fairxai.models import get_model_class
 from fairxai.models.baseline import generate_predictions_with_metadata
 from fairxai.models.cv_trainer import CVTrainer
@@ -143,6 +149,12 @@ def save_xai_outputs(
         if lime_instances > 0 and lime_model is not None:
             lime_rows = X_lime.sample(n=min(lime_instances, len(X_lime)), random_state=42)
             lime_results = []
+            # Build explainer once and reuse across all LIME instances.
+            lime_expl = build_lime_explainer(
+                X_ref,
+                feature_names=list(X_ref.columns),
+                class_names=["no_disease", "disease"],
+            )
             for idx, row in lime_rows.iterrows():
                 exp = lime_explain_instance(
                     model=lime_model,
@@ -151,6 +163,7 @@ def save_xai_outputs(
                     feature_names=list(X_ref.columns),
                     class_names=["no_disease", "disease"],
                     num_features=10,
+                    explainer=lime_expl,
                 )
                 for feat, weight in exp.weights:
                     lime_results.append(
@@ -186,13 +199,59 @@ def _resolve_model_types(args_model_types: Optional[list[str]], training_cfg: di
     return [str(legacy).strip().lower()]
 
 
-def _build_model_params(
-    model_type: str, training_cfg: dict, random_state: int, project_root: Path
+def _apply_model_thread_override(
+    model_class: Any, model_params: dict, model_n_jobs: Optional[int]
 ) -> dict:
-    """Load base hyperparameters from model config file."""
+    """Apply an explicit n_jobs override only when the model accepts it."""
+    if model_n_jobs is None:
+        return model_params
+
+    try:
+        signature = inspect.signature(model_class.__init__)
+    except (TypeError, ValueError):
+        return model_params
+
+    if "n_jobs" in signature.parameters:
+        updated = dict(model_params)
+        updated["n_jobs"] = model_n_jobs
+        return updated
+
+    logging.debug(
+        "Model class %s does not accept n_jobs; override ignored.",
+        getattr(model_class, "__name__", str(model_class)),
+    )
+    return model_params
+
+
+def _build_model_params(
+    model_type: str,
+    training_cfg: dict,
+    random_state: int,
+    project_root: Path,
+    hpo_dir: Optional[Path] = None,
+    dataset_name: Optional[str] = None,
+) -> dict:
+    """Load base hyperparameters from model config file.
+
+    When ``hpo_dir`` and ``dataset_name`` are provided, best params from a
+    previous :func:`~fairxai.training.grid_search.run_hpo` run are merged on
+    top of the base config, overriding only the searched keys.
+    """
+    from fairxai.training.grid_search import load_hpo_params
+
     model_cfg_path = project_root / "configs" / "models" / f"{model_type}.yaml"
     params = dict(load_yaml_config(str(model_cfg_path)).get("hyperparameters", {}))
     params.setdefault("random_state", random_state)
+
+    if hpo_dir is not None and dataset_name is not None:
+        hpo_best = load_hpo_params(hpo_dir, dataset_name, model_type)
+        if hpo_best:
+            logging.info(f"  [HPO] Loaded best params for {model_type}/{dataset_name}: {hpo_best}")
+            params.update(hpo_best)
+        else:
+            logging.debug(
+                f"  [HPO] No saved params found for {model_type}/{dataset_name}; " "using defaults."
+            )
     return params
 
 
@@ -215,6 +274,43 @@ def main():
         nargs="+",
         default=None,
         help="Optional model types override (e.g. logistic_regression random_forest svm xgboost)",
+    )
+    parser.add_argument(
+        "--use-hpo",
+        action="store_true",
+        default=False,
+        help=(
+            "Load best hyperparameters from a previous HPO run "
+            "(output/cardiac/hpo/best_params_<dataset>_<model>.json). "
+            "Run scripts/experiments/run_hpo.py first."
+        ),
+    )
+    parser.add_argument(
+        "--feature-selection-mode",
+        default="exclude_sensitive",
+        help=(
+            "Feature selection strategy: "
+            "exclude_sensitive (default), include_all_sensitive, "
+            "include_sex_only, include_age_only, include_ethnicity_only, rfe_top_k"
+        ),
+    )
+    parser.add_argument(
+        "--rfe-top-k",
+        type=int,
+        default=10,
+        help="Number of features to keep when --feature-selection-mode=rfe_top_k (default: 10)",
+    )
+    parser.add_argument(
+        "--model-n-jobs",
+        type=int,
+        default=None,
+        help="Override model n_jobs when supported (default: use model config)",
+    )
+    parser.add_argument(
+        "--cv-n-jobs",
+        type=int,
+        default=1,
+        help="Parallel workers for CV folds when XAI is disabled (default: 1)",
     )
     parser.add_argument(
         "-v", "--verbose", action="count", default=0, help="Verbosity: -v=info, -vv=debug"
@@ -257,6 +353,10 @@ def main():
             logger=logging.getLogger(__name__),
         )
 
+    logging.info(f"  Run root: {baseline_root}")
+    logging.info(f"  Models will be saved to: {models_dir}")
+    logging.info(f"  Results will be saved to: {experiments_dir}")
+
     models_dir.mkdir(parents=True, exist_ok=True)
     experiments_dir.mkdir(parents=True, exist_ok=True)
 
@@ -270,6 +370,8 @@ def main():
     logging.info(f"  Models: {model_types}")
     logging.info(f"  Random state: {random_state}")
     logging.info(f"  Decision thresholds: {thresholds_to_test}")
+    logging.info(f"  Model n_jobs override: {args.model_n_jobs}")
+    logging.info(f"  CV n_jobs: {args.cv_n_jobs}")
 
     # Find processed datasets
     train_files = list(data_processed.glob("*_train_scaled.csv"))
@@ -305,6 +407,7 @@ def main():
         logging.info(f"Loaded data:")
         logging.info(f"  Train: {len(train_df)} samples")
         logging.info(f"  Test: {len(test_df)} samples")
+        logging.info(f"  Feature-selection mode: {args.feature_selection_mode}")
 
         # Separate features, target, and sensitive attributes
         # Note: scaled files have both encoded and categorical versions
@@ -323,21 +426,39 @@ def main():
             for col in train_df.columns
             if col.startswith("sex_bin") or col.startswith("sex_extended")
         ]
-        exclude_cols = [target_col] + sensitive_cols + schema_exclude + extra_excludes
+        # Always exclude target and schema/extra cols; sensitive cols are handled by
+        # build_feature_set according to the selected mode.
+        hard_exclude = set([target_col] + schema_exclude + extra_excludes)
 
-        # Get feature columns (all except target and categorical sensitive attrs)
-        feature_cols = [col for col in train_df.columns if col not in exclude_cols]
+        # Candidate features: everything not hard-excluded (includes sensitive attrs).
+        candidate_cols = [c for c in train_df.columns if c not in hard_exclude]
+        X_train_full = train_df[candidate_cols].select_dtypes(include=[np.number])
+        X_test_full = test_df[candidate_cols].select_dtypes(include=[np.number])
 
-        X_train = train_df[feature_cols].select_dtypes(include=[np.number])
+        fs_mode = args.feature_selection_mode
+        if fs_mode != "rfe_top_k":
+            X_train, feature_cols = build_feature_set(
+                X_train_full,
+                sensitive_attrs=sensitive_cols,
+                mode=fs_mode,
+                top_k=args.rfe_top_k,
+                trained_model=None,
+            )
+            X_test = X_test_full[feature_cols]
+        else:
+            # rfe_top_k needs a fitted model — deferred to inside the model loop (two-pass)
+            X_train = X_train_full
+            X_test = X_test_full
+            feature_cols = list(X_train_full.columns)
+
         y_train = train_df[target_col]
-        X_test = test_df[feature_cols].select_dtypes(include=[np.number])
         y_test = test_df[target_col]
 
         # Keep categorical versions for fairness analysis
         sensitive_train = train_df[sensitive_cols]
         sensitive_test = test_df[sensitive_cols]
 
-        logging.info(f"Features: {len(feature_cols)}")
+        logging.info(f"Features: {len(feature_cols)} (mode={fs_mode})")
 
         results_summary.setdefault(dataset_name, {})
 
@@ -346,8 +467,17 @@ def main():
 
             try:
                 model_class = get_model_class(model_type)
+                hpo_dir = project_root / f"output/{pipeline}/hpo" if args.use_hpo else None
                 model_params = _build_model_params(
-                    model_type, training_cfg, random_state, project_root
+                    model_type,
+                    training_cfg,
+                    random_state,
+                    project_root,
+                    hpo_dir=hpo_dir,
+                    dataset_name=dataset_name,
+                )
+                model_params = _apply_model_thread_override(
+                    model_class, model_params, args.model_n_jobs
                 )
                 model = model_class(**model_params)
             except Exception as exc:
@@ -357,6 +487,23 @@ def main():
                     "reason": str(exc),
                 }
                 continue
+
+            if fs_mode == "rfe_top_k":
+                # Two-pass: quick first fit on all features → importances → reduce → retrain
+                logging.info(
+                    f"  [rfe_top_k] first-pass fit on {len(X_train_full.columns)} features"
+                )
+                first_pass = model_class(**model_params)
+                first_pass.train(X_train_full, y_train)
+                X_train, feature_cols = build_feature_set(
+                    X_train_full,
+                    sensitive_attrs=sensitive_cols,
+                    mode="rfe_top_k",
+                    top_k=args.rfe_top_k,
+                    trained_model=first_pass,
+                )
+                X_test = X_test_full[feature_cols]
+                logging.info(f"  [rfe_top_k] selected {len(feature_cols)} features: {feature_cols}")
 
             train_metrics = model.train(X_train, y_train)
 
@@ -505,6 +652,7 @@ def main():
                         tracked_indices=tracked,
                         feature_names=list(X_full.columns),
                         shap_max_samples=cv_shap_max,
+                        cv_n_jobs=args.cv_n_jobs,
                     )
 
                     cv_shap_dir = xai_dir / xai_dataset_key / "cv" / "shap"

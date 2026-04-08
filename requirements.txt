@@ -1,3 +1,7 @@
+# GPU/CUDA dependencies — NOT listed here; require CUDA toolkit on host.
+# Install manually AFTER "module load cuda/12.4.0" (HPC) or with CUDA drivers present:
+#   pip install cuml-cu12==25.2.1
+# Also available as: pip install -e ".[gpu]" (see pyproject.toml [project.optional-dependencies.gpu])
 aiosqlite==0.22.1
 alembic==1.18.3
 annotated-doc==0.0.4
