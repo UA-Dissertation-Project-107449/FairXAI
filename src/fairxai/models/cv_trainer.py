@@ -251,7 +251,7 @@ class CVTrainer:
             )
             for fr in fold_results:
                 self.logger.info(
-                    f"  Fold {fr['fold_idx']} — "
+                    f"  [FOLD {fr['fold_idx'] + 1}/{self._last_effective_folds}] "
                     f"Accuracy: {fr['val_metrics']['accuracy']:.3f}  "
                     f"Recall: {fr['val_metrics']['recall']:.3f}  "
                     f"F1: {fr['val_metrics']['f1_score']:.3f}"
@@ -260,7 +260,9 @@ class CVTrainer:
             # Sequential fold loop (required for XAI or when outer parallel is active)
             fold_results = []
             for fold_idx, (train_idx, val_idx) in enumerate(folds):
-                self.logger.info(f"\nTraining fold {fold_idx + 1}/{self.n_folds}...")
+                self.logger.info(
+                    f"\n[FOLD {fold_idx + 1}/{self._last_effective_folds}] Training..."
+                )
 
                 X_train = X.iloc[train_idx]
                 y_train = y.iloc[train_idx]
@@ -288,10 +290,18 @@ class CVTrainer:
                     )
 
                 fold_results.append(fold_result)
-                self.logger.info(f"  Fold {fold_idx} val metrics:")
-                self.logger.info(f"    Accuracy: {fold_result['val_metrics']['accuracy']:.3f}")
-                self.logger.info(f"    Recall: {fold_result['val_metrics']['recall']:.3f}")
-                self.logger.info(f"    F1: {fold_result['val_metrics']['f1_score']:.3f}")
+                self.logger.info(
+                    f"  [FOLD {fold_idx + 1}/{self._last_effective_folds}] "
+                    f"Accuracy: {fold_result['val_metrics']['accuracy']:.3f}"
+                )
+                self.logger.info(
+                    f"  [FOLD {fold_idx + 1}/{self._last_effective_folds}] "
+                    f"Recall: {fold_result['val_metrics']['recall']:.3f}"
+                )
+                self.logger.info(
+                    f"  [FOLD {fold_idx + 1}/{self._last_effective_folds}] "
+                    f"F1: {fold_result['val_metrics']['f1_score']:.3f}"
+                )
 
         # Aggregate results
         aggregated = self.aggregate_fold_results(fold_results)

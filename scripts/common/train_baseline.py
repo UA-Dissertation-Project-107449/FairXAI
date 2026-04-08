@@ -16,6 +16,7 @@ Usage:
 
 import argparse
 import json
+import inspect
 import logging
 import os
 import sys
@@ -198,6 +199,28 @@ def _resolve_model_types(args_model_types: Optional[list[str]], training_cfg: di
     return [str(legacy).strip().lower()]
 
 
+def _apply_model_thread_override(model_class: Any, model_params: dict, model_n_jobs: Optional[int]) -> dict:
+    """Apply an explicit n_jobs override only when the model accepts it."""
+    if model_n_jobs is None:
+        return model_params
+
+    try:
+        signature = inspect.signature(model_class.__init__)
+    except (TypeError, ValueError):
+        return model_params
+
+    if "n_jobs" in signature.parameters:
+        updated = dict(model_params)
+        updated["n_jobs"] = model_n_jobs
+        return updated
+
+    logging.debug(
+        "Model class %s does not accept n_jobs; override ignored.",
+        getattr(model_class, "__name__", str(model_class)),
+    )
+    return model_params
+
+
 def _build_model_params(
     model_type: str,
     training_cfg: dict,
@@ -279,6 +302,18 @@ def main():
         help="Number of features to keep when --feature-selection-mode=rfe_top_k (default: 10)",
     )
     parser.add_argument(
+        "--model-n-jobs",
+        type=int,
+        default=None,
+        help="Override model n_jobs when supported (default: use model config)",
+    )
+    parser.add_argument(
+        "--cv-n-jobs",
+        type=int,
+        default=1,
+        help="Parallel workers for CV folds when XAI is disabled (default: 1)",
+    )
+    parser.add_argument(
         "-v", "--verbose", action="count", default=0, help="Verbosity: -v=info, -vv=debug"
     )
     args = parser.parse_args()
@@ -319,6 +354,10 @@ def main():
             logger=logging.getLogger(__name__),
         )
 
+    logging.info(f"  Run root: {baseline_root}")
+    logging.info(f"  Models will be saved to: {models_dir}")
+    logging.info(f"  Results will be saved to: {experiments_dir}")
+
     models_dir.mkdir(parents=True, exist_ok=True)
     experiments_dir.mkdir(parents=True, exist_ok=True)
 
@@ -332,6 +371,8 @@ def main():
     logging.info(f"  Models: {model_types}")
     logging.info(f"  Random state: {random_state}")
     logging.info(f"  Decision thresholds: {thresholds_to_test}")
+    logging.info(f"  Model n_jobs override: {args.model_n_jobs}")
+    logging.info(f"  CV n_jobs: {args.cv_n_jobs}")
 
     # Find processed datasets
     train_files = list(data_processed.glob("*_train_scaled.csv"))
@@ -367,6 +408,7 @@ def main():
         logging.info(f"Loaded data:")
         logging.info(f"  Train: {len(train_df)} samples")
         logging.info(f"  Test: {len(test_df)} samples")
+        logging.info(f"  Feature-selection mode: {args.feature_selection_mode}")
 
         # Separate features, target, and sensitive attributes
         # Note: scaled files have both encoded and categorical versions
@@ -395,14 +437,20 @@ def main():
         X_test_full = test_df[candidate_cols].select_dtypes(include=[np.number])
 
         fs_mode = args.feature_selection_mode
-        X_train, feature_cols = build_feature_set(
-            X_train_full,
-            sensitive_attrs=sensitive_cols,
-            mode=fs_mode,
-            top_k=args.rfe_top_k,
-            trained_model=None,  # static modes only at this stage; rfe_top_k needs a fitted model
-        )
-        X_test = X_test_full[feature_cols]
+        if fs_mode != "rfe_top_k":
+            X_train, feature_cols = build_feature_set(
+                X_train_full,
+                sensitive_attrs=sensitive_cols,
+                mode=fs_mode,
+                top_k=args.rfe_top_k,
+                trained_model=None,
+            )
+            X_test = X_test_full[feature_cols]
+        else:
+            # rfe_top_k needs a fitted model — deferred to inside the model loop (two-pass)
+            X_train = X_train_full
+            X_test = X_test_full
+            feature_cols = list(X_train_full.columns)
 
         y_train = train_df[target_col]
         y_test = test_df[target_col]
@@ -427,6 +475,7 @@ def main():
                     model_type, training_cfg, random_state, project_root,
                     hpo_dir=hpo_dir, dataset_name=dataset_name,
                 )
+                model_params = _apply_model_thread_override(model_class, model_params, args.model_n_jobs)
                 model = model_class(**model_params)
             except Exception as exc:
                 logging.warning(f"Skipping model_type={model_type} for {dataset_name}: {exc}")
@@ -435,6 +484,21 @@ def main():
                     "reason": str(exc),
                 }
                 continue
+
+            if fs_mode == "rfe_top_k":
+                # Two-pass: quick first fit on all features → importances → reduce → retrain
+                logging.info(f"  [rfe_top_k] first-pass fit on {len(X_train_full.columns)} features")
+                first_pass = model_class(**model_params)
+                first_pass.train(X_train_full, y_train)
+                X_train, feature_cols = build_feature_set(
+                    X_train_full,
+                    sensitive_attrs=sensitive_cols,
+                    mode="rfe_top_k",
+                    top_k=args.rfe_top_k,
+                    trained_model=first_pass,
+                )
+                X_test = X_test_full[feature_cols]
+                logging.info(f"  [rfe_top_k] selected {len(feature_cols)} features: {feature_cols}")
 
             train_metrics = model.train(X_train, y_train)
 
@@ -583,10 +647,7 @@ def main():
                         tracked_indices=tracked,
                         feature_names=list(X_full.columns),
                         shap_max_samples=cv_shap_max,
-                        # Standalone baseline run: no outer parallelism, so
-                        # parallelize folds with XAI disabled at fold level
-                        # (XAI is run separately after CV here).
-                        cv_n_jobs=1,
+                        cv_n_jobs=args.cv_n_jobs,
                     )
 
                     cv_shap_dir = xai_dir / xai_dataset_key / "cv" / "shap"

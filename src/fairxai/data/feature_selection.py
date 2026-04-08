@@ -75,18 +75,24 @@ def build_feature_set(
         logger.debug("[feature_selection] include_all_sensitive: all columns retained")
 
     elif mode.startswith("include_") and mode.endswith("_only"):
-        # e.g. "include_sex_only" → keep only "sex" from sensitive_attrs
+        # e.g. "include_sex_only" → keep only "sex" (or "sex_*") from sensitive_attrs
+        # e.g. "include_age_only" → keeps age_group, age_raw, etc. (prefix match)
         attr_name = mode[len("include_"):-len("_only")]
-        if attr_name not in present_sensitive:
+        matched = [
+            c for c in present_sensitive
+            if c == attr_name or c.startswith(attr_name + "_")
+        ]
+        if not matched:
             available = present_sensitive or sensitive_attrs
             raise ValueError(
                 f"[feature_selection] mode='{mode}' requests attribute '{attr_name}' "
-                f"but it is not present in X.  Available sensitive cols: {available}"
+                f"but no column matching '{attr_name}' or '{attr_name}_*' is present in X. "
+                f"Available sensitive cols: {available}"
             )
-        drop = [c for c in present_sensitive if c != attr_name]
+        drop = [c for c in present_sensitive if c not in matched]
         kept = [c for c in all_cols if c not in drop]
         logger.debug(
-            f"[feature_selection] {mode}: kept '{attr_name}', dropped {drop}"
+            f"[feature_selection] {mode}: kept {matched}, dropped {drop}"
         )
 
     elif mode == "rfe_top_k":

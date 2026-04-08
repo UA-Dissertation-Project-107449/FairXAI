@@ -33,8 +33,9 @@ feature_selection_modes:
   - include_all_sensitive
   - include_sex_only
   - include_age_only
-  - include_ethnicity_only
   - rfe_top_k
+  # include_ethnicity_only: omitted — cardiac datasets have no ethnicity column.
+  # Add back if a dataset with ethnicity is introduced.
 
 rfe_top_k: 10
 
