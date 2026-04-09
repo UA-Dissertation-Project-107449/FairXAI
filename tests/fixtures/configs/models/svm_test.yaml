@@ -1,0 +1,6 @@
+hyperparameters:
+  C: 1.0
+  kernel: linear
+  probability: true
+  class_weight: balanced
+  random_state: 42

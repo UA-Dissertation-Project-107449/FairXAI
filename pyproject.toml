@@ -43,6 +43,8 @@ dev = [
     "lime>=0.2.0",        # (reqs: 0.2.0.1) LIME local explanations (lazy-imported)
     "jenkspy>=0.3.0",     # (reqs: 0.3.3)  Jenks natural breaks for attribute binning
     "tqdm>=4.66.0",       # (reqs: 4.67.1) progress bars
+    "pytest>=8.0.0",      # test runner
+    "pytest-xdist>=3.6.0",# process-level test parallelism (-n auto)
     "ipykernel>=6.20",    # (reqs: 7.1.0)  Jupyter kernel
     "notebook>=7.0",      #                Jupyter Notebook UI
 ]
@@ -108,6 +110,10 @@ exclude = [
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests as slow subprocess/pipeline tests (deselect with '-m \"not slow\"')",
+    "xgboost_model: marks tests that include xgboost training paths",
+]
 
 [tool.black]
 line-length = 100

@@ -1,0 +1,27 @@
+paths:
+  processed_dir: data/processed/override_me
+  experiments_dir: output/baseline/results
+  models_dir: output/baseline/models
+  results_fairness_dir: output/baseline/fairness
+  results_binning_dir: output/binning
+
+runtime:
+  datasets: [cleveland]
+  schema_mapping_json: configs/schema/cardiac.json
+
+split:
+  test_size: 0.3
+  random_state: 42
+
+training:
+  model: logistic_regression
+  model_types: [logistic_regression, random_forest, svm, xgboost]
+  thresholds: [0.5]
+  feature_selection_mode: exclude_sensitive
+
+fairness:
+  sensitive_attributes: [age_group, sex]
+
+xai:
+  enabled: false
+  cv_enabled: false

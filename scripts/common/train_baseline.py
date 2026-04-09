@@ -30,7 +30,7 @@ import pandas as pd
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-from fairxai.cli.runner_base import get_project_root, load_pipeline_config, setup_phase_logging
+from fairxai.cli.runner_base import load_pipeline_config, resolve_project_root, setup_phase_logging
 from fairxai.cli.runner_utils import archive_latest_run
 from fairxai.data.feature_selection import build_feature_set
 from fairxai.experiments.data_io import build_schema_excludes, resolve_base_dataset
@@ -263,6 +263,16 @@ def _is_shap_enabled_for_model(model_type: str, xai_cfg: dict) -> bool:
 def main():
     parser = argparse.ArgumentParser(description="Train baseline models")
     parser.add_argument(
+        "--project-root",
+        type=str,
+        default=None,
+        help=(
+            "Optional override for repository root used to resolve configs/data/outputs. "
+            "If omitted, FAIRXAI_PROJECT_ROOT env var is used when set; "
+            "otherwise defaults to script-inferred repo root."
+        ),
+    )
+    parser.add_argument(
         "--pipeline",
         type=str,
         default="cardiac",
@@ -320,8 +330,9 @@ def main():
     pipeline = args.pipeline
 
     # Paths
-    project_root = get_project_root(Path(__file__))
+    project_root = resolve_project_root(Path(__file__), cli_project_root=args.project_root)
     pipeline_cfg = load_pipeline_config(project_root, pipeline)
+    pipeline_cfg_path = project_root / f"configs/pipelines/{pipeline}.yaml"
     schema_path = project_root / pipeline_cfg["runtime"]["schema_mapping_json"]
     with open(schema_path, "r") as f:
         schema_cfg = json.load(f)
@@ -346,6 +357,8 @@ def main():
 
     # Setup
     logging.info("[PHASE] Baseline training started")
+    logging.info(f"Effective project root: {project_root}")
+    logging.info(f"Resolved pipeline config: {pipeline_cfg_path}")
     if not run_id:
         archive_latest_run(
             baseline_root,
