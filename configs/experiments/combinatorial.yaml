@@ -65,15 +65,20 @@ training_methods:
   - kfold_cv
 
 # Model families to compare.
-# Note: mitigation techniques are only executed with logistic_regression (see MITIGATION_SUPPORTED_MODEL_TYPES).
+# Note: mitigation techniques are only executed with models listed in mitigation_supported_model_types below.
 # Other models run baseline-only experiments.
 # Warning: SVM on cardio70k full 70k rows OOMs on consumer hardware (RBF kernel is O(n²)).
 #          With --max-samples 10000, SVM linear is safe. For full 70k, exclude SVM or use HPC.
 model_types:
   - logistic_regression
-  # - random_forest
-  # - svm
-  # - xgboost
+  - random_forest
+  - svm
+  - xgboost
+
+# Models that support fairness mitigation techniques.
+# Non-listed models run baseline-only. Extend this list when mitigation is implemented for RF/SVM/XGB.
+mitigation_supported_model_types:
+  - logistic_regression
 
 # Model variants: experiment-specific overrides merged onto base hyperparameters.
 # Base params are loaded from configs/models/<model_type>.yaml at runtime.

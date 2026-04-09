@@ -62,7 +62,9 @@ STAGE_MAP = {
 }
 
 # Mitigation engine currently assumes logistic baseline for pre/in/post mitigation.
-MITIGATION_SUPPORTED_MODEL_TYPES = {"logistic_regression"}
+# This set is now config-driven (mitigation_supported_model_types in combinatorial.yaml).
+# The module-level default is kept as a fallback when the config key is absent.
+_DEFAULT_MITIGATION_SUPPORTED_MODEL_TYPES = {"logistic_regression"}
 
 # Cache repeated dataset/binning CSV loads across experiment combinations.
 _PROCESSED_DATA_CACHE: Dict[tuple, Dict[str, pd.DataFrame]] = {}
@@ -1412,6 +1414,14 @@ def run_combinatorial_analysis(
     model_types = [
         str(m).strip().lower() for m in config.get("model_types", ["logistic_regression"])
     ]
+    mitigation_supported_model_types = {
+        str(m).strip().lower()
+        for m in config.get(
+            "mitigation_supported_model_types",
+            list(_DEFAULT_MITIGATION_SUPPORTED_MODEL_TYPES),
+        )
+    }
+    logger.info(f"Mitigation supported model types: {sorted(mitigation_supported_model_types)}")
     for dataset in config["datasets"]:
         if isinstance(fairness_base_params_cfg, dict) and dataset in fairness_base_params_cfg:
             fairness_base_params = fairness_base_params_cfg.get(dataset)
@@ -1423,11 +1433,15 @@ def run_combinatorial_analysis(
             for mitigation in config["mitigation_techniques"]:
                 for training_method in config["training_methods"]:
                     for model_type in model_types:
-                        # Keep mitigation stable: currently only logistic is supported there.
+                        # Skip mitigation for models not in the supported set (baseline always runs).
                         if (
                             mitigation != "baseline"
-                            and model_type not in MITIGATION_SUPPORTED_MODEL_TYPES
+                            and model_type not in mitigation_supported_model_types
                         ):
+                            logger.debug(
+                                f"Skipping mitigation={mitigation} for model_type={model_type} "
+                                f"(not in mitigation_supported_model_types)"
+                            )
                             continue
 
                         for variant in _resolve_model_variants(
