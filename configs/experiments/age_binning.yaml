@@ -27,9 +27,8 @@ experiment:
 
 data:
   base_config: "domain/cardiac.yaml"
-  # "auto" = discover all *_standardized.csv files in the pipeline's raw_dir.
-  # Override with an explicit list to restrict: [cleveland, kaggle_heart]
-  datasets: auto
+  # Temporarily pinned to Cleveland-only to avoid auto-discovering extra datasets.
+  datasets: [cleveland]
   age_column: "age_raw"
   sensitive_attributes:
     - sex  # Analyze distribution within age bins
