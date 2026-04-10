@@ -13,6 +13,8 @@ import yaml
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
+# Ensure local experiment helpers (e.g., _gates.py) are importable from wrapper entrypoints.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _gates import evaluate_recall_gate, load_gate_thresholds
 
@@ -907,8 +909,12 @@ def run_comparison_analysis(
                 "best_training_method": best["training_method"],
                 "best_model_variant": best.get("model_variant", ""),
                 "score": best["score_value"],
+                "accuracy": best.get("accuracy_value", best.get("accuracy")),
                 "f1": best.get("f1_value"),
+                "f1_score": best.get("f1_value"),
                 "recall": best.get("recall_value"),
+                "precision": best.get("precision_value", best.get("precision")),
+                "auc_roc": best.get("auc_value", best.get("auc_roc")),
                 "fairness_gap": best.get("fairness_gap"),
                 "fairness_gain_pct": best.get("fairness_gain_pct"),
                 "experiment_id": best["experiment_id"],

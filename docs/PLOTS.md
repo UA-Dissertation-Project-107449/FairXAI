@@ -102,20 +102,121 @@ Used to compare two datasets side by side. All implemented.
 
 ---
 
-## Not Yet Implemented (`viz/fairness.py`, `viz/transformations.py`)
+## Fairness Plots (`viz/fairness.py`)
 
-The following functions are scaffolded but **raise `NotImplementedError` at runtime**:
+All three functions are implemented.
 
-| Function | File | Intended purpose |
-|----------|------|-----------------|
-| `plot_fairness_metric_heatmap` | `fairness.py` | Per-group fairness metric comparison heatmap |
-| `plot_group_performance_gaps` | `fairness.py` | Bar chart of TPR/FPR/precision gaps by group |
-| `plot_bias_amplification_waterfall` | `fairness.py` | Waterfall showing how bias changes across pipeline stages |
-| `plot_transformation_impact` | `transformations.py` | Before/after comparison for a mitigation technique |
-| `plot_before_after_distributions` | `transformations.py` | Feature distribution shift after preprocessing |
-| `plot_scaling_effects` | `transformations.py` | Effect of scaling on feature distributions |
+### `plot_fairness_metric_heatmap(df, sensitive_attr, output_file)`
 
-Do not call these — they will raise immediately. See `docs/ROADMAP.md` for status.
+**What it shows:** rows = mitigation technique (non-baseline), cols = three fairness metrics
+for `sensitive_attr` (`dem_parity_{attr}_max_diff`, `eq_odds_{attr}_tpr_diff`,
+`eq_odds_{attr}_fpr_diff`); cell = mean over binning strategies; diverging colormap
+anchored at 0.10 threshold.
+
+**Input:** `full_comparison.csv`, a sensitive attribute name (e.g. `"age_group_cat"`).
+
+**Research question:** *Which mitigation technique reduces which fairness metric, and by how much?*
+
+---
+
+### `plot_group_performance_gaps(before_json, after_json, sensitive_attr, output_file)`
+
+**What it shows:** grouped bar chart — x-axis = demographic groups, three subplots for
+TPR, FPR, precision; baseline (grey) vs after-mitigation (blue) side by side.
+
+**Input:** Two fairness assessment JSON dicts or paths (stage-6 baseline + experiment).
+
+**Research question:** *Which demographic groups benefit most from mitigation?*
+
+---
+
+### `plot_bias_amplification_waterfall(stages_dict, output_file)`
+
+**What it shows:** bar chart of fairness gap at each pipeline stage; green = improved
+(gap decreased), red = worsened; orange dashed line at threshold 0.10.
+
+**Input:** Ordered dict `{stage_name: fairness_gap_value}` — assembled manually from
+run outputs and placed in `{run_dir}/stage_gaps.json` for the delivery script.
+
+**Research question:** *At which pipeline stage does bias originate or worsen?*
+
+---
+
+## Transformation Plots (`viz/transformations.py`)
+
+All three functions are implemented.
+
+### `plot_transformation_impact(before_dict, after_dict, output_file)`
+
+**What it shows:** side-by-side bars for each metric (f1, recall, precision, auc_roc,
+fairness_gap); delta annotation above each pair.
+
+**Input:** Two `{metric: value}` dicts (before/after).
+
+---
+
+### `plot_before_after_distributions(X_before, X_after, feature_cols, output_file)`
+
+**What it shows:** per-feature KDE overlay (before=grey, after=blue); subplots sorted by
+KS statistic descending; KS value in subtitle.
+
+**Input:** Two DataFrames with the same numeric feature columns.
+
+---
+
+### `plot_scaling_effects(X_raw, X_scaled, output_file)`
+
+**What it shows:** box plots per feature — raw vs scaled side by side.
+
+**Input:** Two DataFrames (before/after StandardScaler).
+
+---
+
+## Cross-Model & Intersectional Plots (`viz/experiment_plots.py`)
+
+Four new functions added alongside the three existing ones.
+
+### `save_intersectional_heatmap(per_group_df, metric, output_file)`
+
+**What it shows:** rows = mitigation technique, cols = subgroup labels
+(`sensitive_attr + group`); cell = mean delta (experiment − baseline); green = improvement.
+
+**Input:** `per_group_comparison.csv`, a metric name (e.g. `"demographic_parity_rate"`).
+
+**Research question:** *Which demographic subgroups benefit most from mitigation — and which are harmed?*
+
+---
+
+### `save_cross_model_radar(summary_df, output_file)`
+
+**What it shows:** spider/radar chart with 5 axes (F1, Recall, Precision, AUC-ROC,
+Fairness = 1−gap); one filled polygon per model type.
+
+**Input:** `cross_model_summary.csv` with best config per model type.
+
+**Research question:** *Which model type dominates across all performance + fairness dimensions?*
+
+---
+
+### `save_mitigation_effectiveness_matrix(full_df, output_file)`
+
+**What it shows:** two side-by-side heatmaps — `fairness_gain_pct` (green) and
+`score_drop_pct` (red) per mitigation technique.
+
+**Input:** `full_comparison.csv`.
+
+**Research question:** *Which mitigation gives the best fairness gain for the smallest accuracy cost?*
+
+---
+
+### `save_pareto_all_models(full_df, output_file, x_col, y_col)`
+
+**What it shows:** single scatter with 4 coloured point clouds (one per model type);
+Pareto frontier drawn per model type.
+
+**Input:** `full_comparison.csv`; defaults `x_col="f1_value"`, `y_col="fairness_gap"`.
+
+**Research question:** *Does any model type dominate the F1–fairness Pareto space?*
 
 ---
 

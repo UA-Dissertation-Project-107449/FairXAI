@@ -32,7 +32,12 @@ from .distributions import (
     plot_target_distribution_by_group,
 )
 from .experiment_plots import (
+    PALETTE_MODEL,
     save_comparison_heatmap,
+    save_cross_model_radar,
+    save_intersectional_heatmap,
+    save_mitigation_effectiveness_matrix,
+    save_pareto_all_models,
     save_pareto_frontier,
     save_tradeoff_scatter,
 )
@@ -83,4 +88,9 @@ __all__ = [
     "save_comparison_heatmap",
     "save_tradeoff_scatter",
     "save_pareto_frontier",
+    "save_intersectional_heatmap",
+    "save_cross_model_radar",
+    "save_mitigation_effectiveness_matrix",
+    "save_pareto_all_models",
+    "PALETTE_MODEL",
 ]
