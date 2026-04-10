@@ -109,10 +109,12 @@ exclude = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+pythonpath = ["src"]
 addopts = "-v --tb=short"
 markers = [
     "slow: marks tests as slow subprocess/pipeline tests (deselect with '-m \"not slow\"')",
     "xgboost_model: marks tests that include xgboost training paths",
+    "integration: marks tests that run full pipeline via subprocess",
 ]
 
 [tool.black]
