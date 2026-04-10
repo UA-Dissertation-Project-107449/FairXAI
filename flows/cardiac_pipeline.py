@@ -111,6 +111,19 @@ def preprocess_data(
 
 
 @task
+def run_grouping_stage(run_id: str, datasets: Optional[list[str]] = None, verbose: int = 0):
+    """Run clustering + similarity subgroup discovery (Phase 4b)."""
+    logger = get_run_logger()
+    logger.info("[PHASE 4b] Grouping & similarity subgroup discovery")
+    script = ROOT_DIR / "scripts" / "experiments" / "run_grouping_analysis.py"
+    args = ["--run-id", run_id, "--config", str(ROOT_DIR / "configs" / "experiments" / "clustering.yaml")]
+    if datasets:
+        args.extend(["--datasets", *datasets])
+    args.extend(_verbose_flags(verbose))
+    _run_script(script, args, os.environ.copy())
+
+
+@task
 def train_baseline_model(
     run_id: str,
     datasets: Optional[list[str]] = None,
@@ -211,6 +224,7 @@ def compare_experiments(run_id: str, verbose: int = 0):
 
 @flow(name="Cardiac Fairness Pipeline")
 def cardiac_pipeline(
+    run_grouping: bool = True,
     run_attribute_binning: bool = True,
     run_mitigation: bool = True,
     run_combinatorial: bool = True,
@@ -282,6 +296,7 @@ def cardiac_pipeline(
     logger.info("======================================================================")
     logger.info(f"Run ID:       {run_id}")
     logger.info(f"Stages:       {first.number}..{last.number}  ({first.name} → {last.name})")
+    logger.info(f"Grouping:     {run_grouping}")
     logger.info(f"Attr binning: {run_attribute_binning}")
     logger.info(f"Mitigation:   {run_mitigation}")
     logger.info(f"Combinatorial:{run_combinatorial}")
@@ -300,6 +315,7 @@ def cardiac_pipeline(
     profile_task = None
     recommendations_task = None
     preprocess_data_task = None
+    grouping_task = None
     train_baseline_model_task = None
     assess_predictions_task = None
     age_task = None
@@ -338,9 +354,17 @@ def cardiac_pipeline(
     else:
         logger.info("[4/10] preprocess — SKIPPED (outside active range)")
 
+    # Stage 4b — Grouping (sub-step; after preprocess, before train)
+    if _should_run(4) and run_grouping:
+        wait = [preprocess_data_task] if preprocess_data_task else []
+        grouping_task = run_grouping_stage.submit(run_id, datasets, verbose, wait_for=wait)
+    else:
+        reason = "disabled" if _should_run(4) and not run_grouping else "outside active range"
+        logger.info(f"[4b] grouping — SKIPPED ({reason})")
+
     # Stage 5 — Train baseline
     if _should_run(5):
-        wait = [preprocess_data_task] if preprocess_data_task else []
+        wait = [grouping_task or preprocess_data_task] if (grouping_task or preprocess_data_task) else []
         train_baseline_model_task = train_baseline_model.submit(
             run_id, datasets, model_types, verbose, wait_for=wait
         )
@@ -436,6 +460,8 @@ def cardiac_pipeline(
         logger.info(f"  - Profiling:          {run_root}/profiling")
     if _should_run(3):
         logger.info(f"  - Recommendations:    {run_root}/recommendations")
+    if grouping_task:
+        logger.info(f"  - Grouping:           {run_root}/grouping")
     if _should_run(5):
         logger.info(f"  - Baseline:           {run_root}/baseline")
     if age_task:
@@ -478,6 +504,7 @@ Examples:
                     help="Last stage to execute (inclusive). Accepts name or number.")
     p.add_argument("--run-id", default=None,
                     help="Explicit run ID. On resume, defaults to latest run.")
+    p.add_argument("--no-grouping", action="store_true", help="Skip grouping & similarity stage (4b).")
     p.add_argument("--no-attribute-binning", action="store_true", help="Skip attribute binning stage.")
     p.add_argument("--no-mitigation", action="store_true", help="Skip mitigation stage.")
     p.add_argument("--no-combinatorial", action="store_true", help="Skip combinatorial stage.")
@@ -502,6 +529,7 @@ Examples:
 if __name__ == "__main__":
     args = _build_parser().parse_args()
     cardiac_pipeline(
+        run_grouping=not args.no_grouping,
         run_attribute_binning=not args.no_attribute_binning,
         run_mitigation=not args.no_mitigation,
         run_combinatorial=not args.no_combinatorial,

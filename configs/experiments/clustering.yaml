@@ -1,8 +1,5 @@
-# STATUS: DEFERRED -- implementation not yet started.
-# Design is complete; integrate after the combinatorial sweep is established.
-# No code loads this file yet.
-#
 # Clustering-Based Fairness Analysis Experiment
+# Loaded by scripts/experiments/run_grouping_analysis.py (stage 4b)
 # Discovers hidden subgroups and evaluates fairness within clusters
 
 experiment:
