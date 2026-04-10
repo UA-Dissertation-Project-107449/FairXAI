@@ -1,0 +1,141 @@
+"""SimilarityEngine: k-NN individual fairness consistency across multiple k values."""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import List, Optional
+
+import numpy as np
+import pandas as pd
+
+from fairxai.fairness.metrics import FairnessMetrics
+
+from .models import SimilarityResult, SimilarityRow
+
+logger = logging.getLogger(__name__)
+
+
+class SimilarityEngine:
+    """Compute individual fairness via k-NN prediction consistency.
+
+    Wraps :meth:`fairxai.fairness.metrics.FairnessMetrics.individual_fairness_consistency`
+    and runs it for each k in *k_values*.
+
+    Args:
+        k_values: List of neighbourhood sizes to evaluate.
+        pred_col: Binary prediction column name.
+    """
+
+    def __init__(
+        self,
+        k_values: Optional[List[int]] = None,
+        pred_col: str = "y_pred",
+    ) -> None:
+        self.k_values = k_values or [5, 10, 20]
+        self.pred_col = pred_col
+        self._fm = FairnessMetrics()
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def compute(
+        self,
+        df: pd.DataFrame,
+        feature_cols: List[str],
+    ) -> SimilarityResult:
+        """Run k-NN consistency for all configured k values.
+
+        Args:
+            df: DataFrame with *feature_cols* and *pred_col*.
+            feature_cols: Numeric columns to use for distance computation.
+
+        Returns:
+            :class:`SimilarityResult` with one :class:`SimilarityRow` per k.
+
+        Raises:
+            ValueError: If *pred_col* is missing or no valid feature columns.
+        """
+        if self.pred_col not in df.columns:
+            raise ValueError(f"Prediction column '{self.pred_col}' not found in DataFrame.")
+
+        valid_cols = [c for c in feature_cols if c in df.columns]
+        if not valid_cols:
+            raise ValueError("No valid feature columns found in DataFrame.")
+
+        n_samples = len(df)
+        rows = []
+
+        for k in self.k_values:
+            if k >= n_samples:
+                logger.warning(
+                    "[WARNING] k=%d >= n_samples=%d, skipping", k, n_samples
+                )
+                continue
+            try:
+                result = self._fm.individual_fairness_consistency(
+                    df, feature_cols=valid_cols, pred_col=self.pred_col, k=k
+                )
+                rows.append(
+                    SimilarityRow(
+                        k=k,
+                        mean_consistency=result["mean_consistency"],
+                        std_consistency=result["std_consistency"],
+                        min_consistency=result["min_consistency"],
+                        median_consistency=result["median_consistency"],
+                        n_samples=n_samples,
+                    )
+                )
+                logger.info(
+                    "[SUCCESS] similarity k=%d: mean_consistency=%.4f",
+                    k,
+                    result["mean_consistency"],
+                )
+            except Exception as exc:
+                logger.warning("[WARNING] similarity k=%d failed: %s", k, exc)
+
+        return SimilarityResult(rows=rows)
+
+    def save_scores(self, result: SimilarityResult, output_dir: Path) -> Path:
+        """Write similarity_fairness_scores.csv to *output_dir*."""
+        output_dir.mkdir(parents=True, exist_ok=True)
+        df = pd.DataFrame(result.to_df_rows())
+        out = output_dir / "similarity_fairness_scores.csv"
+        df.to_csv(out, index=False)
+        logger.info("[SUCCESS] similarity_fairness_scores.csv → %s", out)
+        return out
+
+    # ------------------------------------------------------------------
+    # Per-sample scores (needed by density mapper)
+    # ------------------------------------------------------------------
+
+    def per_sample_consistency(
+        self,
+        df: pd.DataFrame,
+        feature_cols: List[str],
+        k: int,
+    ) -> np.ndarray:
+        """Return per-sample consistency scores for a single k.
+
+        Used by :class:`~fairxai.similarity.density.ViolationDensityMapper`.
+
+        Returns:
+            1-D float array of length ``len(df)``, values in [0, 1].
+        """
+        from scipy.spatial.distance import pdist, squareform
+
+        valid_cols = [c for c in feature_cols if c in df.columns]
+        X = df[valid_cols].values
+        y_pred = df[self.pred_col].values
+        n = len(X)
+
+        distances = squareform(pdist(X, metric="euclidean"))
+        consistencies = np.empty(n, dtype=float)
+
+        for i in range(n):
+            nearest = np.argsort(distances[i])[: k + 1]
+            nearest = nearest[nearest != i][:k]
+            consistencies[i] = (y_pred[nearest] == y_pred[i]).sum() / k
+
+        return consistencies
