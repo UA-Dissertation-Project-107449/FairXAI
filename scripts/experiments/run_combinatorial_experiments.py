@@ -17,6 +17,8 @@ from joblib import Parallel, delayed
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
+# Ensure local experiment helpers (e.g., _gates.py) are importable from wrapper entrypoints.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _gates import evaluate_fairness_gate, evaluate_recall_gate, load_gate_thresholds
 
@@ -1319,6 +1321,8 @@ def run_combinatorial_analysis(
     archive_previous: bool = True,
     run_id: Optional[str] = None,
     output_root: Optional[str] = None,
+    datasets: Optional[list[str]] = None,
+    model_types_override: Optional[list[str]] = None,
 ):
     """Main orchestration for combinatorial experiments."""
     project_root = get_project_root(Path(__file__))
@@ -1346,6 +1350,20 @@ def run_combinatorial_analysis(
 
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
+
+    selected_datasets = [str(d).strip() for d in (datasets or config.get("datasets", [])) if str(d).strip()]
+    if not selected_datasets:
+        logger.error("No datasets selected. Provide --datasets or define datasets in config.")
+        sys.exit(1)
+
+    selected_model_types = [
+        str(m).strip().lower()
+        for m in (model_types_override or config.get("model_types", ["logistic_regression"]))
+        if str(m).strip()
+    ]
+    if not selected_model_types:
+        logger.error("No model types selected. Provide --model-types or define model_types in config.")
+        sys.exit(1)
 
     # Load gate thresholds: experiment config overrides → thresholds.yaml fallback.
     # Must happen before any experiment result is annotated or ranked.
@@ -1397,7 +1415,7 @@ def run_combinatorial_analysis(
                 "pipeline": pipeline,
                 "mode": "full",
                 "phase": "combinatorial",
-                "datasets": config.get("datasets", []),
+                "datasets": selected_datasets,
                 "output_dir": str(versioning.latest_dir),
                 "status": "started",
             },
@@ -1411,9 +1429,7 @@ def run_combinatorial_analysis(
     if hpo_dir:
         logger.info(f"[HPO] Using pre-computed HPO params from: {hpo_dir}")
     fairness_base_params_cfg = config.get("fairness_base_model_params")
-    model_types = [
-        str(m).strip().lower() for m in config.get("model_types", ["logistic_regression"])
-    ]
+    model_types = selected_model_types
     mitigation_supported_model_types = {
         str(m).strip().lower()
         for m in config.get(
@@ -1422,7 +1438,7 @@ def run_combinatorial_analysis(
         )
     }
     logger.info(f"Mitigation supported model types: {sorted(mitigation_supported_model_types)}")
-    for dataset in config["datasets"]:
+    for dataset in selected_datasets:
         if isinstance(fairness_base_params_cfg, dict) and dataset in fairness_base_params_cfg:
             fairness_base_params = fairness_base_params_cfg.get(dataset)
         else:
@@ -1473,7 +1489,7 @@ def run_combinatorial_analysis(
 
     # Combo experiments: pre → in → post chains, logistic_regression only.
     for combo in config.get("mitigation_combos", []):
-        for dataset in config["datasets"]:
+        for dataset in selected_datasets:
             if isinstance(fairness_base_params_cfg, dict) and dataset in fairness_base_params_cfg:
                 fairness_base_params = fairness_base_params_cfg.get(dataset)
             else:
@@ -1511,7 +1527,7 @@ def run_combinatorial_analysis(
 
     total_experiments = len(experiments)
     logger.info(f"\nTotal experiments to run: {total_experiments}")
-    logger.info(f"  Datasets: {len(config['datasets'])}")
+    logger.info(f"  Datasets: {len(selected_datasets)} -> {selected_datasets}")
     logger.info(f"  Binning strategies: {len(config['binning_strategies'])}")
     logger.info(f"  Mitigation techniques: {len(config['mitigation_techniques'])}")
     logger.info(f"  Training methods: {len(config['training_methods'])}")
@@ -1640,7 +1656,7 @@ def run_combinatorial_analysis(
                 "pipeline": pipeline,
                 "mode": "full",
                 "phase": "combinatorial",
-                "datasets": config.get("datasets", []),
+                "datasets": selected_datasets,
                 "output_dir": str(versioning.latest_dir),
                 "status": "completed",
             },
@@ -1648,7 +1664,7 @@ def run_combinatorial_analysis(
 
     # Aggregate dataset-level SHAP summaries (global/local for both holdout and CV)
     xai_root = versioning.latest_dir / "xai"
-    for dataset in config["datasets"]:
+    for dataset in selected_datasets:
         shap_dir = xai_root / dataset / "holdout" / "shap"
         if shap_dir.exists():
             aggregate_dataset_shap(shap_dir, "global")
@@ -1693,6 +1709,18 @@ def main():
     parser.add_argument(
         "--output-root", type=str, default=None, help="Base output directory for run outputs"
     )
+    parser.add_argument(
+        "--datasets",
+        nargs="+",
+        default=None,
+        help="Optional dataset override (CLI > config > defaults).",
+    )
+    parser.add_argument(
+        "--model-types",
+        nargs="+",
+        default=None,
+        help="Optional model types override (CLI > config > defaults).",
+    )
 
     args = parser.parse_args()
 
@@ -1704,6 +1732,8 @@ def main():
         archive_previous=args.archive_previous,
         run_id=args.run_id,
         output_root=args.output_root,
+        datasets=args.datasets,
+        model_types_override=args.model_types,
     )
 
 

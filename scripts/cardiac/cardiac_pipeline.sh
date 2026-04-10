@@ -55,6 +55,68 @@ ATTRIBUTE_BINNING_CONFIG="$ROOT_DIR/configs/experiments/age_binning.yaml"
 MITIGATION_CONFIG="$ROOT_DIR/configs/experiments/mitigation.yaml"
 COMBINATORIAL_CONFIG="$ROOT_DIR/configs/experiments/combinatorial.yaml"
 
+DATASETS=()
+MODEL_TYPES=()
+
+# Optional CLI overrides for dataset/model scope.
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --datasets)
+            shift
+            while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do
+                DATASETS+=("$1")
+                shift
+            done
+            continue
+            ;;
+        --model-types)
+            shift
+            while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do
+                MODEL_TYPES+=("$1")
+                shift
+            done
+            continue
+            ;;
+        --resume-from)
+            shift
+            [[ $# -gt 0 ]] || { echo "ERROR: --resume-from requires a value" >&2; exit 1; }
+            RESUME_FROM="$1"
+            ;;
+        --go-until)
+            shift
+            [[ $# -gt 0 ]] || { echo "ERROR: --go-until requires a value" >&2; exit 1; }
+            GO_UNTIL="$1"
+            ;;
+        --run-id)
+            shift
+            [[ $# -gt 0 ]] || { echo "ERROR: --run-id requires a value" >&2; exit 1; }
+            RUN_ID="$1"
+            ;;
+        -v)
+            VERBOSE=1
+            ;;
+        -vv)
+            VERBOSE=2
+            ;;
+        *)
+            echo "ERROR: Unknown argument '$1'" >&2
+            echo "Supported: --datasets ... --model-types ... --resume-from STAGE --go-until STAGE --run-id ID -v -vv" >&2
+            exit 1
+            ;;
+    esac
+    shift
+done
+
+DATASET_ARGS=()
+if (( ${#DATASETS[@]} > 0 )); then
+    DATASET_ARGS=(--datasets "${DATASETS[@]}")
+fi
+
+MODEL_TYPE_ARGS=()
+if (( ${#MODEL_TYPES[@]} > 0 )); then
+    MODEL_TYPE_ARGS=(--model-types "${MODEL_TYPES[@]}")
+fi
+
 # ======================================================================
 # Resolve stage range
 # ======================================================================
@@ -181,6 +243,8 @@ echo "Mitigation:       $RUN_MITIGATION"
 echo "Combinatorial:    $RUN_COMBINATORIAL"
 echo "Comparison:       $RUN_COMPARISON"
 echo "Recommendations:  $RUN_RECOMMENDATIONS"
+echo "Datasets:         ${DATASETS[*]:-config/default}"
+echo "Model types:      ${MODEL_TYPES[*]:-config/default}"
 echo ""
 
 # Normalise VERBOSE: accept legacy true/false or numeric 0/1/2
@@ -204,7 +268,7 @@ fi
 # Stage 1 — Load
 if should_run 1; then
     echo "[PHASE 1/10] Loading cardiac datasets (standardization)"
-    python3 "$ROOT_DIR/scripts/cardiac/load_data.py" $VERBOSE_FLAG
+    python3 "$ROOT_DIR/scripts/cardiac/load_data.py" "${DATASET_ARGS[@]}" $VERBOSE_FLAG
     mark_done 1 "load"
     echo ""
 else
@@ -214,7 +278,7 @@ fi
 # Stage 2 — Profile
 if should_run 2; then
     echo "[PHASE 2/10] Profiling datasets (complexity + fairness)"
-    python3 "$ROOT_DIR/scripts/cardiac/profile_data.py" $VERBOSE_FLAG
+    python3 "$ROOT_DIR/scripts/cardiac/profile_data.py" "${DATASET_ARGS[@]}" $VERBOSE_FLAG
     mark_done 2 "profile"
     echo ""
 else
@@ -242,7 +306,7 @@ if should_run 4; then
     if [[ "$RUN_COMBINATORIAL" == "true" ]]; then
         PREPROCESS_ARGS="--all-binnings"
     fi
-    python3 "$ROOT_DIR/scripts/cardiac/preprocess.py" $PREPROCESS_ARGS $VERBOSE_FLAG
+    python3 "$ROOT_DIR/scripts/cardiac/preprocess.py" $PREPROCESS_ARGS "${DATASET_ARGS[@]}" $VERBOSE_FLAG
     mark_done 4 "preprocess"
     echo ""
 else
@@ -252,7 +316,7 @@ fi
 # Stage 5 — Train baseline
 if should_run 5; then
     echo "[PHASE 5/10] Training baseline model(s)"
-    python3 "$ROOT_DIR/scripts/cardiac/train_baseline.py" $VERBOSE_FLAG
+    python3 "$ROOT_DIR/scripts/cardiac/train_baseline.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $VERBOSE_FLAG
     mark_done 5 "train"
     echo ""
 else
@@ -262,7 +326,7 @@ fi
 # Stage 6 — Assess fairness
 if should_run 6; then
     echo "[PHASE 6/10] Assessing post-prediction fairness"
-    python3 "$ROOT_DIR/scripts/cardiac/assess_predictions.py" $VERBOSE_FLAG
+    python3 "$ROOT_DIR/scripts/cardiac/assess_predictions.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $VERBOSE_FLAG
     mark_done 6 "assess"
     echo ""
 else
@@ -275,7 +339,7 @@ if should_run 7; then
     if [[ "$RUN_ATTRIBUTE_BINNING" == "true" ]]; then
         echo "[PHASE 7/10] Attribute binning strategies analysis"
         EXPERIMENT_RUN_MODE=full ARCHIVE_PREVIOUS=$ARCHIVE_EXPERIMENTS python3 "$ROOT_DIR/scripts/experiments/run_attribute_binning_analysis.py" \
-            --config "$ATTRIBUTE_BINNING_CONFIG" --run-id "$RUN_ID" --pipeline cardiac $VERBOSE_FLAG
+            --config "$ATTRIBUTE_BINNING_CONFIG" --run-id "$RUN_ID" --pipeline cardiac "${DATASET_ARGS[@]}" $VERBOSE_FLAG
         ARCHIVE_EXPERIMENTS=false
         mark_done 7 "attribute_binning"
         echo ""
@@ -291,7 +355,7 @@ if should_run 8; then
     if [[ "$RUN_MITIGATION" == "true" ]]; then
         echo "[PHASE 8/10] Mitigation techniques comparison"
         EXPERIMENT_RUN_MODE=full ARCHIVE_PREVIOUS=$ARCHIVE_EXPERIMENTS python3 "$ROOT_DIR/scripts/cardiac/mitigation.py" \
-            --config "$MITIGATION_CONFIG" --run-id "$RUN_ID" $VERBOSE_FLAG
+            --config "$MITIGATION_CONFIG" --run-id "$RUN_ID" "${DATASET_ARGS[@]}" $VERBOSE_FLAG
         ARCHIVE_EXPERIMENTS=false
         mark_done 8 "mitigation"
         echo ""
@@ -307,7 +371,7 @@ if should_run 9; then
     if [[ "$RUN_COMBINATORIAL" == "true" ]]; then
         echo "[PHASE 9/10] Combinatorial experiments"
         python3 "$ROOT_DIR/scripts/cardiac/combinatorial.py" \
-            --config "$COMBINATORIAL_CONFIG" --run-id "$RUN_ID" $VERBOSE_FLAG
+            --config "$COMBINATORIAL_CONFIG" --run-id "$RUN_ID" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $VERBOSE_FLAG
         mark_done 9 "combinatorial"
         echo ""
     else

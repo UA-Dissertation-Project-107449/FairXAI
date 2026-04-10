@@ -199,6 +199,12 @@ def _resolve_model_types(args_model_types: Optional[list[str]], training_cfg: di
     return [str(legacy).strip().lower()]
 
 
+def _is_selected_dataset(dataset_name: str, selected_datasets: Optional[set[str]]) -> bool:
+    if not selected_datasets:
+        return True
+    return any(dataset_name == d or dataset_name.startswith(f"{d}_") for d in selected_datasets)
+
+
 def _apply_model_thread_override(
     model_class: Any, model_params: dict, model_n_jobs: Optional[int]
 ) -> dict:
@@ -284,6 +290,12 @@ def main():
         nargs="+",
         default=None,
         help="Optional model types override (e.g. logistic_regression random_forest svm xgboost)",
+    )
+    parser.add_argument(
+        "--datasets",
+        nargs="+",
+        default=None,
+        help="Optional dataset names to train (CLI override).",
     )
     parser.add_argument(
         "--use-hpo",
@@ -388,6 +400,13 @@ def main():
 
     # Find processed datasets
     train_files = list(data_processed.glob("*_train_scaled.csv"))
+    selected_datasets = set(d.strip() for d in args.datasets) if args.datasets else None
+    if selected_datasets:
+        train_files = [
+            p
+            for p in train_files
+            if _is_selected_dataset(p.stem.replace("_train_scaled", ""), selected_datasets)
+        ]
 
     if not train_files:
         logging.error(f"No training datasets found in {data_processed}")

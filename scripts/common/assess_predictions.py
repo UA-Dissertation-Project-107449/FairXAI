@@ -295,6 +295,18 @@ def main():
         help="Pipeline name (e.g., cardiac, dermatology)",
     )
     parser.add_argument(
+        "--datasets",
+        nargs="+",
+        default=None,
+        help="Optional dataset names to assess (CLI override).",
+    )
+    parser.add_argument(
+        "--model-types",
+        nargs="+",
+        default=None,
+        help="Optional model types to assess (CLI override).",
+    )
+    parser.add_argument(
         "-v", "--verbose", action="count", default=0, help="Verbosity: -v=info, -vv=debug"
     )
     args = parser.parse_args()
@@ -327,6 +339,18 @@ def main():
 
     # Find all prediction files
     train_files = sorted(experiments_dir.glob("*_train_predictions.csv"))
+    if args.datasets:
+        selected = [d.strip() for d in args.datasets]
+        train_files = [
+            p for p in train_files if any(p.name.startswith(f"{dataset}_") for dataset in selected)
+        ]
+    if args.model_types:
+        selected_models = [m.strip().lower() for m in args.model_types]
+        train_files = [
+            p
+            for p in train_files
+            if any(f"_{model}_train_predictions.csv" in p.name for model in selected_models)
+        ]
 
     if not train_files:
         logging.error(f"No prediction files found in {experiments_dir}")

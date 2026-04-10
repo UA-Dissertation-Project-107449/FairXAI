@@ -209,6 +209,12 @@ def main():
         "Default 10000 targets consumer hardware; use None or higher for HPC.",
     )
     parser.add_argument(
+        "--datasets",
+        nargs="+",
+        default=None,
+        help="Optional dataset names to preprocess (CLI override).",
+    )
+    parser.add_argument(
         "-v", "--verbose", action="count", default=0, help="Verbosity: -v=info, -vv=debug"
     )
     args = parser.parse_args()
@@ -271,6 +277,13 @@ def main():
 
     # Find all standardized datasets
     dataset_files = list(data_raw.glob("*_standardized.csv"))
+    if args.datasets:
+        selected = set(d.strip() for d in args.datasets)
+        dataset_files = [
+            p
+            for p in dataset_files
+            if p.stem.replace("_standardized", "") in selected
+        ]
 
     if not dataset_files:
         logging.error(f"No standardized datasets found in {data_raw}")

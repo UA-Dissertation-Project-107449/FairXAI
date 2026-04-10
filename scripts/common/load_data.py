@@ -54,6 +54,12 @@ def main():
         default=os.getenv("RUN_ID"),
         help="Run identifier (optional, enables run-scoped outputs)",
     )
+    parser.add_argument(
+        "--datasets",
+        nargs="+",
+        default=None,
+        help="Optional dataset names to load (CLI override).",
+    )
     args = parser.parse_args()
 
     pipeline = args.pipeline
@@ -89,7 +95,17 @@ def main():
     loader = loader_cls(str(config_path), feature_map_path=str(feature_map_path))
 
     logging.info(f"Loading datasets from: {data_external}")
-    datasets = loader.load_all_cardiac_datasets(str(data_external))
+    selected_datasets = [d.strip() for d in args.datasets] if args.datasets else None
+    if selected_datasets:
+        datasets = {}
+        for dataset_name in selected_datasets:
+            try:
+                datasets[dataset_name] = loader.load_dataset(dataset_name, str(data_external))
+                logging.info(f"[SUCCESS] Loaded {dataset_name}: {len(datasets[dataset_name])} rows")
+            except Exception as e:
+                logging.error(f"[ERROR] Failed to load {dataset_name}: {e}")
+    else:
+        datasets = loader.load_all_cardiac_datasets(str(data_external))
 
     if not datasets:
         logging.error("[ERROR] No datasets loaded. Exiting.")

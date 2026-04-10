@@ -50,22 +50,28 @@ def _verbose_flags(level: int) -> list[str]:
 
 
 @task
-def load_data(run_id: str, verbose: int = 0):
+def load_data(run_id: str, datasets: Optional[list[str]] = None, verbose: int = 0):
     logger = get_run_logger()
     logger.info("[PHASE 1/10] Loading cardiac datasets (standardization)")
     script = ROOT_DIR / "scripts" / "cardiac" / "load_data.py"
-    args = _verbose_flags(verbose)
+    args = []
+    if datasets:
+        args.extend(["--datasets", *datasets])
+    args.extend(_verbose_flags(verbose))
     env = os.environ.copy()
     env["RUN_ID"] = run_id
     _run_script(script, args, env)
 
 
 @task
-def profile_data(run_id: str, verbose: int = 0):
+def profile_data(run_id: str, datasets: Optional[list[str]] = None, verbose: int = 0):
     logger = get_run_logger()
     logger.info("[PHASE 2/10] Profiling datasets (complexity + fairness)")
     script = ROOT_DIR / "scripts" / "cardiac" / "profile_data.py"
-    args = _verbose_flags(verbose)
+    args = []
+    if datasets:
+        args.extend(["--datasets", *datasets])
+    args.extend(_verbose_flags(verbose))
     env = os.environ.copy()
     env["RUN_ID"] = run_id
     _run_script(script, args, env)
@@ -84,13 +90,20 @@ def generate_recommendations(run_id: str, verbose: int = 0):
 
 
 @task
-def preprocess_data(run_id: str, all_binnings: bool = False, verbose: int = 0):
+def preprocess_data(
+    run_id: str,
+    all_binnings: bool = False,
+    datasets: Optional[list[str]] = None,
+    verbose: int = 0,
+):
     logger = get_run_logger()
     logger.info("[PHASE 4/10] Preprocessing datasets (split + scale + fairness profiles)")
     script = ROOT_DIR / "scripts" / "cardiac" / "preprocess.py"
     args = []
     if all_binnings:
         args.append("--all-binnings")
+    if datasets:
+        args.extend(["--datasets", *datasets])
     args.extend(_verbose_flags(verbose))
     env = os.environ.copy()
     env["RUN_ID"] = run_id
@@ -98,56 +111,89 @@ def preprocess_data(run_id: str, all_binnings: bool = False, verbose: int = 0):
 
 
 @task
-def train_baseline_model(run_id: str, verbose: int = 0):
+def train_baseline_model(
+    run_id: str,
+    datasets: Optional[list[str]] = None,
+    model_types: Optional[list[str]] = None,
+    verbose: int = 0,
+):
     logger = get_run_logger()
     logger.info("[PHASE 5/10] Training baseline model(s)")
     script = ROOT_DIR / "scripts" / "cardiac" / "train_baseline.py"
-    args = _verbose_flags(verbose)
+    args = []
+    if datasets:
+        args.extend(["--datasets", *datasets])
+    if model_types:
+        args.extend(["--model-types", *model_types])
+    args.extend(_verbose_flags(verbose))
     env = os.environ.copy()
     env["RUN_ID"] = run_id
     _run_script(script, args, env)
 
 
 @task
-def assess_predictions(run_id: str, verbose: int = 0):
+def assess_predictions(
+    run_id: str,
+    datasets: Optional[list[str]] = None,
+    model_types: Optional[list[str]] = None,
+    verbose: int = 0,
+):
     logger = get_run_logger()
     logger.info("[PHASE 6/10] Assessing post-prediction fairness")
     script = ROOT_DIR / "scripts" / "cardiac" / "assess_predictions.py"
-    args = _verbose_flags(verbose)
+    args = []
+    if datasets:
+        args.extend(["--datasets", *datasets])
+    if model_types:
+        args.extend(["--model-types", *model_types])
+    args.extend(_verbose_flags(verbose))
     env = os.environ.copy()
     env["RUN_ID"] = run_id
     _run_script(script, args, env)
 
 
 @task
-def analyze_attribute_binning(run_id: str, verbose: int = 0):
+def analyze_attribute_binning(run_id: str, datasets: Optional[list[str]] = None, verbose: int = 0):
     """Analyzes attribute binning strategies."""
     logger = get_run_logger()
     logger.info("[PHASE 7/10] Attribute binning strategies analysis")
     script = ROOT_DIR / "scripts" / "experiments" / "run_attribute_binning_analysis.py"
     args = ["--config", "configs/experiments/age_binning.yaml", "--run-mode", "full", "--run-id", run_id, "--pipeline", "cardiac"]
+    if datasets:
+        args.extend(["--datasets", *datasets])
     args.extend(_verbose_flags(verbose))
     _run_script(script, args, os.environ.copy())
 
 
 @task
-def compare_mitigation_techniques(run_id: str, verbose: int = 0):
+def compare_mitigation_techniques(run_id: str, datasets: Optional[list[str]] = None, verbose: int = 0):
     """Compares mitigation techniques."""
     logger = get_run_logger()
     logger.info("[PHASE 8/10] Mitigation techniques comparison")
     script = ROOT_DIR / "scripts" / "cardiac" / "mitigation.py"
     args = ["--config", "configs/experiments/mitigation.yaml", "--run-mode", "full", "--run-id", run_id]
+    if datasets:
+        args.extend(["--datasets", *datasets])
     args.extend(_verbose_flags(verbose))
     _run_script(script, args, os.environ.copy())
 
 
 @task
-def run_combinatorial_experiments(run_id: str, verbose: int = 0):
+def run_combinatorial_experiments(
+    run_id: str,
+    datasets: Optional[list[str]] = None,
+    model_types: Optional[list[str]] = None,
+    verbose: int = 0,
+):
     """Runs combinatorial experiments."""
     logger = get_run_logger()
     logger.info("[PHASE 9/10] Combinatorial experiments")
     script = ROOT_DIR / "scripts" / "cardiac" / "combinatorial.py"
     args = ["--config", "configs/experiments/combinatorial.yaml", "--run-id", run_id]
+    if datasets:
+        args.extend(["--datasets", *datasets])
+    if model_types:
+        args.extend(["--model-types", *model_types])
     args.extend(_verbose_flags(verbose))
     _run_script(script, args, os.environ.copy())
 
@@ -173,6 +219,8 @@ def cardiac_pipeline(
     resume_from: Optional[str] = None,
     go_until: Optional[str] = None,
     run_id_override: Optional[str] = None,
+    datasets: Optional[list[str]] = None,
+    model_types: Optional[list[str]] = None,
 ):
     """
     The main pipeline flow for the cardiac fairness analysis.
@@ -238,6 +286,8 @@ def cardiac_pipeline(
     logger.info(f"Mitigation:   {run_mitigation}")
     logger.info(f"Combinatorial:{run_combinatorial}")
     logger.info(f"Comparison:   {run_comparison}")
+    logger.info(f"Datasets:     {datasets if datasets else 'config/default'}")
+    logger.info(f"Model types:  {model_types if model_types else 'config/default'}")
 
     # --- Helper: checkpoint after a successful task -------------------------
     def _checkpoint(stage_num: int, future):
@@ -259,14 +309,14 @@ def cardiac_pipeline(
 
     # Stage 1 — Load
     if _should_run(1):
-        load_data_task = load_data.submit(run_id, verbose)
+        load_data_task = load_data.submit(run_id, datasets, verbose)
     else:
         logger.info("[1/10] load — SKIPPED (outside active range)")
 
     # Stage 2 — Profile
     if _should_run(2):
         wait = [load_data_task] if load_data_task else []
-        profile_task = profile_data.submit(run_id, verbose, wait_for=wait)
+        profile_task = profile_data.submit(run_id, datasets, verbose, wait_for=wait)
     else:
         logger.info("[2/10] profile — SKIPPED (outside active range)")
 
@@ -283,7 +333,7 @@ def cardiac_pipeline(
     if _should_run(4):
         wait = [profile_task] if profile_task else []
         preprocess_data_task = preprocess_data.submit(
-            run_id, run_combinatorial, verbose, wait_for=wait
+            run_id, run_combinatorial, datasets, verbose, wait_for=wait
         )
     else:
         logger.info("[4/10] preprocess — SKIPPED (outside active range)")
@@ -292,7 +342,7 @@ def cardiac_pipeline(
     if _should_run(5):
         wait = [preprocess_data_task] if preprocess_data_task else []
         train_baseline_model_task = train_baseline_model.submit(
-            run_id, verbose, wait_for=wait
+            run_id, datasets, model_types, verbose, wait_for=wait
         )
     else:
         logger.info("[5/10] train — SKIPPED (outside active range)")
@@ -301,7 +351,7 @@ def cardiac_pipeline(
     if _should_run(6):
         wait = [train_baseline_model_task] if train_baseline_model_task else []
         assess_predictions_task = assess_predictions.submit(
-            run_id, verbose, wait_for=wait
+            run_id, datasets, model_types, verbose, wait_for=wait
         )
     else:
         logger.info("[6/10] assess — SKIPPED (outside active range)")
@@ -309,7 +359,7 @@ def cardiac_pipeline(
     # Stage 7 — Attribute binning (optional + gated)
     if _should_run(7) and run_attribute_binning:
         wait = [assess_predictions_task] if assess_predictions_task else []
-        age_task = analyze_attribute_binning.submit(run_id, verbose, wait_for=wait)
+        age_task = analyze_attribute_binning.submit(run_id, datasets, verbose, wait_for=wait)
     else:
         reason = "disabled" if not run_attribute_binning else "outside active range"
         logger.info(f"[7/10] attribute_binning — SKIPPED ({reason})")
@@ -318,7 +368,7 @@ def cardiac_pipeline(
     if _should_run(8) and run_mitigation:
         wait = [assess_predictions_task] if assess_predictions_task else []
         mitigation_task = compare_mitigation_techniques.submit(
-            run_id, verbose, wait_for=wait
+            run_id, datasets, verbose, wait_for=wait
         )
     else:
         reason = "disabled" if not run_mitigation else "outside active range"
@@ -328,7 +378,7 @@ def cardiac_pipeline(
     if _should_run(9) and run_combinatorial:
         wait = [assess_predictions_task] if assess_predictions_task else []
         combinatorial_task = run_combinatorial_experiments.submit(
-            run_id, verbose, wait_for=wait
+            run_id, datasets, model_types, verbose, wait_for=wait
         )
     else:
         reason = "disabled" if not run_combinatorial else "outside active range"
@@ -432,6 +482,18 @@ Examples:
     p.add_argument("--no-mitigation", action="store_true", help="Skip mitigation stage.")
     p.add_argument("--no-combinatorial", action="store_true", help="Skip combinatorial stage.")
     p.add_argument("--no-comparison", action="store_true", help="Skip comparison stage.")
+    p.add_argument(
+        "--datasets",
+        nargs="+",
+        default=None,
+        help="Optional dataset override passed to stages (CLI > config > defaults).",
+    )
+    p.add_argument(
+        "--model-types",
+        nargs="+",
+        default=None,
+        help="Optional model types override for baseline/combinatorial stages.",
+    )
     p.add_argument("-v", "--verbose", action="count", default=0,
                     help="Verbosity: -v=info, -vv=debug")
     return p
@@ -448,4 +510,6 @@ if __name__ == "__main__":
         resume_from=args.resume_from,
         go_until=args.go_until,
         run_id_override=args.run_id,
+        datasets=args.datasets,
+        model_types=args.model_types,
     )

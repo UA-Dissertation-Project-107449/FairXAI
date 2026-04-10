@@ -149,6 +149,27 @@ python3 flows/cardiac_pipeline.py -v    # info
 python3 flows/cardiac_pipeline.py       # quiet (default)
 ```
 
+## Dataset and model scope overrides
+
+Both orchestrators accept CLI scope overrides:
+
+- `--datasets <d1> [d2 ...]`
+- `--model-types <m1> [m2 ...]`
+
+Precedence is: CLI flags > config > defaults/auto-discovery.
+
+Examples:
+
+```bash
+bash scripts/cardiac/cardiac_pipeline.sh \
+  --datasets cleveland \
+  --model-types logistic_regression svm
+
+python3 flows/cardiac_pipeline.py \
+  --datasets cleveland \
+  --model-types logistic_regression svm
+```
+
 ## Outputs
 
 All outputs are written under `output/<pipeline>/runs/<run_id>/` when `RUN_ID` is set. If not set, outputs go to the default pipeline folders under `output/<pipeline>/`.

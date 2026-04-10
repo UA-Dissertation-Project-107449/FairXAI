@@ -48,6 +48,12 @@ def main():
         default=os.getenv("RUN_ID"),
         help="Run identifier (optional, enables run-scoped outputs)",
     )
+    parser.add_argument(
+        "--datasets",
+        nargs="+",
+        default=None,
+        help="Optional dataset names to profile (CLI override).",
+    )
     args = parser.parse_args()
 
     pipeline = args.pipeline
@@ -81,6 +87,13 @@ def main():
 
     # Find all standardized datasets
     dataset_files = list(data_raw.glob("*_standardized.csv"))
+    if args.datasets:
+        selected = set(d.strip() for d in args.datasets)
+        dataset_files = [
+            p
+            for p in dataset_files
+            if p.stem.replace("_standardized", "") in selected
+        ]
 
     if not dataset_files:
         logging.error(f"No standardized datasets found in {data_raw}")
