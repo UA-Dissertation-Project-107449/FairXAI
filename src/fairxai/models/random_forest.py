@@ -11,6 +11,8 @@ from .sklearn_wrapper import SklearnClassifierWrapper
 
 logger = logging.getLogger(__name__)
 
+_CUML_SAMPLE_WEIGHT_SUPPORTED: bool | None = None
+
 
 class RandomForestModel(SklearnClassifierWrapper):
     """Random Forest baseline for cardiac disease prediction.
@@ -84,6 +86,14 @@ class RandomForestModel(SklearnClassifierWrapper):
     # cuML-aware overrides
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _resolve_sample_weight_strategy(class_weight: str | dict | list | None):
+        """Map RF class_weight to a strategy accepted by compute_sample_weight."""
+        if class_weight == "balanced_subsample":
+            # sklearn's compute_sample_weight does not accept this RF-only mode.
+            return "balanced"
+        return class_weight or "balanced"
+
     def train(self, X_train: pd.DataFrame, y_train: pd.Series):
         if self._use_gpu:
             from sklearn.utils.class_weight import compute_sample_weight
@@ -94,8 +104,23 @@ class RandomForestModel(SklearnClassifierWrapper):
             logger.info(f"  Training samples: {len(X_train)}")
             logger.info(f"  Positive class: {y_train.sum()} ({y_train.mean():.2%})")
 
-            sample_weight = compute_sample_weight(self._class_weight or "balanced", y_train.values)
-            self.model.fit(X_train.values, y_train.values, sample_weight=sample_weight)
+            sample_weight_mode = self._resolve_sample_weight_strategy(self._class_weight)
+            sample_weight = compute_sample_weight(sample_weight_mode, y_train.values)
+            global _CUML_SAMPLE_WEIGHT_SUPPORTED
+            if _CUML_SAMPLE_WEIGHT_SUPPORTED is False:
+                self.model.fit(X_train.values, y_train.values)
+            else:
+                try:
+                    self.model.fit(X_train.values, y_train.values, sample_weight=sample_weight)
+                    _CUML_SAMPLE_WEIGHT_SUPPORTED = True
+                except TypeError as exc:
+                    logger.debug(
+                        "RandomForestModel (cuML): sample_weight unsupported (%s); "
+                        "using unweighted fit.",
+                        exc,
+                    )
+                    _CUML_SAMPLE_WEIGHT_SUPPORTED = False
+                    self.model.fit(X_train.values, y_train.values)
 
             y_train_pred = self.predict(X_train)
             y_train_proba = self.predict_proba(X_train)
