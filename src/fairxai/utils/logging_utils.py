@@ -72,7 +72,12 @@ def _normalise_verbosity(verbose: Union[bool, int]) -> int:
     return max(0, min(int(verbose), 2))
 
 
-def setup_logging(log_file: Path, verbose: Union[bool, int] = 0) -> logging.Logger:
+def setup_logging(
+    log_file: Path,
+    verbose: Union[bool, int] = 0,
+    *,
+    aggregate_log: Optional[Path] = None,
+) -> logging.Logger:
     """Configure logging to file (full) and console (filtered by verbosity).
 
     Parameters
@@ -85,6 +90,11 @@ def setup_logging(log_file: Path, verbose: Union[bool, int] = 0) -> logging.Logg
         1 = INFO+,
         2 = DEBUG+.
         Legacy ``True``/``False`` still accepted (mapped to 1/0).
+    aggregate_log : Path, optional
+        When provided, a 6th handler appends every record (DEBUG+) from all
+        library loggers to this single file.  Opened in ``"a"`` mode so
+        successive pipeline phases accumulate without overwriting.
+        Format includes the logger name for traceability.
     """
     level = _normalise_verbosity(verbose)
     log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -131,6 +141,15 @@ def setup_logging(log_file: Path, verbose: Union[bool, int] = 0) -> logging.Logg
 
     logger.addHandler(warning_handler)
     logger.addHandler(error_handler)
+
+    # --- Aggregate run log (append mode, spans all phases) ------------------
+    if aggregate_log is not None:
+        aggregate_log.parent.mkdir(parents=True, exist_ok=True)
+        agg_formatter = logging.Formatter("%(asctime)s [%(name)s] %(levelname)s - %(message)s")
+        agg_handler = logging.FileHandler(aggregate_log, mode="a")
+        agg_handler.setLevel(logging.DEBUG)
+        agg_handler.setFormatter(agg_formatter)
+        logger.addHandler(agg_handler)
 
     # --- Capture Python warnings into the logging system --------------------
     logging.captureWarnings(True)
