@@ -46,7 +46,7 @@ jobs:
         run: python3 -m pip install -e ".[experiment]"
 
       - name: Install CI tooling
-        run: python3 -m pip install black isort build ruff pytest matplotlib seaborn jenkspy
+        run: python3 -m pip install black isort build ruff pytest matplotlib seaborn jenkspy prefect tabulate
 
       - name: Black format check
         run: black --check src scripts tests flows
