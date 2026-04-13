@@ -46,7 +46,7 @@ jobs:
         run: python3 -m pip install -e ".[experiment]"
 
       - name: Install CI tooling
-        run: python3 -m pip install black isort build ruff pytest jenkspy
+        run: python3 -m pip install black isort build ruff pytest matplotlib seaborn jenkspy
 
       - name: Black format check
         run: black --check src scripts tests flows
@@ -63,5 +63,5 @@ jobs:
       - name: CLI help smoke check
         run: python3 -m fairxai.cli.characterize --help
 
-      - name: Unit tests (no viz — matplotlib not installed in PR CI)
+      - name: Unit tests (skip viz smoke in PR quick CI)
         run: pytest tests/unit/ -q --ignore=tests/unit/test_viz_smoke.py
