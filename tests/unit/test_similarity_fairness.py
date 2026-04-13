@@ -32,7 +32,6 @@ class TestSimilarityEngine:
         assert result.rows[0].mean_consistency == pytest.approx(1.0)
 
     def test_consistency_less_than_one_when_predictions_vary(self):
-        rng = np.random.default_rng(7)
         df = pd.DataFrame(
             {
                 "feat_a": np.linspace(0, 10, 40),

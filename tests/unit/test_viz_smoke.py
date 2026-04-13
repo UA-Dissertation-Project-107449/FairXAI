@@ -6,7 +6,6 @@ matplotlib.use("Agg")  # must be before any other matplotlib import
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from fairxai.viz.experiment_plots import (
     save_cross_model_radar,

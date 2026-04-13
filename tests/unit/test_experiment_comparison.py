@@ -1,19 +1,16 @@
 """Unit tests for run_experiment_comparison helpers."""
 
-import json
 import sys
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
-import pytest
 
 # Add scripts/experiments to path so we can import the module directly.
 _EXPERIMENTS_DIR = Path(__file__).parent.parent.parent / "scripts" / "experiments"
 sys.path.insert(0, str(_EXPERIMENTS_DIR))
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-from run_experiment_comparison import (
+from run_experiment_comparison import (  # noqa: E402
     _extract_per_group_fairness,
     _load_baseline_per_group,
 )

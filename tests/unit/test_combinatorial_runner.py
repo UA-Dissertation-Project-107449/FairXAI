@@ -4,13 +4,12 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import pytest
 
 _EXPERIMENTS_DIR = Path(__file__).parent.parent.parent / "scripts" / "experiments"
 sys.path.insert(0, str(_EXPERIMENTS_DIR))
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-from run_combinatorial_experiments import (
+from run_combinatorial_experiments import (  # noqa: E402
     _DEFAULT_MITIGATION_SUPPORTED_MODEL_TYPES,
     _coerce_label_vector,
     _coerce_probability_vector,

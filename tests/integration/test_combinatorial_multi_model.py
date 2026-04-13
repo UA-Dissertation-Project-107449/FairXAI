@@ -6,19 +6,16 @@ Verifies that:
 - Result JSON files are written and parseable
 """
 
-import json
 import sys
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
 import pytest
 
 _EXPERIMENTS_DIR = Path(__file__).parent.parent.parent / "scripts" / "experiments"
 sys.path.insert(0, str(_EXPERIMENTS_DIR))
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-from run_combinatorial_experiments import _DEFAULT_MITIGATION_SUPPORTED_MODEL_TYPES
+from run_combinatorial_experiments import _DEFAULT_MITIGATION_SUPPORTED_MODEL_TYPES  # noqa: E402
 
 
 class TestMitigationFilteringLogic:

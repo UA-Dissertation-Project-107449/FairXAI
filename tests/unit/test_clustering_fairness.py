@@ -2,7 +2,6 @@
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from fairxai.clustering import ClusterProfiler, FairnessPerCluster
 
@@ -61,7 +60,6 @@ class TestFairnessPerCluster:
 class TestCramersV:
     def test_perfect_correlation_gives_high_v(self):
         """When cluster assignment == sensitive attr, Cramér's V should be high."""
-        n = 60
         # Perfect alignment: cluster 0 = Female, cluster 1 = Male
         df = pd.DataFrame(
             {

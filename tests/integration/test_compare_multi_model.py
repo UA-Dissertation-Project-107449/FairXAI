@@ -6,23 +6,20 @@ Uses a synthetic multi-model results DataFrame to verify:
 - per-model Pareto PNGs are created
 """
 
-import json
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
-import pytest
 
 _EXPERIMENTS_DIR = Path(__file__).parent.parent.parent / "scripts" / "experiments"
 sys.path.insert(0, str(_EXPERIMENTS_DIR))
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-from run_experiment_comparison import (
+from run_experiment_comparison import (  # noqa: E402
     _build_per_group_comparison,
     _extract_per_group_fairness,
-    _load_baseline_per_group,
 )
 
 
