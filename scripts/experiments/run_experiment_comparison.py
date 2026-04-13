@@ -9,10 +9,11 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import yaml
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
+# Ensure local experiment helpers (e.g., _gates.py) are importable from wrapper entrypoints.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _gates import evaluate_recall_gate, load_gate_thresholds
 
@@ -417,6 +418,195 @@ def filter_best_configurations(
     return best_df  # empty DataFrame (strict set was empty)
 
 
+def _extract_per_group_fairness(fairness_metrics: dict) -> list:
+    """Flatten per-group fairness data from a calculate_all_metrics() result dict.
+
+    Returns a list of records:
+        {sensitive_attr, group, metric, value}
+
+    Covers group_fairness → {attr} → {demographic_parity, equalized_odds,
+    equal_opportunity, predictive_parity} → group_rates / group_metrics.
+    """
+    records = []
+    group_fairness = fairness_metrics.get("group_fairness", {}) if fairness_metrics else {}
+    for attr, attr_metrics in group_fairness.items():
+        if not isinstance(attr_metrics, dict):
+            continue
+
+        dp = attr_metrics.get("demographic_parity", {})
+        if isinstance(dp, dict):
+            for group, gdata in dp.get("group_rates", {}).items():
+                if isinstance(gdata, dict):
+                    records.append(
+                        {
+                            "sensitive_attr": attr,
+                            "group": str(group),
+                            "metric": "demographic_parity_rate",
+                            "value": gdata.get("positive_rate"),
+                        }
+                    )
+
+        eq = attr_metrics.get("equalized_odds", {})
+        if isinstance(eq, dict):
+            for group, gdata in eq.get("group_metrics", {}).items():
+                if isinstance(gdata, dict):
+                    records.append(
+                        {
+                            "sensitive_attr": attr,
+                            "group": str(group),
+                            "metric": "tpr",
+                            "value": gdata.get("tpr"),
+                        }
+                    )
+                    records.append(
+                        {
+                            "sensitive_attr": attr,
+                            "group": str(group),
+                            "metric": "fpr",
+                            "value": gdata.get("fpr"),
+                        }
+                    )
+
+        eqopp = attr_metrics.get("equal_opportunity", {})
+        if isinstance(eqopp, dict):
+            for group, tpr_val in eqopp.get("group_tpr", {}).items():
+                records.append(
+                    {
+                        "sensitive_attr": attr,
+                        "group": str(group),
+                        "metric": "equal_opportunity_tpr",
+                        "value": tpr_val if not isinstance(tpr_val, dict) else tpr_val.get("tpr"),
+                    }
+                )
+
+        pp = attr_metrics.get("predictive_parity", {})
+        if isinstance(pp, dict):
+            for group, prec_val in pp.get("group_precision", {}).items():
+                records.append(
+                    {
+                        "sensitive_attr": attr,
+                        "group": str(group),
+                        "metric": "predictive_parity_precision",
+                        "value": (
+                            prec_val
+                            if not isinstance(prec_val, dict)
+                            else prec_val.get("precision")
+                        ),
+                    }
+                )
+    return records
+
+
+def _load_baseline_per_group(run_root: Path, dataset: str, model_type: str) -> list:
+    """Load per-group fairness records from the stage-6 baseline assessment JSON.
+
+    Returns records in the same format as _extract_per_group_fairness(), with an
+    extra source='baseline_assess' field so they can be distinguished.
+    Falls back to an empty list if the JSON is absent or malformed.
+    """
+    # Stage 6 writes to: {run_root}/baseline/fairness/{dataset}_{model_type}_fairness_assessment.json
+    json_path = (
+        run_root / "baseline" / "fairness" / f"{dataset}_{model_type}_fairness_assessment.json"
+    )
+    if not json_path.exists():
+        logging.debug(f"Baseline per-group JSON not found: {json_path}")
+        return []
+    try:
+        with open(json_path) as f:
+            data = json.load(f)
+        # The JSON has train_metrics and test_metrics; use test_metrics as the reference.
+        test_metrics = data.get("test_metrics", {})
+        records = _extract_per_group_fairness(test_metrics)
+        for r in records:
+            r["source"] = "baseline_assess"
+        return records
+    except Exception as exc:
+        logging.warning(f"Failed to load baseline per-group JSON {json_path}: {exc}")
+        return []
+
+
+def _build_per_group_comparison(
+    df_success: pd.DataFrame,
+    versioning: "ExperimentVersioning",
+    run_root: Path,
+    output_dir: Path,
+) -> None:
+    """Build and save per_group_comparison.csv.
+
+    For each experiment, loads per-group fairness from its result JSON and pairs it
+    with the stage-6 baseline per-group JSON for the same (dataset, model_type).
+    Output columns:
+        dataset, model_type, binning_strategy, training_method, mitigation_technique,
+        model_variant, sensitive_attr, group, metric,
+        baseline_value, experiment_value, delta
+    """
+    # Pre-load baseline per-group data keyed by (dataset, model_type)
+    baseline_pg: dict = {}
+    for (dataset, model_type), _ in df_success.groupby(["dataset", "model_type"], dropna=False):
+        key = (dataset, model_type)
+        if key not in baseline_pg:
+            records = _load_baseline_per_group(run_root, dataset, model_type)
+            baseline_pg[key] = {
+                (r["sensitive_attr"], r["group"], r["metric"]): r["value"] for r in records
+            }
+
+    rows = []
+    for _, exp_row in df_success.iterrows():
+        if exp_row.get("status") != "success":
+            continue
+        exp_id = exp_row["experiment_id"]
+        dataset = exp_row["dataset"]
+        model_type = exp_row.get("model_type", "logistic_regression")
+        baseline_lookup_key = (dataset, model_type)
+
+        try:
+            exp_data = versioning.load_experiment(exp_id)
+            fairness_metrics = (
+                exp_data["results"].get("fairness_metrics", {}) if exp_data.get("results") else {}
+            )
+        except Exception:
+            continue
+
+        pg_records = _extract_per_group_fairness(fairness_metrics)
+        baseline_map = baseline_pg.get(baseline_lookup_key, {})
+
+        for rec in pg_records:
+            baseline_val = baseline_map.get((rec["sensitive_attr"], rec["group"], rec["metric"]))
+            exp_val = rec["value"]
+            delta = (
+                (exp_val - baseline_val)
+                if (exp_val is not None and baseline_val is not None)
+                else None
+            )
+            rows.append(
+                {
+                    "dataset": dataset,
+                    "model_type": model_type,
+                    "binning_strategy": exp_row["binning_strategy"],
+                    "training_method": exp_row["training_method"],
+                    "mitigation_technique": exp_row["mitigation_technique"],
+                    "model_variant": exp_row.get("model_variant", ""),
+                    "sensitive_attr": rec["sensitive_attr"],
+                    "group": rec["group"],
+                    "metric": rec["metric"],
+                    "baseline_value": baseline_val,
+                    "experiment_value": exp_val,
+                    "delta": delta,
+                }
+            )
+
+    if not rows:
+        logging.warning(
+            "No per-group comparison rows generated (stage-6 baseline JSONs may be absent)"
+        )
+        return
+
+    pg_df = pd.DataFrame(rows)
+    pg_csv = output_dir / "per_group_comparison.csv"
+    pg_df.to_csv(pg_csv, index=False)
+    logging.info(f"[SUCCESS] Saved per-group comparison: {pg_csv} ({len(pg_df)} rows)")
+
+
 def run_comparison_analysis(
     results_dir: str = None,
     pipeline: str = "cardiac",
@@ -481,6 +671,10 @@ def run_comparison_analysis(
     # Initialize versioning
     versioning = ExperimentVersioning(base_output_dir, run_dir=run_dir)
 
+    # Derive run_root: the directory that contains baseline/, experiments/full/, etc.
+    # run_dir is typically {run_root}/experiments/full.
+    run_root = run_dir.parent.parent if run_dir else None
+
     # Load all results
     logging.info("\nLoading experiment results...")
     df = load_all_results(versioning)
@@ -523,14 +717,20 @@ def run_comparison_analysis(
             df_success[col] = np.nan
     df_success["fairness_gap"] = df_success[fairness_cols].max(axis=1, skipna=True)
 
-    # Compute fairness gains per metric vs baseline (same dataset/binning/training_method)
+    # Compute fairness gains per metric vs baseline
+    # Key must include model_type so LR baseline is not confused with RF baseline.
     fairness_metric_cols = [
         c for c in df_success.columns if c.startswith("dem_parity_") or c.startswith("eq_odds_")
     ]
 
     baseline_lookup = {}
     for _, row in df_success[df_success["mitigation_technique"] == "baseline"].iterrows():
-        key = (row["dataset"], row["binning_strategy"], row["training_method"])
+        key = (
+            row["dataset"],
+            row.get("model_type", "logistic_regression"),
+            row["binning_strategy"],
+            row["training_method"],
+        )
         baseline_lookup[key] = row
 
     for col in fairness_metric_cols:
@@ -542,7 +742,12 @@ def run_comparison_analysis(
     df_success["fairness_gain_pct"] = np.nan
 
     for idx, row in df_success.iterrows():
-        key = (row["dataset"], row["binning_strategy"], row["training_method"])
+        key = (
+            row["dataset"],
+            row.get("model_type", "logistic_regression"),
+            row["binning_strategy"],
+            row["training_method"],
+        )
         baseline = baseline_lookup.get(key)
         if baseline is None:
             continue
@@ -626,7 +831,7 @@ def run_comparison_analysis(
     combo_counts.to_csv(combo_file, index=False)
     logging.info(f"[SUCCESS] Saved experiment counts: {combo_file}")
 
-    # Trade-off visuals (per dataset)
+    # Trade-off visuals (per dataset, then per dataset × model_type)
     if not no_plots:
         for dataset in sorted(df_success["dataset"].unique()):
             subset = df_success[df_success["dataset"] == dataset].copy()
@@ -669,6 +874,24 @@ def run_comparison_analysis(
             else:
                 logging.warning(f"Pareto plot skipped (no data): {pareto_png}")
 
+            # Per-model Pareto plots: one per (dataset, model_type)
+            for model_type in sorted(subset["model_type"].dropna().unique()):
+                model_subset = subset[subset["model_type"] == model_type].copy()
+                if model_subset.empty or model_subset["fairness_gap"].isna().all():
+                    continue
+                pareto_model_png = output_dir / f"pareto_{dataset}_{model_type}.png"
+                pareto_model_result = save_pareto_frontier(
+                    model_subset,
+                    x_col="score_value",
+                    y_col="fairness_gap",
+                    title=f"{dataset} / {model_type} - Pareto Frontier",
+                    output_file=pareto_model_png,
+                )
+                if pareto_model_result:
+                    logging.info(f"[SUCCESS] Saved per-model pareto: {pareto_model_png}")
+                else:
+                    logging.debug(f"Per-model pareto skipped (no data): {pareto_model_png}")
+
     # Summary outputs
     summary_rows = []
     for dataset in sorted(df_success["dataset"].unique()):
@@ -694,16 +917,53 @@ def run_comparison_analysis(
     summary_df.to_csv(summary_csv, index=False)
     logging.info(f"[SUCCESS] Saved summary: {summary_csv}")
 
+    # Cross-model summary: best config per (dataset, model_type)
+    cross_model_rows = []
+    for (dataset, model_type), group in df_success.groupby(["dataset", "model_type"], dropna=False):
+        if group.empty:
+            continue
+        best = group.sort_values("score_value", ascending=False).iloc[0]
+        cross_model_rows.append(
+            {
+                "dataset": dataset,
+                "model_type": model_type,
+                "best_mitigation": best["mitigation_technique"],
+                "best_binning": best["binning_strategy"],
+                "best_training_method": best["training_method"],
+                "best_model_variant": best.get("model_variant", ""),
+                "score": best["score_value"],
+                "accuracy": best.get("accuracy_value", best.get("accuracy")),
+                "f1": best.get("f1_value"),
+                "f1_score": best.get("f1_value"),
+                "recall": best.get("recall_value"),
+                "precision": best.get("precision_value", best.get("precision")),
+                "auc_roc": best.get("auc_value", best.get("auc_roc")),
+                "fairness_gap": best.get("fairness_gap"),
+                "fairness_gain_pct": best.get("fairness_gain_pct"),
+                "experiment_id": best["experiment_id"],
+            }
+        )
+    cross_model_df = pd.DataFrame(cross_model_rows)
+    cross_model_csv = output_dir / "cross_model_summary.csv"
+    cross_model_df.to_csv(cross_model_csv, index=False)
+    logging.info(f"[SUCCESS] Saved cross-model summary: {cross_model_csv}")
+
+    # Per-subgroup before/after comparison (requires stage-6 baseline JSONs)
+    if run_root is not None and run_root.exists():
+        _build_per_group_comparison(df_success, versioning, run_root, output_dir)
+    else:
+        logging.debug("Skipping per-group comparison: run_root not available")
+
     # Print summary
     logging.info("\n" + "=" * 80)
     logging.info("COMPARISON COMPLETE")
     logging.info("=" * 80)
     logging.info("[PHASE] Comparison complete")
     logging.info(f"Results saved to: {output_dir}")
-    logging.info(f"\nFiles created:")
+    logging.info("\nFiles created:")
     logging.info(f"  - full_comparison.csv ({len(df_success)} experiments)")
-    logging.info(f"  - binning_comparison.csv")
-    logging.info(f"  - mitigation_comparison.csv")
+    logging.info("  - binning_comparison.csv")
+    logging.info("  - mitigation_comparison.csv")
     if best_configs is not None and not best_configs.empty:
         logging.info(f"  - best_configurations.csv ({len(best_configs)} configs)")
 

@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 from fairxai.cli.runner_base import get_project_root, load_pipeline_config, setup_phase_logging
 from fairxai.cli.runner_utils import get_run_root, resolve_run_id
 from fairxai.recommendations.engine import RecommendationEngine
-from fairxai.recommendations.ingestion import confirm_ingestion, ingestion_from_schema
+from fairxai.recommendations.ingestion import confirm_ingestion
 from fairxai.recommendations.output import to_json_string, to_markdown
 
 
@@ -220,7 +220,6 @@ def _process_pipeline_datasets(engine, project_root, pipeline, args, output_dir)
     """Process all standardized datasets in the pipeline's raw directory."""
     pipeline_cfg = load_pipeline_config(project_root, pipeline)
     data_raw = project_root / pipeline_cfg["paths"]["raw_dir"]
-    schema_path = str(project_root / pipeline_cfg["runtime"]["schema_mapping_json"])
     sensitive_attrs = pipeline_cfg.get("fairness", {}).get(
         "sensitive_attributes", ["age_group", "sex"]
     )
@@ -268,7 +267,7 @@ def _log_summary(report, dataset_name):
         logging.info(f"  {icon} [{rec.priority.value}][{rec.category.value}] {rec.title}")
 
     if report.limitations:
-        logging.info(f"  Limitations:")
+        logging.info("  Limitations:")
         for lim in report.limitations:
             logging.info(f"    - {lim}")
 

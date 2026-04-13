@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Dict, Optional, Union
 
@@ -12,6 +13,29 @@ from fairxai.utils.logging_utils import setup_logging
 def get_project_root(current_file: Path) -> Path:
     """Return repo root given a script path under scripts/"""
     return current_file.resolve().parents[2]
+
+
+def resolve_project_root(
+    current_file: Path,
+    *,
+    cli_project_root: Optional[str] = None,
+    env_var_name: str = "FAIRXAI_PROJECT_ROOT",
+) -> Path:
+    """Resolve project root with explicit override precedence.
+
+    Precedence:
+    1) ``cli_project_root`` argument, when provided.
+    2) Environment variable named by ``env_var_name``.
+    3) Default root inferred from script location.
+    """
+    if cli_project_root:
+        return Path(cli_project_root).expanduser().resolve()
+
+    env_root = os.getenv(env_var_name)
+    if env_root:
+        return Path(env_root).expanduser().resolve()
+
+    return get_project_root(current_file)
 
 
 def load_pipeline_config(root: Path, pipeline: str = "cardiac") -> Dict:

@@ -13,7 +13,6 @@ data:
   base_config: "domain/cardiac.yaml"
   datasets:
     - cleveland
-    - kaggle_heart
   preprocessing: "configs/experiments/baseline.yaml"  # Use baseline preprocessing
 
 baseline:

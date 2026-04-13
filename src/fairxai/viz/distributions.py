@@ -772,11 +772,9 @@ def _generate_distribution_subtitle(dist_stats: dict[str, pd.Series], column: st
             dominance_statements.append(f"{name} is relatively balanced")
 
     if max_diff < MODERATE_THRESHOLD:
-        return f"Minor distribution differences observed. " + ", ".join(dominance_statements) + "."
+        return "Minor distribution differences observed. " + ", ".join(dominance_statements) + "."
     else:
-        return (
-            f"Notable distribution differences detected. " + ", ".join(dominance_statements) + "."
-        )
+        return "Notable distribution differences detected. " + ", ".join(dominance_statements) + "."
 
 
 def plot_mixed_feature_batches(

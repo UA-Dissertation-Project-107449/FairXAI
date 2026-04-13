@@ -8,6 +8,8 @@ on:
       - requirements.txt
       - src/**
       - scripts/**
+      - tests/**
+      - flows/**
       - configs/**
       - .github/workflows/**
   workflow_dispatch:
@@ -44,13 +46,19 @@ jobs:
         run: python3 -m pip install -e ".[experiment]"
 
       - name: Install CI tooling
-        run: python3 -m pip install black isort build
+        run: python3 -m pip install black isort build ruff pytest matplotlib seaborn jenkspy prefect tabulate
 
       - name: Black format check
-        run: black --check src scripts
+        run: black --check src scripts tests flows
 
       - name: isort check
-        run: isort --check-only src scripts
+        run: isort --check-only src scripts tests flows
+
+      - name: Ruff lint check
+        run: ruff check src scripts tests flows
+
+      - name: Unit tests
+        run: pytest tests/unit/ -q
 
       - name: Build wheel and sdist
         run: python3 -m build

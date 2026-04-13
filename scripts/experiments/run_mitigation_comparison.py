@@ -154,10 +154,10 @@ def train_baseline(
     logging.info(f"{'='*60}")
 
     model = BaselineLogisticRegression(**(model_params or {}))
-    train_metrics = model.train(X_train, y_train)
+    model.train(X_train, y_train)
     test_metrics = model.evaluate(X_test, y_test)
 
-    logging.info(f"Baseline metrics:")
+    logging.info("Baseline metrics:")
     logging.info(f"  Accuracy: {test_metrics['accuracy']:.3f}")
     logging.info(f"  Precision: {test_metrics['precision']:.3f}")
     logging.info(f"  Recall: {test_metrics['recall']:.3f}")
@@ -458,7 +458,7 @@ def run_analysis(
     output_dir.mkdir(parents=True, exist_ok=True)
     datasets = datasets if datasets else experiment_cfg["data"]["datasets"]
 
-    logging.info(f"Configuration:")
+    logging.info("Configuration:")
     logging.info(f"  Datasets: {datasets}")
     logging.info(f"  Output: {output_dir}")
     logging.info(f"  Run mode: {run_mode}")

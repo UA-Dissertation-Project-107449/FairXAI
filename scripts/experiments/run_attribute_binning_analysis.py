@@ -259,7 +259,7 @@ def run_analysis(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    logging.info(f"Configuration:")
+    logging.info("Configuration:")
     logging.info(f"  Datasets: {datasets}")
     logging.info(f"  Strategies: {strategies}")
     logging.info(f"  Output: {output_dir}")
@@ -288,7 +288,7 @@ def run_analysis(
         "fairness": scoring_cfg.get("fairness_sensitivity_weight", 0.30),
     }
 
-    logging.info(f"\nScoring weights:")
+    logging.info("\nScoring weights:")
     logging.info(f"  Sample size: {scoring_weights['sample_size']:.0%}")
     logging.info(f"  Group balance: {scoring_weights['balance']:.0%}")
     logging.info(f"  Fairness sensitivity: {scoring_weights['fairness']:.0%}")

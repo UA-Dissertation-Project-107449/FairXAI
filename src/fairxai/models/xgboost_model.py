@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+
+import numpy as np
+import pandas as pd
+
 from .sklearn_wrapper import SklearnClassifierWrapper
 
 
@@ -45,4 +50,60 @@ class XGBoostModel(SklearnClassifierWrapper):
             tree_method=resolved_tree_method,
             device=device,
         )
+        self._device = device
         super().__init__(estimator=estimator, model_name="XGBoost")
+
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        if self._device != "cuda":
+            return super().predict_proba(X)
+
+        try:
+            from xgboost import DMatrix
+
+            booster = self.model.get_booster()
+            feature_names = None
+            if hasattr(X, "columns"):
+                cols = list(X.columns)
+                if all(isinstance(col, str) for col in cols):
+                    feature_names = cols
+            elif self.feature_names and all(isinstance(col, str) for col in self.feature_names):
+                feature_names = list(self.feature_names)
+
+            if feature_names:
+                dmatrix = DMatrix(X, feature_names=feature_names)
+            else:
+                dmatrix = DMatrix(X)
+
+            raw_proba = np.asarray(booster.predict(dmatrix))
+            if raw_proba.ndim == 2 and raw_proba.shape[1] > 1:
+                return raw_proba[:, 1]
+            return raw_proba.reshape(-1)
+        except Exception as exc:
+            logging.debug(
+                "XGBoostModel: DMatrix prediction path unavailable; falling back to sklearn API (%s)",
+                exc,
+            )
+            return super().predict_proba(X)
+
+    def train(self, X_train: pd.DataFrame, y_train: pd.Series):
+        # Override base implementation to avoid direct estimator.predict(X) call,
+        # which triggers CUDA/CPU mismatch warnings in sklearn's XGBoost adapter.
+        self.feature_names = list(X_train.columns)
+
+        logging.info(f"Training {self.model_name}...")
+        logging.info(f"  Features: {len(self.feature_names)}")
+        logging.info(f"  Training samples: {len(X_train)}")
+        logging.info(f"  Positive class: {y_train.sum()} ({y_train.mean():.2%})")
+
+        self.model.fit(X_train, y_train)
+
+        y_train_pred = self.predict(X_train)
+        y_train_proba = self.predict_proba(X_train)
+
+        self.training_metrics = self._calculate_metrics(y_train, y_train_pred, y_train_proba)
+
+        logging.info("Training complete")
+        logging.info(f"  Train Accuracy: {self.training_metrics['accuracy']:.4f}")
+        logging.info(f"  Train AUC-ROC: {self.training_metrics['auc_roc']:.4f}")
+
+        return self.training_metrics

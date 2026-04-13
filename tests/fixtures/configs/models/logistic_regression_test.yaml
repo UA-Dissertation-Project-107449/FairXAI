@@ -1,0 +1,7 @@
+hyperparameters:
+  penalty: l2
+  C: 1.0
+  solver: lbfgs
+  max_iter: 200
+  class_weight: balanced
+  random_state: 42

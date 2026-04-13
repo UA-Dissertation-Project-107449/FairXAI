@@ -45,11 +45,23 @@ load (1)
 | Resume point | `--resume-from <stage>` | `RESUME_FROM=<stage>` | First stage to execute (inclusive). Triggers artifact validation for prior stages. |
 | Stop point | `--go-until <stage>` | `GO_UNTIL=<stage>` | Last stage to execute (inclusive). Stages after this are skipped. |
 | Run ID | `--run-id <id>` | `RUN_ID=<id>` | Explicit run ID. On resume without this, defaults to `latest_run` symlink. |
+| Dataset scope | `--datasets <d1> [d2 ...]` | — (CLI only) | Optional dataset override propagated to stages. |
+| Model scope | `--model-types <m1> [m2 ...]` | — (CLI only) | Optional model-type override (baseline/combinatorial stages). |
 | Skip attr binning | `--no-attribute-binning` | `RUN_ATTRIBUTE_BINNING=false` | Skip stage 7 even if in active range. |
 | Skip mitigation | `--no-mitigation` | `RUN_MITIGATION=false` | Skip stage 8 even if in active range. |
 | Skip combinatorial | `--no-combinatorial` | `RUN_COMBINATORIAL=false` | Skip stage 9 even if in active range. |
 | Skip comparison | `--no-comparison` | `RUN_COMPARISON=false` | Skip stage 10 even if in active range. |
 | Verbose | `-v` / `--verbose` | `VERBOSE=true` | Verbose logging. |
+
+### Dataset and model override precedence
+
+Override precedence is:
+
+1. CLI flags (`--datasets`, `--model-types`)
+2. Config values
+3. Code defaults / auto-discovery
+
+No environment-variable override layer is used for dataset/model scope.
 
 ---
 
@@ -77,6 +89,36 @@ python flows/cardiac_pipeline.py --go-until recommend
 ```bash
 GO_UNTIL=assess bash scripts/cardiac/cardiac_pipeline.sh
 python flows/cardiac_pipeline.py --go-until assess
+```
+
+### Run only Cleveland with selected models
+
+```bash
+# Bash orchestrator (CLI flags)
+bash scripts/cardiac/cardiac_pipeline.sh \
+      --datasets cleveland \
+      --model-types logistic_regression xgboost
+
+# Prefect orchestrator
+python flows/cardiac_pipeline.py \
+      --datasets cleveland \
+      --model-types logistic_regression xgboost
+```
+
+### Resume partial run with dataset/model scope
+
+```bash
+bash scripts/cardiac/cardiac_pipeline.sh \
+      --resume-from train \
+      --go-until compare \
+      --datasets cleveland \
+      --model-types logistic_regression
+
+python flows/cardiac_pipeline.py \
+      --resume-from train \
+      --go-until compare \
+      --datasets cleveland \
+      --model-types logistic_regression
 ```
 
 ### Resume a failed run from preprocessing

@@ -43,6 +43,9 @@ dev = [
     "lime>=0.2.0",        # (reqs: 0.2.0.1) LIME local explanations (lazy-imported)
     "jenkspy>=0.3.0",     # (reqs: 0.3.3)  Jenks natural breaks for attribute binning
     "tqdm>=4.66.0",       # (reqs: 4.67.1) progress bars
+    "pytest>=8.0.0",      # test runner
+    "pytest-xdist>=3.6.0",# process-level test parallelism (-n auto)
+    "ruff>=0.4.0",        # linter (code smells, unused imports, etc.)
     "ipykernel>=6.20",    # (reqs: 7.1.0)  Jupyter kernel
     "notebook>=7.0",      #                Jupyter Notebook UI
 ]
@@ -107,7 +110,18 @@ exclude = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+pythonpath = ["src"]
 addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests as slow subprocess/pipeline tests (deselect with '-m \"not slow\"')",
+    "xgboost_model: marks tests that include xgboost training paths",
+    "integration: marks tests that run full pipeline via subprocess",
+]
+filterwarnings = [
+    # seaborn 0.13.x uses deprecated matplotlib internals — nothing we can do
+    "ignore::DeprecationWarning:seaborn",
+    "ignore::FutureWarning:seaborn",
+]
 
 [tool.black]
 line-length = 100
@@ -117,3 +131,16 @@ target-version = ["py311", "py312"]
 profile = "black"
 line_length = 100
 src_paths = ["src", "tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = [
+    "E501",  # line length — black handles this
+]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/**" = ["E402"]  # sys.path.insert before src imports is intentional in scripts

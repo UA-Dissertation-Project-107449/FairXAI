@@ -72,6 +72,19 @@ For full end-to-end runs:
 bash scripts/cardiac/cardiac_pipeline.sh
 ```
 
+Restrict execution scope via CLI flags:
+
+```bash
+# Dataset + model scope (CLI > config > defaults)
+bash scripts/cardiac/cardiac_pipeline.sh \
+	--datasets cleveland \
+	--model-types logistic_regression xgboost
+
+python3 flows/cardiac_pipeline.py \
+	--datasets cleveland \
+	--model-types logistic_regression xgboost
+```
+
 Resume or stop at a specific stage:
 
 ```bash

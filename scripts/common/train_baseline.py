@@ -20,7 +20,6 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -30,7 +29,7 @@ import pandas as pd
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-from fairxai.cli.runner_base import get_project_root, load_pipeline_config, setup_phase_logging
+from fairxai.cli.runner_base import load_pipeline_config, resolve_project_root, setup_phase_logging
 from fairxai.cli.runner_utils import archive_latest_run
 from fairxai.data.feature_selection import build_feature_set
 from fairxai.experiments.data_io import build_schema_excludes, resolve_base_dataset
@@ -199,6 +198,12 @@ def _resolve_model_types(args_model_types: Optional[list[str]], training_cfg: di
     return [str(legacy).strip().lower()]
 
 
+def _is_selected_dataset(dataset_name: str, selected_datasets: Optional[set[str]]) -> bool:
+    if not selected_datasets:
+        return True
+    return any(dataset_name == d or dataset_name.startswith(f"{d}_") for d in selected_datasets)
+
+
 def _apply_model_thread_override(
     model_class: Any, model_params: dict, model_n_jobs: Optional[int]
 ) -> dict:
@@ -263,6 +268,16 @@ def _is_shap_enabled_for_model(model_type: str, xai_cfg: dict) -> bool:
 def main():
     parser = argparse.ArgumentParser(description="Train baseline models")
     parser.add_argument(
+        "--project-root",
+        type=str,
+        default=None,
+        help=(
+            "Optional override for repository root used to resolve configs/data/outputs. "
+            "If omitted, FAIRXAI_PROJECT_ROOT env var is used when set; "
+            "otherwise defaults to script-inferred repo root."
+        ),
+    )
+    parser.add_argument(
         "--pipeline",
         type=str,
         default="cardiac",
@@ -274,6 +289,12 @@ def main():
         nargs="+",
         default=None,
         help="Optional model types override (e.g. logistic_regression random_forest svm xgboost)",
+    )
+    parser.add_argument(
+        "--datasets",
+        nargs="+",
+        default=None,
+        help="Optional dataset names to train (CLI override).",
     )
     parser.add_argument(
         "--use-hpo",
@@ -320,8 +341,9 @@ def main():
     pipeline = args.pipeline
 
     # Paths
-    project_root = get_project_root(Path(__file__))
+    project_root = resolve_project_root(Path(__file__), cli_project_root=args.project_root)
     pipeline_cfg = load_pipeline_config(project_root, pipeline)
+    pipeline_cfg_path = project_root / f"configs/pipelines/{pipeline}.yaml"
     schema_path = project_root / pipeline_cfg["runtime"]["schema_mapping_json"]
     with open(schema_path, "r") as f:
         schema_cfg = json.load(f)
@@ -334,7 +356,7 @@ def main():
     else:
         experiments_dir = project_root / pipeline_cfg["paths"]["experiments_dir"]
         models_dir = project_root / pipeline_cfg["paths"]["models_dir"]
-    log_dir = setup_phase_logging(
+    setup_phase_logging(
         project_root,
         "training_baseline.log",
         verbose=args.verbose,
@@ -346,6 +368,8 @@ def main():
 
     # Setup
     logging.info("[PHASE] Baseline training started")
+    logging.info(f"Effective project root: {project_root}")
+    logging.info(f"Resolved pipeline config: {pipeline_cfg_path}")
     if not run_id:
         archive_latest_run(
             baseline_root,
@@ -366,7 +390,7 @@ def main():
     thresholds_to_test = training_cfg.get("thresholds", [0.3, 0.4, 0.5, 0.6, 0.7])
     model_types = _resolve_model_types(args.model_types, training_cfg)
 
-    logging.info(f"Configuration:")
+    logging.info("Configuration:")
     logging.info(f"  Models: {model_types}")
     logging.info(f"  Random state: {random_state}")
     logging.info(f"  Decision thresholds: {thresholds_to_test}")
@@ -375,6 +399,13 @@ def main():
 
     # Find processed datasets
     train_files = list(data_processed.glob("*_train_scaled.csv"))
+    selected_datasets = set(d.strip() for d in args.datasets) if args.datasets else None
+    if selected_datasets:
+        train_files = [
+            p
+            for p in train_files
+            if _is_selected_dataset(p.stem.replace("_train_scaled", ""), selected_datasets)
+        ]
 
     if not train_files:
         logging.error(f"No training datasets found in {data_processed}")
@@ -404,7 +435,7 @@ def main():
         train_df = pd.read_csv(train_file)
         test_df = pd.read_csv(test_file)
 
-        logging.info(f"Loaded data:")
+        logging.info("Loaded data:")
         logging.info(f"  Train: {len(train_df)} samples")
         logging.info(f"  Test: {len(test_df)} samples")
         logging.info(f"  Feature-selection mode: {args.feature_selection_mode}")
@@ -714,7 +745,7 @@ def main():
     logging.info(f"{'='*60}")
     logging.info(f"Models saved to: {models_dir}")
     logging.info(f"Results saved to: {experiments_dir}")
-    logging.info(f"\nNext step: Run fairness assessment on predictions (Phase 4)")
+    logging.info("\nNext step: Run fairness assessment on predictions (Phase 4)")
 
 
 if __name__ == "__main__":

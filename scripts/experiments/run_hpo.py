@@ -24,18 +24,15 @@ import sys
 from pathlib import Path
 
 import pandas as pd
-import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from fairxai.cli.runner_base import get_project_root, setup_phase_logging
-from fairxai.data.schemas import preferred_sensitive
 from fairxai.experiments.data_io import (
-    build_schema_excludes,
     default_exclude_columns,
 )
 from fairxai.experiments.data_io import load_schema_config as load_schema_config_shared
-from fairxai.training.grid_search import load_hpo_params, run_hpo, save_hpo_results
+from fairxai.training.grid_search import run_hpo, save_hpo_results
 from fairxai.utils.config import load_yaml_config
 
 

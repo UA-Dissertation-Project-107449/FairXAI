@@ -10,7 +10,7 @@ paths:
   results_binning_dir: output/cardiac/experiments/full/latest_run/binning
 
 runtime:
-  datasets: [cleveland, kaggle_heart]
+  datasets: [cleveland]
   schema_mapping_json: configs/schema/cardiac.json
 
 split:

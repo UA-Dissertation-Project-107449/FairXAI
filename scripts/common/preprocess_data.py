@@ -209,6 +209,12 @@ def main():
         "Default 10000 targets consumer hardware; use None or higher for HPC.",
     )
     parser.add_argument(
+        "--datasets",
+        nargs="+",
+        default=None,
+        help="Optional dataset names to preprocess (CLI override).",
+    )
+    parser.add_argument(
         "-v", "--verbose", action="count", default=0, help="Verbosity: -v=info, -vv=debug"
     )
     args = parser.parse_args()
@@ -222,7 +228,7 @@ def main():
     data_raw = project_root / pipeline_cfg["paths"]["raw_dir"]
     data_processed_base = project_root / pipeline_cfg["paths"]["processed_dir"]
     run_id = os.getenv("RUN_ID")
-    log_dir = setup_phase_logging(
+    setup_phase_logging(
         project_root,
         "preprocessing.log",
         verbose=args.verbose,
@@ -250,10 +256,10 @@ def main():
     else:
         binning_strategies = [None]  # No binning, use existing age_group
 
-    logging.info(f"Configuration:")
+    logging.info("Configuration:")
     logging.info(f"  Train/Test split: {(1-test_size):.0%}/{test_size:.0%}")
     logging.info(f"  Random state: {random_state}")
-    logging.info(f"  Scaling method: StandardScaler")
+    logging.info("  Scaling method: StandardScaler")
     logging.info(f"  Binning strategies: {binning_strategies}")
 
     # Sensitive/group configuration (age/sex/ethnicity + optional groups)
@@ -271,6 +277,11 @@ def main():
 
     # Find all standardized datasets
     dataset_files = list(data_raw.glob("*_standardized.csv"))
+    if args.datasets:
+        selected = set(d.strip() for d in args.datasets)
+        dataset_files = [
+            p for p in dataset_files if p.stem.replace("_standardized", "") in selected
+        ]
 
     if not dataset_files:
         logging.error(f"No standardized datasets found in {data_raw}")
@@ -372,7 +383,7 @@ def main():
                     logging.info(f"  {age_group}: {count} ({pct:.1f}%)")
 
             # Step 1: Analyze missing values
-            logging.info(f"\n--- Missing Value Analysis ---")
+            logging.info("\n--- Missing Value Analysis ---")
             missing_analysis = preprocessor.analyze_missing_values(df)
 
             if missing_analysis["total_missing"] == 0:
@@ -393,7 +404,7 @@ def main():
                 continue
 
             # Step 2: Stratified train/test split
-            logging.info(f"\n--- Stratified Train/Test Split ---")
+            logging.info("\n--- Stratified Train/Test Split ---")
             train_df, test_df = preprocessor.stratified_split(
                 df_clean, target=target_col, test_size=test_size, random_state=random_state
             )
@@ -401,7 +412,7 @@ def main():
             # Verify split maintains distributions
             verification = preprocessor.verify_split_fairness(train_df, test_df, target=target_col)
 
-            logging.info(f"\n--- Split Verification ---")
+            logging.info("\n--- Split Verification ---")
             logging.info("Train target distribution:")
             for label, pct in verification["target_distribution"]["train"].items():
                 logging.info(f"  Class {label}: {pct:.2%}")
@@ -410,7 +421,7 @@ def main():
                 logging.info(f"  Class {label}: {pct:.2%}")
 
             # Step 3: Prepare features and scale
-            logging.info(f"\n--- Feature Preparation & Scaling ---")
+            logging.info("\n--- Feature Preparation & Scaling ---")
 
             X_train, y_train, feature_names = preprocessor.prepare_features(
                 train_df, target=target_col
@@ -427,7 +438,7 @@ def main():
             )
 
             # Step 4: Save processed datasets
-            logging.info(f"\n--- Saving Processed Data ---")
+            logging.info("\n--- Saving Processed Data ---")
 
             # Save as DataFrames with all columns
             train_processed = train_df.copy()
@@ -480,7 +491,7 @@ def main():
             logging.info(f"[SUCCESS] Test scaled: {test_scaled_file}")
 
             # Step 5: Post-preprocessing fairness check
-            logging.info(f"\n--- Post-Preprocessing Fairness Assessment ---")
+            logging.info("\n--- Post-Preprocessing Fairness Assessment ---")
 
             train_profile = profiler.profile_dataset(
                 train_processed, target=target_col, dataset_name=f"{dataset_name}_train"
