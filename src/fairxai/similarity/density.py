@@ -6,7 +6,6 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 
-import numpy as np
 import pandas as pd
 
 from .models import ViolationMapResult
@@ -60,6 +59,7 @@ class ViolationDensityMapper:
         """
         try:
             import matplotlib
+
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
         except ImportError:
@@ -101,11 +101,10 @@ class ViolationDensityMapper:
             # Per-sample consistency scores
             if similarity_engine is None:
                 from .engine import SimilarityEngine
+
                 similarity_engine = SimilarityEngine(k_values=[self.k], pred_col=pred_col)
 
-            consistencies = similarity_engine.per_sample_consistency(
-                plot_df, valid_cols, k=self.k
-            )
+            consistencies = similarity_engine.per_sample_consistency(plot_df, valid_cols, k=self.k)
 
             # Plot
             fig, ax = plt.subplots(figsize=(8, 6))

@@ -57,9 +57,12 @@ def test_grouping_produces_cluster_assignments(synthetic_processed_csv, tmp_path
         [
             sys.executable,
             str(_SCRIPT),
-            "--run-id", "run_test",
-            "--datasets", "test_synthetic",
-            "--methods", "kmeans",
+            "--run-id",
+            "run_test",
+            "--datasets",
+            "test_synthetic",
+            "--methods",
+            "kmeans",
         ],
         env=env,
         capture_output=True,
@@ -68,15 +71,15 @@ def test_grouping_produces_cluster_assignments(synthetic_processed_csv, tmp_path
     )
 
     # Script should exit 0 (or 1 only if no datasets found, which we prevent)
-    assert result.returncode == 0, (
-        f"Script failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
-    )
+    assert (
+        result.returncode == 0
+    ), f"Script failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
     # group_cluster must be written back into the processed CSV
     saved = pd.read_csv(synthetic_processed_csv)
-    assert "group_cluster" in saved.columns, (
-        "group_cluster column not written back to processed CSV"
-    )
+    assert (
+        "group_cluster" in saved.columns
+    ), "group_cluster column not written back to processed CSV"
     assert saved["group_cluster"].notna().all(), "group_cluster has NaN values"
     assert saved["group_cluster"].nunique() >= 2, "Expected >= 2 clusters"
 
@@ -85,7 +88,9 @@ def test_grouping_produces_cluster_assignments(synthetic_processed_csv, tmp_path
 def test_grouping_produces_cluster_artifacts(synthetic_processed_csv):
     """run_grouping_analysis.py creates expected output files."""
     # Script writes to _ROOT/output/cardiac/runs/run_test — not tmp_path
-    grouping_dir = _ROOT / "output" / "cardiac" / "runs" / "run_test" / "grouping" / "test_synthetic"
+    grouping_dir = (
+        _ROOT / "output" / "cardiac" / "runs" / "run_test" / "grouping" / "test_synthetic"
+    )
 
     env = {
         **__import__("os").environ,
@@ -95,9 +100,12 @@ def test_grouping_produces_cluster_artifacts(synthetic_processed_csv):
         [
             sys.executable,
             str(_SCRIPT),
-            "--run-id", "run_test",
-            "--datasets", "test_synthetic",
-            "--methods", "kmeans",
+            "--run-id",
+            "run_test",
+            "--datasets",
+            "test_synthetic",
+            "--methods",
+            "kmeans",
         ],
         env=env,
         capture_output=True,
@@ -119,6 +127,7 @@ def test_grouping_produces_cluster_artifacts(synthetic_processed_csv):
     finally:
         # Clean up output so reruns start fresh
         import shutil
+
         run_dir = _ROOT / "output" / "cardiac" / "runs" / "run_test"
         if run_dir.exists():
             shutil.rmtree(run_dir)

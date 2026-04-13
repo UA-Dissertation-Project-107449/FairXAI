@@ -420,7 +420,6 @@ def validate_and_repair(
     (bins, labels)
         Possibly shortened after merging.
     """
-    import warnings as _warnings
 
     data_min, data_max = float(series.min()), float(series.max())
     bins = list(bins)

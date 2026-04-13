@@ -44,22 +44,35 @@ def plot_transformation_impact(before_dict, after_dict, output_file):
 
     fig, ax = plt.subplots(figsize=(max(8, len(metrics) * 1.6), 5))
 
-    ax.bar(x - width / 2, [before_dict[m] for m in metrics], width,
-           label="Before", color=_BEFORE_COLOR, alpha=0.85)
-    ax.bar(x + width / 2, [after_dict[m] for m in metrics], width,
-           label="After", color=_AFTER_COLOR, alpha=0.85)
+    ax.bar(
+        x - width / 2,
+        [before_dict[m] for m in metrics],
+        width,
+        label="Before",
+        color=_BEFORE_COLOR,
+        alpha=0.85,
+    )
+    ax.bar(
+        x + width / 2,
+        [after_dict[m] for m in metrics],
+        width,
+        label="After",
+        color=_AFTER_COLOR,
+        alpha=0.85,
+    )
 
     for i, m in enumerate(metrics):
         delta = after_dict[m] - before_dict[m]
         sign = "+" if delta >= 0 else ""
         y_top = max(before_dict[m], after_dict[m])
-        ax.text(x[i], y_top + 0.02, f"{sign}{delta:.3f}",
-                ha="center", va="bottom", fontsize=8)
+        ax.text(x[i], y_top + 0.02, f"{sign}{delta:.3f}", ha="center", va="bottom", fontsize=8)
 
     ax.set_xticks(x)
     ax.set_xticklabels([m.replace("_", " ").title() for m in metrics], rotation=20, ha="right")
     ax.set_ylabel("Value")
-    ax.set_ylim(0, min(1.15, max(list(before_dict.values()) + list(after_dict.values())) * 1.25 + 0.05))
+    ax.set_ylim(
+        0, min(1.15, max(list(before_dict.values()) + list(after_dict.values())) * 1.25 + 0.05)
+    )
     ax.set_title("Transformation Impact: Before vs After")
     ax.legend()
     ax.grid(axis="y", alpha=0.3)

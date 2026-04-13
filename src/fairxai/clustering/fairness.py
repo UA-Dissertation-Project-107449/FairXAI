@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Dict, List, Optional
+from typing import List, Optional
 
-import numpy as np
 import pandas as pd
 from scipy.stats import chi2_contingency
 
@@ -93,9 +92,7 @@ class FairnessPerCluster:
                     eo_fpr_diff = float("nan")
 
                 is_fair = all(
-                    v <= 0.10
-                    for v in [dp_diff, eo_tpr_diff, eo_fpr_diff]
-                    if not math.isnan(v)
+                    v <= 0.10 for v in [dp_diff, eo_tpr_diff, eo_fpr_diff] if not math.isnan(v)
                 )
 
                 rows.append(
@@ -167,6 +164,8 @@ class FairnessPerCluster:
             except Exception as exc:
                 logger.debug("cramers_v for %s failed: %s", attr, exc)
 
-        return pd.DataFrame(rows) if rows else pd.DataFrame(
-            columns=["sensitive_attr", "cramers_v", "chi2_pvalue"]
+        return (
+            pd.DataFrame(rows)
+            if rows
+            else pd.DataFrame(columns=["sensitive_attr", "cramers_v", "chi2_pvalue"])
         )

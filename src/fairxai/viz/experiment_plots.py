@@ -177,16 +177,10 @@ def save_intersectional_heatmap(
         return None
 
     sub["group_label"] = (
-        sub["sensitive_attr"].str.replace("_cat", "").str.title()
-        + "\n"
-        + sub["group"].astype(str)
+        sub["sensitive_attr"].str.replace("_cat", "").str.title() + "\n" + sub["group"].astype(str)
     )
 
-    agg = (
-        sub.groupby(["mitigation_technique", "group_label"])[value_col]
-        .mean()
-        .reset_index()
-    )
+    agg = sub.groupby(["mitigation_technique", "group_label"])[value_col].mean().reset_index()
     pivot = agg.pivot(index="mitigation_technique", columns="group_label", values=value_col)
 
     if pivot.empty:
@@ -195,7 +189,9 @@ def save_intersectional_heatmap(
     values = pivot.to_numpy(dtype=float)
     valid = np.isfinite(values)
     if not valid.any():
-        logger.warning("save_intersectional_heatmap: all delta values are NaN for metric '%s'", metric)
+        logger.warning(
+            "save_intersectional_heatmap: all delta values are NaN for metric '%s'", metric
+        )
         return None
     abs_max = max(float(np.abs(values[valid]).max()), 0.01)
 
@@ -378,10 +374,7 @@ def save_mitigation_effectiveness_matrix(full_df: pd.DataFrame, output_file):
         else:
             plot_df["score_drop_pct"] = float("nan")
 
-    agg = (
-        plot_df.groupby("mitigation_technique")[["fairness_gain_pct", "score_drop_pct"]]
-        .mean()
-    )
+    agg = plot_df.groupby("mitigation_technique")[["fairness_gain_pct", "score_drop_pct"]].mean()
     if agg.empty:
         return None
 
@@ -393,8 +386,12 @@ def save_mitigation_effectiveness_matrix(full_df: pd.DataFrame, output_file):
 
     sns.heatmap(
         agg[["fairness_gain_pct"]],
-        annot=True, fmt=".1f", cmap="Greens",
-        linewidths=0.5, vmin=0, ax=axes[0],
+        annot=True,
+        fmt=".1f",
+        cmap="Greens",
+        linewidths=0.5,
+        vmin=0,
+        ax=axes[0],
     )
     axes[0].set_title("Fairness Gain %", fontsize=11)
     axes[0].set_ylabel("Mitigation Technique")
@@ -403,16 +400,18 @@ def save_mitigation_effectiveness_matrix(full_df: pd.DataFrame, output_file):
     if has_cost:
         sns.heatmap(
             agg[["score_drop_pct"]],
-            annot=True, fmt=".1f", cmap="Reds",
-            linewidths=0.5, vmin=0, ax=axes[1],
+            annot=True,
+            fmt=".1f",
+            cmap="Reds",
+            linewidths=0.5,
+            vmin=0,
+            ax=axes[1],
         )
         axes[1].set_title("Performance Cost %", fontsize=11)
         axes[1].set_ylabel("")
         axes[1].set_xlabel("")
 
-    fig.suptitle(
-        "Mitigation Effectiveness: Fairness Gain vs Performance Cost", fontsize=12
-    )
+    fig.suptitle("Mitigation Effectiveness: Fairness Gain vs Performance Cost", fontsize=12)
     plt.tight_layout()
     fig.savefig(output_file, dpi=200)
     plt.close(fig)

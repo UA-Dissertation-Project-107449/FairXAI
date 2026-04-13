@@ -55,7 +55,9 @@ class TestClusteringEngineKMeans:
 
     def test_feature_cols_respected(self):
         df = _make_df()
-        engine = ClusteringEngine(config={"kmeans": {"parameters": {"n_clusters": [3], "n_init": 5, "random_state": 42}}})
+        engine = ClusteringEngine(
+            config={"kmeans": {"parameters": {"n_clusters": [3], "n_init": 5, "random_state": 42}}}
+        )
         result = engine.fit(df, feature_cols=["feat_a", "feat_b"])
         assert set(result.feature_cols) == {"feat_a", "feat_b"}
 

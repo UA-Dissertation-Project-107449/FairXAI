@@ -201,8 +201,6 @@ def compare_to_reference(
         return None
     p25 = reference.get("p25", median)
     p75 = reference.get("p75", median)
-    iqr = p75 - p25 if p75 != p25 else 1.0
-
     # Very rough percentile approximation using IQR
     if value <= p25:
         pct = (

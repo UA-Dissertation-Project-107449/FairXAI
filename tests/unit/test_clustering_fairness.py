@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from fairxai.clustering import FairnessPerCluster, ClusterProfiler
+from fairxai.clustering import ClusterProfiler, FairnessPerCluster
 
 
 def _make_pred_df(n=60, n_clusters=3, random_state=42):
@@ -96,13 +96,17 @@ class TestClusterProfiler:
     def test_narratives_produced_for_each_cluster(self):
         df = _make_pred_df(n=60, n_clusters=3)
         profiler = ClusterProfiler(target_col="heart_disease")
-        report = profiler.compute(df, cluster_col="group_cluster", feature_cols=["trestbps", "chol"])
+        report = profiler.compute(
+            df, cluster_col="group_cluster", feature_cols=["trestbps", "chol"]
+        )
         assert len(report.narratives) == len(df["group_cluster"].unique())
 
     def test_save_report_creates_markdown(self, tmp_path):
         df = _make_pred_df(n=60, n_clusters=3)
         profiler = ClusterProfiler(target_col="heart_disease")
-        report = profiler.compute(df, cluster_col="group_cluster", feature_cols=["trestbps", "chol"])
+        report = profiler.compute(
+            df, cluster_col="group_cluster", feature_cols=["trestbps", "chol"]
+        )
         out = profiler.save_report(report, tmp_path / "subgroup_profiles.md")
         assert out.exists()
         content = out.read_text()

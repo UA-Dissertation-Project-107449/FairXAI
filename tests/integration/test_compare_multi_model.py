@@ -71,7 +71,9 @@ class TestCrossModelSummary:
         rows = []
         for (dataset, model_type), group in df.groupby(["dataset", "model_type"], dropna=False):
             best = group.sort_values("score_value", ascending=False).iloc[0]
-            rows.append({"dataset": dataset, "model_type": model_type, "score": best["score_value"]})
+            rows.append(
+                {"dataset": dataset, "model_type": model_type, "score": best["score_value"]}
+            )
         cross_model_df = pd.DataFrame(rows)
         cross_model_csv = tmp_path / "cross_model_summary.csv"
         cross_model_df.to_csv(cross_model_csv, index=False)
@@ -79,7 +81,10 @@ class TestCrossModelSummary:
         result = pd.read_csv(cross_model_csv)
         assert len(result) == 4, f"Expected 4 model rows, got {len(result)}"
         assert set(result["model_type"]) == {
-            "logistic_regression", "random_forest", "svm", "xgboost"
+            "logistic_regression",
+            "random_forest",
+            "svm",
+            "xgboost",
         }
 
     def test_lr_only_run_produces_one_row(self, tmp_path):
@@ -87,7 +92,9 @@ class TestCrossModelSummary:
         rows = []
         for (dataset, model_type), group in df.groupby(["dataset", "model_type"], dropna=False):
             best = group.sort_values("score_value", ascending=False).iloc[0]
-            rows.append({"dataset": dataset, "model_type": model_type, "score": best["score_value"]})
+            rows.append(
+                {"dataset": dataset, "model_type": model_type, "score": best["score_value"]}
+            )
         cross_model_df = pd.DataFrame(rows)
         assert len(cross_model_df) == 1
 
@@ -155,9 +162,17 @@ class TestPerGroupComparison:
         result = pd.read_csv(pg_csv)
         assert len(result) > 0, "per_group_comparison.csv is empty"
         required_cols = {
-            "dataset", "model_type", "binning_strategy", "training_method",
-            "mitigation_technique", "sensitive_attr", "group", "metric",
-            "baseline_value", "experiment_value", "delta",
+            "dataset",
+            "model_type",
+            "binning_strategy",
+            "training_method",
+            "mitigation_technique",
+            "sensitive_attr",
+            "group",
+            "metric",
+            "baseline_value",
+            "experiment_value",
+            "delta",
         }
         assert required_cols.issubset(set(result.columns))
 
@@ -165,8 +180,7 @@ class TestPerGroupComparison:
         """Delta = experiment_value - baseline_value for known inputs."""
         baseline_records = _extract_per_group_fairness(minimal_fairness_metrics_dict)
         baseline_map = {
-            (r["sensitive_attr"], r["group"], r["metric"]): r["value"]
-            for r in baseline_records
+            (r["sensitive_attr"], r["group"], r["metric"]): r["value"] for r in baseline_records
         }
 
         exp_records = _extract_per_group_fairness(minimal_fairness_metrics_dict)

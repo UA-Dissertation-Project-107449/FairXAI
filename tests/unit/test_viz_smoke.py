@@ -1,6 +1,7 @@
 """Smoke tests for all viz functions: assert each creates a file without raising."""
 
 import matplotlib
+
 matplotlib.use("Agg")  # must be before any other matplotlib import
 
 import numpy as np
@@ -23,7 +24,6 @@ from fairxai.viz.transformations import (
     plot_scaling_effects,
     plot_transformation_impact,
 )
-
 
 # ---------------------------------------------------------------------------
 # Synthetic data helpers  (module-level, not shared via conftest — viz-specific)
@@ -93,7 +93,10 @@ def _make_full_comparison_df(n: int = 40) -> pd.DataFrame:
 def _make_per_group_df() -> pd.DataFrame:
     rng = np.random.default_rng(1)
     attrs = ["age_group_cat", "sex_cat"]
-    groups_map = {"age_group_cat": ["<40", "40-49", "50-59", "60-69", "70+"], "sex_cat": ["Female", "Male"]}
+    groups_map = {
+        "age_group_cat": ["<40", "40-49", "50-59", "60-69", "70+"],
+        "sex_cat": ["Female", "Male"],
+    }
     metrics = ["demographic_parity_rate", "tpr", "fpr"]
     rows = []
     for mit in _MITIGATIONS:
@@ -136,11 +139,12 @@ def _make_summary_df() -> pd.DataFrame:
 def _make_fairness_json(attr: str = "age_group_cat") -> dict:
     groups = ["<40", "40-49", "50-59", "60-69", "70+"] if "age" in attr else ["Female", "Male"]
     group_metrics = {
-        g: {"tpr": 0.6 + i * 0.05, "fpr": 0.1 + i * 0.02, "count": 50}
+        g: {"tpr": 0.6 + i * 0.05, "fpr": 0.1 + i * 0.02, "count": 50} for i, g in enumerate(groups)
+    }
+    group_precision = {
+        g: {"precision": 0.7 + i * 0.03, "predicted_positive_count": 30}
         for i, g in enumerate(groups)
     }
-    group_precision = {g: {"precision": 0.7 + i * 0.03, "predicted_positive_count": 30}
-                       for i, g in enumerate(groups)}
     return {
         "test_metrics": {
             "group_fairness": {

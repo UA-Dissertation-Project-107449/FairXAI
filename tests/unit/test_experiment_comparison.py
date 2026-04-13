@@ -58,7 +58,9 @@ class TestLoadBaselinePerGroup:
         assert all(r.get("source") == "baseline_assess" for r in records)
 
     def test_returns_empty_when_file_absent(self, tmp_run_root):
-        records = _load_baseline_per_group(tmp_run_root, "nonexistent_dataset", "logistic_regression")
+        records = _load_baseline_per_group(
+            tmp_run_root, "nonexistent_dataset", "logistic_regression"
+        )
         assert records == []
 
 

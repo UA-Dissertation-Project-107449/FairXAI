@@ -1,7 +1,7 @@
 """Baseline model implementations for cardiac disease prediction."""
 
 import logging
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 import joblib
 import numpy as np
@@ -9,7 +9,6 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
-    classification_report,
     confusion_matrix,
     f1_score,
     precision_score,
@@ -71,7 +70,7 @@ class BaselineLogisticRegression:
         """
         self.feature_names = list(X_train.columns)
 
-        logging.info(f"Training Logistic Regression...")
+        logging.info("Training Logistic Regression...")
         logging.info(f"  Features: {len(self.feature_names)}")
         logging.info(f"  Training samples: {len(X_train)}")
         logging.info(f"  Positive class: {y_train.sum()} ({y_train.mean():.2%})")
@@ -84,7 +83,7 @@ class BaselineLogisticRegression:
 
         self.training_metrics = self._calculate_metrics(y_train, y_train_pred, y_train_proba)
 
-        logging.info(f"✓ Training complete")
+        logging.info("✓ Training complete")
         logging.info(f"  Train Accuracy: {self.training_metrics['accuracy']:.4f}")
         logging.info(f"  Train AUC-ROC: {self.training_metrics['auc_roc']:.4f}")
 

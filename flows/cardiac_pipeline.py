@@ -6,31 +6,32 @@ Supports partial execution via ``--resume-from`` and ``--go-until``.
 Run ``python flows/cardiac_pipeline.py --help`` for details.
 """
 
-from prefect import flow, task, get_run_logger
 import argparse
-import sys
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
+
+from prefect import flow, get_run_logger, task
 
 # Add the src directory to the path
 ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT_DIR / "src"))
 
 from fairxai.cli.runner_utils import (
-    resolve_run_id,
     get_run_root,
     resolve_latest_run_dir,
+    resolve_run_id,
     update_log_latest_pointer,
 )
 from fairxai.pipeline.stages import (
     STAGES,
     PipelineStage,
-    resolve_stage,
     get_stage_range,
-    validate_prior_stages,
     mark_stage_complete,
+    resolve_stage,
+    validate_prior_stages,
 )
 from fairxai.utils.logging_utils import summarize_run_logs
 
@@ -116,7 +117,12 @@ def run_grouping_stage(run_id: str, datasets: Optional[list[str]] = None, verbos
     logger = get_run_logger()
     logger.info("[PHASE 4b] Grouping & similarity subgroup discovery")
     script = ROOT_DIR / "scripts" / "experiments" / "run_grouping_analysis.py"
-    args = ["--run-id", run_id, "--config", str(ROOT_DIR / "configs" / "experiments" / "clustering.yaml")]
+    args = [
+        "--run-id",
+        run_id,
+        "--config",
+        str(ROOT_DIR / "configs" / "experiments" / "clustering.yaml"),
+    ]
     if datasets:
         args.extend(["--datasets", *datasets])
     args.extend(_verbose_flags(verbose))
@@ -171,7 +177,16 @@ def analyze_attribute_binning(run_id: str, datasets: Optional[list[str]] = None,
     logger = get_run_logger()
     logger.info("[PHASE 7/10] Attribute binning strategies analysis")
     script = ROOT_DIR / "scripts" / "experiments" / "run_attribute_binning_analysis.py"
-    args = ["--config", "configs/experiments/age_binning.yaml", "--run-mode", "full", "--run-id", run_id, "--pipeline", "cardiac"]
+    args = [
+        "--config",
+        "configs/experiments/age_binning.yaml",
+        "--run-mode",
+        "full",
+        "--run-id",
+        run_id,
+        "--pipeline",
+        "cardiac",
+    ]
     if datasets:
         args.extend(["--datasets", *datasets])
     args.extend(_verbose_flags(verbose))
@@ -179,12 +194,21 @@ def analyze_attribute_binning(run_id: str, datasets: Optional[list[str]] = None,
 
 
 @task
-def compare_mitigation_techniques(run_id: str, datasets: Optional[list[str]] = None, verbose: int = 0):
+def compare_mitigation_techniques(
+    run_id: str, datasets: Optional[list[str]] = None, verbose: int = 0
+):
     """Compares mitigation techniques."""
     logger = get_run_logger()
     logger.info("[PHASE 8/10] Mitigation techniques comparison")
     script = ROOT_DIR / "scripts" / "cardiac" / "mitigation.py"
-    args = ["--config", "configs/experiments/mitigation.yaml", "--run-mode", "full", "--run-id", run_id]
+    args = [
+        "--config",
+        "configs/experiments/mitigation.yaml",
+        "--run-mode",
+        "full",
+        "--run-id",
+        run_id,
+    ]
     if datasets:
         args.extend(["--datasets", *datasets])
     args.extend(_verbose_flags(verbose))
@@ -277,6 +301,7 @@ def cardiac_pipeline(
 
     # Point logs/cardiac/latest_run at this run's log directory
     import logging as _logging
+
     update_log_latest_pointer(ROOT_DIR, run_id, _logging.getLogger(__name__))
 
     # --- Validate prior stages on resume ------------------------------------
@@ -339,9 +364,7 @@ def cardiac_pipeline(
     # Stage 3 — Recommendations
     if _should_run(3):
         wait = [profile_task] if profile_task else []
-        recommendations_task = generate_recommendations.submit(
-            run_id, verbose, wait_for=wait
-        )
+        recommendations_task = generate_recommendations.submit(run_id, verbose, wait_for=wait)
     else:
         logger.info("[3/10] recommend — SKIPPED (outside active range)")
 
@@ -364,7 +387,11 @@ def cardiac_pipeline(
 
     # Stage 5 — Train baseline
     if _should_run(5):
-        wait = [grouping_task or preprocess_data_task] if (grouping_task or preprocess_data_task) else []
+        wait = (
+            [grouping_task or preprocess_data_task]
+            if (grouping_task or preprocess_data_task)
+            else []
+        )
         train_baseline_model_task = train_baseline_model.submit(
             run_id, datasets, model_types, verbose, wait_for=wait
         )
@@ -410,10 +437,12 @@ def cardiac_pipeline(
 
     # Stage 10 — Comparison (optional + gated)
     if _should_run(10) and run_comparison:
-        wait = [combinatorial_task] if combinatorial_task else [assess_predictions_task] if assess_predictions_task else []
-        comparison_task = compare_experiments.submit(
-            run_id, verbose, wait_for=wait
+        wait = (
+            [combinatorial_task]
+            if combinatorial_task
+            else [assess_predictions_task] if assess_predictions_task else []
         )
+        comparison_task = compare_experiments.submit(run_id, verbose, wait_for=wait)
     else:
         reason = "disabled" if not run_comparison else "outside active range"
         logger.info(f"[10/10] compare — SKIPPED ({reason})")
@@ -478,6 +507,7 @@ def cardiac_pipeline(
 # CLI entry-point
 # ---------------------------------------------------------------------------
 
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Run the cardiac fairness pipeline (Prefect flow).",
@@ -498,14 +528,25 @@ Examples:
   %(prog)s --resume-from preprocess --go-until train
 """,
     )
-    p.add_argument("--resume-from", default=None,
-                    help="Stage to resume from (inclusive). Accepts name or number.")
-    p.add_argument("--go-until", default=None,
-                    help="Last stage to execute (inclusive). Accepts name or number.")
-    p.add_argument("--run-id", default=None,
-                    help="Explicit run ID. On resume, defaults to latest run.")
-    p.add_argument("--no-grouping", action="store_true", help="Skip grouping & similarity stage (4b).")
-    p.add_argument("--no-attribute-binning", action="store_true", help="Skip attribute binning stage.")
+    p.add_argument(
+        "--resume-from",
+        default=None,
+        help="Stage to resume from (inclusive). Accepts name or number.",
+    )
+    p.add_argument(
+        "--go-until",
+        default=None,
+        help="Last stage to execute (inclusive). Accepts name or number.",
+    )
+    p.add_argument(
+        "--run-id", default=None, help="Explicit run ID. On resume, defaults to latest run."
+    )
+    p.add_argument(
+        "--no-grouping", action="store_true", help="Skip grouping & similarity stage (4b)."
+    )
+    p.add_argument(
+        "--no-attribute-binning", action="store_true", help="Skip attribute binning stage."
+    )
     p.add_argument("--no-mitigation", action="store_true", help="Skip mitigation stage.")
     p.add_argument("--no-combinatorial", action="store_true", help="Skip combinatorial stage.")
     p.add_argument("--no-comparison", action="store_true", help="Skip comparison stage.")
@@ -521,8 +562,9 @@ Examples:
         default=None,
         help="Optional model types override for baseline/combinatorial stages.",
     )
-    p.add_argument("-v", "--verbose", action="count", default=0,
-                    help="Verbosity: -v=info, -vv=debug")
+    p.add_argument(
+        "-v", "--verbose", action="count", default=0, help="Verbosity: -v=info, -vv=debug"
+    )
     return p
 
 

@@ -25,7 +25,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from fairxai.cli.runner_base import get_project_root, setup_phase_logging
 from fairxai.cli.runner_utils import get_run_root, resolve_run_id
-from fairxai.clustering import ClusteringEngine, ClusteringError, FairnessPerCluster, ClusterProfiler
+from fairxai.clustering import (
+    ClusteringEngine,
+    ClusteringError,
+    ClusterProfiler,
+    FairnessPerCluster,
+)
 from fairxai.similarity import SimilarityEngine, ViolationDensityMapper
 from fairxai.utils.config import load_yaml_config
 
@@ -116,9 +121,7 @@ def run_dataset(
 
     # Build method config — restrict to requested methods
     method_cfg = {
-        k: v
-        for k, v in (config.get("clustering_methods", {}) or {}).items()
-        if k in methods
+        k: v for k, v in (config.get("clustering_methods", {}) or {}).items() if k in methods
     }
 
     # -- 1. Clustering engine ------------------------------------------
@@ -162,8 +165,7 @@ def run_dataset(
 
     if pred_df is not None:
         sensitive_attrs = [
-            c for c in ["age_group", "age_group_cat", "sex", "sex_cat"]
-            if c in merged.columns
+            c for c in ["age_group", "age_group_cat", "sex", "sex_cat"] if c in merged.columns
         ]
         fpc = FairnessPerCluster(sensitive_attrs=sensitive_attrs)
         fairness_df = fpc.compute(merged, cluster_col="group_cluster")
@@ -202,13 +204,16 @@ def run_dataset(
         .get("k", [5, 10, 20])
     )
     numeric_cols = [
-        c for c in df.select_dtypes(include="number").columns
+        c
+        for c in df.select_dtypes(include="number").columns
         if c not in feat_exclude and c != "group_cluster"
     ]
 
     pred_col = "y_pred"
-    sim_df = df if pred_col in df.columns else (
-        merged if (pred_df is not None and pred_col in merged.columns) else None
+    sim_df = (
+        df
+        if pred_col in df.columns
+        else (merged if (pred_df is not None and pred_col in merged.columns) else None)
     )
 
     if sim_df is not None and pred_col in sim_df.columns:
@@ -264,7 +269,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     verbose = 2 if args.vv else (1 if args.v else 0)
-    setup_phase_logging(_ROOT, "grouping", verbose=verbose, run_id=args.run_id, stage_name="grouping")
+    setup_phase_logging(
+        _ROOT, "grouping", verbose=verbose, run_id=args.run_id, stage_name="grouping"
+    )
 
     # Load config
     config_path = Path(args.config) if args.config else _CLUSTERING_CONFIG
@@ -286,7 +293,9 @@ def main() -> None:
         logger.error("[ERROR] No datasets found. Pass --datasets or ensure processed CSVs exist.")
         sys.exit(1)
 
-    logger.info("[PHASE] grouping analysis — run_id=%s datasets=%s methods=%s", run_id, datasets, methods)
+    logger.info(
+        "[PHASE] grouping analysis — run_id=%s datasets=%s methods=%s", run_id, datasets, methods
+    )
 
     for dataset in datasets:
         try:

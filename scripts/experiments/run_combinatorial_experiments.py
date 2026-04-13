@@ -2,7 +2,6 @@
 
 import argparse
 import copy
-import json
 import logging
 import os
 import sys
@@ -938,7 +937,7 @@ def run_single_split_experiment(
         model_type = config.get("model_type", "logistic_regression")
         model_class = get_model_class(model_type)
         model = model_class(**config.get("model_params", {}))
-        train_metrics = model.train(splits["X_train"], splits["y_train"])
+        model.train(splits["X_train"], splits["y_train"])
         test_metrics = model.evaluate(splits["X_test"], splits["y_test"])
 
         # Get predictions
@@ -1351,7 +1350,9 @@ def run_combinatorial_analysis(
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
-    selected_datasets = [str(d).strip() for d in (datasets or config.get("datasets", [])) if str(d).strip()]
+    selected_datasets = [
+        str(d).strip() for d in (datasets or config.get("datasets", [])) if str(d).strip()
+    ]
     if not selected_datasets:
         logger.error("No datasets selected. Provide --datasets or define datasets in config.")
         sys.exit(1)
@@ -1362,7 +1363,9 @@ def run_combinatorial_analysis(
         if str(m).strip()
     ]
     if not selected_model_types:
-        logger.error("No model types selected. Provide --model-types or define model_types in config.")
+        logger.error(
+            "No model types selected. Provide --model-types or define model_types in config."
+        )
         sys.exit(1)
 
     # Load gate thresholds: experiment config overrides → thresholds.yaml fallback.
@@ -1634,13 +1637,13 @@ def run_combinatorial_analysis(
     logger.info("EXPERIMENTS COMPLETE")
     logger.info("=" * 80)
 
-    summary = versioning.create_summary()
+    versioning.create_summary()
 
     # Count successes and failures
     n_success = sum(1 for r in results if r["execution"]["status"] == "success")
     n_failed = total_experiments - n_success
 
-    logger.info(f"\nResults summary:")
+    logger.info("\nResults summary:")
     logger.info(f"  Total experiments: {total_experiments}")
     logger.info(f"  Successful: {n_success}")
     logger.info(f"  Failed: {n_failed}")

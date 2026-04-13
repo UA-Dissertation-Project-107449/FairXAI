@@ -200,7 +200,8 @@ def _generate_fairness_plots(
             _report(f"group_performance_gaps_{attr_short}", result)
     else:
         logger.warning(
-            "[WARNING] group_performance_gaps: no baseline fairness JSON found under %s", fairness_dir
+            "[WARNING] group_performance_gaps: no baseline fairness JSON found under %s",
+            fairness_dir,
         )
 
     # 3. Bias amplification waterfall (requires stage_gaps.json placed in run dir)
@@ -235,10 +236,12 @@ def _generate_transformation_plots(
         if not baseline_rows.empty and not non_baseline.empty:
             # Support both old (f1_score) and new (f1_value) column naming
             metric_cols_candidates = [
-                ("f1_score", "f1"), ("f1_value", "f1"),
+                ("f1_score", "f1"),
+                ("f1_value", "f1"),
                 ("recall_value", "recall"),
                 ("precision_value", "precision"),
-                ("auc_value", "auc_roc"), ("auc_roc", "auc_roc"),
+                ("auc_value", "auc_roc"),
+                ("auc_roc", "auc_roc"),
                 ("fairness_gap", "fairness_gap"),
             ]
             baseline_row = baseline_rows.iloc[0]
@@ -260,7 +263,9 @@ def _generate_transformation_plots(
             )
             _report("transformation_impact", result)
         else:
-            logger.warning("[WARNING] transformation_impact: need both baseline and non-baseline rows")
+            logger.warning(
+                "[WARNING] transformation_impact: need both baseline and non-baseline rows"
+            )
     else:
         logger.warning("[WARNING] transformation_impact: full_comparison.csv missing")
 
@@ -273,14 +278,21 @@ def _generate_transformation_plots(
         if feature_cols:
             mid = len(pred_df) // 2
             result = plot_before_after_distributions(
-                pred_df.iloc[:mid], pred_df.iloc[mid:], feature_cols,
+                pred_df.iloc[:mid],
+                pred_df.iloc[mid:],
+                feature_cols,
                 out_dir / "before_after_distributions.png",
             )
             _report("before_after_distributions", result)
         else:
-            logger.warning("[WARNING] before_after_distributions: no feature cols in prediction CSV")
+            logger.warning(
+                "[WARNING] before_after_distributions: no feature cols in prediction CSV"
+            )
     else:
-        logger.warning("[WARNING] before_after_distributions: no train prediction CSV found under %s", results_dir)
+        logger.warning(
+            "[WARNING] before_after_distributions: no train prediction CSV found under %s",
+            results_dir,
+        )
 
     # 6. Scaling effects — raw vs scaled using processed train CSV
     raw_csv = _DATA_PROCESSED / "cleveland_train.csv"
@@ -299,7 +311,8 @@ def _generate_transformation_plots(
     else:
         logger.warning(
             "[WARNING] scaling_effects: cleveland_train.csv or cleveland_train_scaled.csv "
-            "not found under %s", _DATA_PROCESSED
+            "not found under %s",
+            _DATA_PROCESSED,
         )
 
 
@@ -319,7 +332,9 @@ def _generate_cross_model_plots(
         )
         _report("intersectional_heatmap_dp", result)
     else:
-        logger.warning("[WARNING] intersectional_heatmap: per_group_comparison.csv missing (run full pipeline first)")
+        logger.warning(
+            "[WARNING] intersectional_heatmap: per_group_comparison.csv missing (run full pipeline first)"
+        )
 
     # 8. Cross-model radar
     if summary_df is not None:
@@ -327,7 +342,9 @@ def _generate_cross_model_plots(
         result = save_cross_model_radar(normalized_summary, out_dir / "cross_model_radar.png")
         _report("cross_model_radar", result)
     else:
-        logger.warning("[WARNING] cross_model_radar: cross_model_summary.csv missing (run full pipeline first)")
+        logger.warning(
+            "[WARNING] cross_model_radar: cross_model_summary.csv missing (run full pipeline first)"
+        )
 
     # 9. Mitigation effectiveness matrix
     if full_df is not None:

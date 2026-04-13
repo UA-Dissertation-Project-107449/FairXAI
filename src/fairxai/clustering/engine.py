@@ -149,9 +149,7 @@ class ClusteringEngine:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _resolve_feature_cols(
-        self, df: pd.DataFrame, explicit: Optional[List[str]]
-    ) -> List[str]:
+    def _resolve_feature_cols(self, df: pd.DataFrame, explicit: Optional[List[str]]) -> List[str]:
         if explicit is not None:
             return [c for c in explicit if c in df.columns]
         exclude_from_yaml = set(
@@ -161,9 +159,7 @@ class ClusteringEngine:
             .get("exclude", _DEFAULT_EXCLUDE)
         )
         exclude = exclude_from_yaml | self._extra_exclude
-        return [
-            c for c in df.select_dtypes(include="number").columns if c not in exclude
-        ]
+        return [c for c in df.select_dtypes(include="number").columns if c not in exclude]
 
     # -- K-Means -----------------------------------------------------------
 

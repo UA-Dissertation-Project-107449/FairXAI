@@ -111,7 +111,6 @@ def check_sensitive_adequacy(
 ) -> List[Recommendation]:
     """Category B: verify fairness can be evaluated at all."""
     recs: List[Recommendation] = []
-    n_samples = ev.get_n_samples(profile) or 1
 
     # --- No sensitive columns declared / detected ---
     if not ingestion.sensitive_columns:

@@ -5,7 +5,6 @@ import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 import seaborn as sns
 
@@ -66,9 +65,7 @@ def plot_fairness_metric_heatmap(df, sensitive_attr, output_file):
         return None
 
     attr_label = attr_short.replace("_", " ").title()
-    fig, ax = plt.subplots(
-        figsize=(max(7, len(available) * 2.5), max(5, len(agg) * 0.6 + 2))
-    )
+    fig, ax = plt.subplots(figsize=(max(7, len(available) * 2.5), max(5, len(agg) * 0.6 + 2)))
     sns.heatmap(
         agg,
         annot=True,
@@ -124,10 +121,20 @@ def plot_group_performance_gaps(before_json, after_json, sensitive_attr, output_
         groups = sorted(set(list(eq_odds) + list(pp)))
         for g in groups:
             if g in eq_odds:
-                records.append({"group": g, "metric": "TPR", "value": eq_odds[g].get("tpr", float("nan"))})
-                records.append({"group": g, "metric": "FPR", "value": eq_odds[g].get("fpr", float("nan"))})
+                records.append(
+                    {"group": g, "metric": "TPR", "value": eq_odds[g].get("tpr", float("nan"))}
+                )
+                records.append(
+                    {"group": g, "metric": "FPR", "value": eq_odds[g].get("fpr", float("nan"))}
+                )
             if g in pp:
-                records.append({"group": g, "metric": "Precision", "value": pp[g].get("precision", float("nan"))})
+                records.append(
+                    {
+                        "group": g,
+                        "metric": "Precision",
+                        "value": pp[g].get("precision", float("nan")),
+                    }
+                )
         return records
 
     try:
@@ -212,9 +219,9 @@ def plot_bias_amplification_waterfall(stages_dict, output_file):
         if i == 0:
             colors.append("#888888")
         elif d <= 0:
-            colors.append("#2E8B57")   # green: gap decreased → improved
+            colors.append("#2E8B57")  # green: gap decreased → improved
         else:
-            colors.append("#B22222")   # red: gap increased → worsened
+            colors.append("#B22222")  # red: gap increased → worsened
 
     fig, ax = plt.subplots(figsize=(max(8, len(stages) * 1.8), 5))
     bars = ax.bar(stages, values, color=colors, edgecolor="white", linewidth=0.8, alpha=0.9)
@@ -224,7 +231,10 @@ def plot_bias_amplification_waterfall(stages_dict, output_file):
             bar.get_x() + bar.get_width() / 2,
             bar.get_height() + 0.005,
             f"{val:.3f}",
-            ha="center", va="bottom", fontsize=9, fontweight="bold",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+            fontweight="bold",
         )
         if delta != 0.0:
             sign = "+" if delta > 0 else ""
@@ -232,20 +242,24 @@ def plot_bias_amplification_waterfall(stages_dict, output_file):
                 bar.get_x() + bar.get_width() / 2,
                 bar.get_height() / 2,
                 f"{sign}{delta:.3f}",
-                ha="center", va="center", fontsize=8, color="white",
+                ha="center",
+                va="center",
+                fontsize=8,
+                color="white",
             )
 
     ax.axhline(
-        y=_THRESHOLD, color="orange", linestyle="--", linewidth=1.2,
+        y=_THRESHOLD,
+        color="orange",
+        linestyle="--",
+        linewidth=1.2,
         label=f"Fairness threshold ({_THRESHOLD})",
     )
     ax.set_xlabel("Pipeline Stage")
     ax.set_ylabel("Fairness Gap")
     ax.set_title("Bias Amplification Across Pipeline Stages")
     ax.set_xticks(range(len(stages)))
-    ax.set_xticklabels(
-        [s.replace("_", " ").title() for s in stages], rotation=25, ha="right"
-    )
+    ax.set_xticklabels([s.replace("_", " ").title() for s in stages], rotation=25, ha="right")
     ax.set_ylim(0, max(values) * 1.25)
     ax.legend(fontsize=9)
     ax.grid(axis="y", alpha=0.3)

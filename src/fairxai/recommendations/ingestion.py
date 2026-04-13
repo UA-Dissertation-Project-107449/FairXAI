@@ -8,11 +8,10 @@ plus a schema-based fast-path for already-registered datasets.
 from __future__ import annotations
 
 import csv
-import io
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import pandas as pd
 
@@ -306,7 +305,6 @@ def ingestion_from_schema(
     exclude_cols = set(ds.get("exclude_features", []))
     label_col = ds.get("label") or ds.get("target")
     clinical_features = ds.get("clinical_features", [])
-    descriptions = ds.get("feature_descriptions", {})
 
     columns: List[ColumnMeta] = []
 

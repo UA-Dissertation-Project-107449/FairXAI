@@ -6,7 +6,6 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import numpy as np
 import pandas as pd
 from scipy.stats import chi2_contingency, mannwhitneyu
 
@@ -106,7 +105,9 @@ class ClusterProfiler:
         # -- Mann-Whitney U
         if report.mann_whitney_results:
             lines.append("## Pairwise Outcome Distribution (Mann-Whitney U)\n")
-            lines.append(pd.DataFrame(report.mann_whitney_results).round(4).to_markdown(index=False))
+            lines.append(
+                pd.DataFrame(report.mann_whitney_results).round(4).to_markdown(index=False)
+            )
             lines.append("")
 
         output_file.write_text("\n".join(lines))
@@ -147,9 +148,7 @@ class ClusterProfiler:
             logger.debug("chi_square_test failed: %s", exc)
             return []
 
-    def _mann_whitney_u(
-        self, df: pd.DataFrame, cluster_col: str, cluster_ids: List
-    ) -> List[Dict]:
+    def _mann_whitney_u(self, df: pd.DataFrame, cluster_col: str, cluster_ids: List) -> List[Dict]:
         """Pairwise Mann-Whitney U: compare outcome distributions between clusters."""
         if self.target_col not in df.columns:
             return []
@@ -197,6 +196,8 @@ class ClusterProfiler:
             for feat in top.index:
                 d = delta[feat]
                 direction = "elevated" if d > 0 else "lower"
-                parts.append(f"{feat} {direction} ({row[feat]:.2f} vs {global_means[feat]:.2f} global)")
+                parts.append(
+                    f"{feat} {direction} ({row[feat]:.2f} vs {global_means[feat]:.2f} global)"
+                )
             narratives[int(cid)] = "Cluster %d: %s." % (int(cid), "; ".join(parts))
         return narratives

@@ -78,10 +78,7 @@ class TestCombinatorialYamlModelTypes:
         import yaml
 
         config_path = (
-            Path(__file__).parent.parent.parent
-            / "configs"
-            / "experiments"
-            / "combinatorial.yaml"
+            Path(__file__).parent.parent.parent / "configs" / "experiments" / "combinatorial.yaml"
         )
         with open(config_path) as f:
             config = yaml.safe_load(f)
@@ -96,10 +93,7 @@ class TestCombinatorialYamlModelTypes:
         import yaml
 
         config_path = (
-            Path(__file__).parent.parent.parent
-            / "configs"
-            / "experiments"
-            / "combinatorial.yaml"
+            Path(__file__).parent.parent.parent / "configs" / "experiments" / "combinatorial.yaml"
         )
         with open(config_path) as f:
             config = yaml.safe_load(f)

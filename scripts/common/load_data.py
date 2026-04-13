@@ -20,8 +20,6 @@ import os
 import sys
 from pathlib import Path
 
-import pandas as pd
-
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
@@ -72,7 +70,7 @@ def main():
     data_external = project_root / pipeline_cfg["paths"]["external_dir"]
     data_raw = project_root / pipeline_cfg["paths"]["raw_dir"]
     run_id = resolve_run_id(args.run_id) if args.run_id else None
-    log_dir = setup_phase_logging(
+    setup_phase_logging(
         project_root,
         "data_loading.log",
         verbose=args.verbose,

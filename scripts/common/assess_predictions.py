@@ -11,7 +11,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict
 
 import numpy as np
 import pandas as pd
@@ -20,7 +20,7 @@ import pandas as pd
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root / "src"))
 
-from fairxai.cli.runner_base import get_project_root, load_pipeline_config, setup_phase_logging
+from fairxai.cli.runner_base import load_pipeline_config, setup_phase_logging
 from fairxai.fairness.metrics import FairnessMetrics, summarize_fairness_results
 
 
@@ -35,21 +35,6 @@ def decode_sensitive_attributes(df: pd.DataFrame) -> pd.DataFrame:
         DataFrame with decoded categories
     """
     df = df.copy()
-
-    # Decode age_group (was label-encoded)
-    # Typical encoding: 0:<40, 1:40-49, 2:50-59, 3:60-69, 4:70+
-    age_mapping = {
-        -2.0: "<40",
-        -1.5: "<40",  # Handles some variance from scaling
-        -1.0: "40-49",
-        -0.5: "40-49",
-        0.0: "50-59",
-        0.5: "50-59",
-        1.0: "60-69",
-        1.5: "60-69",
-        2.0: "70+",
-        2.5: "70+",
-    }
 
     # For scaled values, we need to find the nearest encoding
     if "age_group" in df.columns:
@@ -113,7 +98,7 @@ def assess_dataset_fairness(
     train_df = pd.read_csv(train_file)
     test_df = pd.read_csv(test_file)
 
-    logging.info(f"Loaded predictions:")
+    logging.info("Loaded predictions:")
     logging.info(f"  Train: {len(train_df)} samples")
     logging.info(f"  Test: {len(test_df)} samples")
 
@@ -123,7 +108,7 @@ def assess_dataset_fairness(
 
     # Check if decoding worked
     if "age_group_cat" in train_df.columns and "sex_cat" in train_df.columns:
-        logging.info(f"\n--- Decoded Sensitive Attributes ---")
+        logging.info("\n--- Decoded Sensitive Attributes ---")
         logging.info(f"Age groups: {train_df['age_group_cat'].value_counts().to_dict()}")
         logging.info(f"Sex: {train_df['sex_cat'].value_counts().to_dict()}")
 
@@ -154,7 +139,7 @@ def assess_dataset_fairness(
         feature_cols = None
 
     # Calculate metrics for train set
-    logging.info(f"\n--- Train Set Fairness ---")
+    logging.info("\n--- Train Set Fairness ---")
     train_metrics = metrics_calculator.calculate_all_metrics(train_df, feature_cols)
     results["train_metrics"] = train_metrics
 
@@ -162,7 +147,7 @@ def assess_dataset_fairness(
     log_fairness_metrics(train_metrics, "Train")
 
     # Calculate metrics for test set
-    logging.info(f"\n--- Test Set Fairness ---")
+    logging.info("\n--- Test Set Fairness ---")
     test_metrics = metrics_calculator.calculate_all_metrics(test_df, feature_cols)
     results["test_metrics"] = test_metrics
 
@@ -243,7 +228,7 @@ def log_fairness_metrics(metrics: Dict, split_name: str):
     # Individual fairness
     if "individual_fairness" in metrics and metrics["individual_fairness"]:
         ind_fair = metrics["individual_fairness"]
-        logging.info(f"\n  Individual Fairness (k-NN consistency):")
+        logging.info("\n  Individual Fairness (k-NN consistency):")
         logging.info(f"    Mean consistency: {ind_fair['mean_consistency']:.3f}")
         logging.info(f"    Median consistency: {ind_fair['median_consistency']:.3f}")
 
@@ -324,7 +309,7 @@ def main():
         experiments_dir = project_root / pipeline_cfg["paths"]["experiments_dir"]
         results_dir = project_root / pipeline_cfg["paths"]["results_fairness_dir"]
     # Setup
-    log_dir = setup_phase_logging(
+    setup_phase_logging(
         project_root,
         "fairness_assessment.log",
         verbose=args.verbose,
@@ -394,7 +379,7 @@ def main():
     logging.info(f"{'='*60}")
     logging.info(f"Results saved to: {results_dir}")
     logging.info(f"Combined report: {combined_file}")
-    logging.info(f"\nNext step: Create visualization notebook (Phase 5)")
+    logging.info("\nNext step: Create visualization notebook (Phase 5)")
 
 
 if __name__ == "__main__":

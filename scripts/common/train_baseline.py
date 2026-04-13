@@ -20,7 +20,6 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -357,7 +356,7 @@ def main():
     else:
         experiments_dir = project_root / pipeline_cfg["paths"]["experiments_dir"]
         models_dir = project_root / pipeline_cfg["paths"]["models_dir"]
-    log_dir = setup_phase_logging(
+    setup_phase_logging(
         project_root,
         "training_baseline.log",
         verbose=args.verbose,
@@ -391,7 +390,7 @@ def main():
     thresholds_to_test = training_cfg.get("thresholds", [0.3, 0.4, 0.5, 0.6, 0.7])
     model_types = _resolve_model_types(args.model_types, training_cfg)
 
-    logging.info(f"Configuration:")
+    logging.info("Configuration:")
     logging.info(f"  Models: {model_types}")
     logging.info(f"  Random state: {random_state}")
     logging.info(f"  Decision thresholds: {thresholds_to_test}")
@@ -436,7 +435,7 @@ def main():
         train_df = pd.read_csv(train_file)
         test_df = pd.read_csv(test_file)
 
-        logging.info(f"Loaded data:")
+        logging.info("Loaded data:")
         logging.info(f"  Train: {len(train_df)} samples")
         logging.info(f"  Test: {len(test_df)} samples")
         logging.info(f"  Feature-selection mode: {args.feature_selection_mode}")
@@ -746,7 +745,7 @@ def main():
     logging.info(f"{'='*60}")
     logging.info(f"Models saved to: {models_dir}")
     logging.info(f"Results saved to: {experiments_dir}")
-    logging.info(f"\nNext step: Run fairness assessment on predictions (Phase 4)")
+    logging.info("\nNext step: Run fairness assessment on predictions (Phase 4)")
 
 
 if __name__ == "__main__":

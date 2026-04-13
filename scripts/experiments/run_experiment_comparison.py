@@ -9,7 +9,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import yaml
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
@@ -488,9 +487,11 @@ def _extract_per_group_fairness(fairness_metrics: dict) -> list:
                         "sensitive_attr": attr,
                         "group": str(group),
                         "metric": "predictive_parity_precision",
-                        "value": prec_val
-                        if not isinstance(prec_val, dict)
-                        else prec_val.get("precision"),
+                        "value": (
+                            prec_val
+                            if not isinstance(prec_val, dict)
+                            else prec_val.get("precision")
+                        ),
                     }
                 )
     return records
@@ -504,7 +505,9 @@ def _load_baseline_per_group(run_root: Path, dataset: str, model_type: str) -> l
     Falls back to an empty list if the JSON is absent or malformed.
     """
     # Stage 6 writes to: {run_root}/baseline/fairness/{dataset}_{model_type}_fairness_assessment.json
-    json_path = run_root / "baseline" / "fairness" / f"{dataset}_{model_type}_fairness_assessment.json"
+    json_path = (
+        run_root / "baseline" / "fairness" / f"{dataset}_{model_type}_fairness_assessment.json"
+    )
     if not json_path.exists():
         logging.debug(f"Baseline per-group JSON not found: {json_path}")
         return []
@@ -543,7 +546,9 @@ def _build_per_group_comparison(
         key = (dataset, model_type)
         if key not in baseline_pg:
             records = _load_baseline_per_group(run_root, dataset, model_type)
-            baseline_pg[key] = {(r["sensitive_attr"], r["group"], r["metric"]): r["value"] for r in records}
+            baseline_pg[key] = {
+                (r["sensitive_attr"], r["group"], r["metric"]): r["value"] for r in records
+            }
 
     rows = []
     for _, exp_row in df_success.iterrows():
@@ -556,7 +561,9 @@ def _build_per_group_comparison(
 
         try:
             exp_data = versioning.load_experiment(exp_id)
-            fairness_metrics = exp_data["results"].get("fairness_metrics", {}) if exp_data.get("results") else {}
+            fairness_metrics = (
+                exp_data["results"].get("fairness_metrics", {}) if exp_data.get("results") else {}
+            )
         except Exception:
             continue
 
@@ -566,7 +573,11 @@ def _build_per_group_comparison(
         for rec in pg_records:
             baseline_val = baseline_map.get((rec["sensitive_attr"], rec["group"], rec["metric"]))
             exp_val = rec["value"]
-            delta = (exp_val - baseline_val) if (exp_val is not None and baseline_val is not None) else None
+            delta = (
+                (exp_val - baseline_val)
+                if (exp_val is not None and baseline_val is not None)
+                else None
+            )
             rows.append(
                 {
                     "dataset": dataset,
@@ -585,7 +596,9 @@ def _build_per_group_comparison(
             )
 
     if not rows:
-        logging.warning("No per-group comparison rows generated (stage-6 baseline JSONs may be absent)")
+        logging.warning(
+            "No per-group comparison rows generated (stage-6 baseline JSONs may be absent)"
+        )
         return
 
     pg_df = pd.DataFrame(rows)
@@ -712,7 +725,12 @@ def run_comparison_analysis(
 
     baseline_lookup = {}
     for _, row in df_success[df_success["mitigation_technique"] == "baseline"].iterrows():
-        key = (row["dataset"], row.get("model_type", "logistic_regression"), row["binning_strategy"], row["training_method"])
+        key = (
+            row["dataset"],
+            row.get("model_type", "logistic_regression"),
+            row["binning_strategy"],
+            row["training_method"],
+        )
         baseline_lookup[key] = row
 
     for col in fairness_metric_cols:
@@ -724,7 +742,12 @@ def run_comparison_analysis(
     df_success["fairness_gain_pct"] = np.nan
 
     for idx, row in df_success.iterrows():
-        key = (row["dataset"], row.get("model_type", "logistic_regression"), row["binning_strategy"], row["training_method"])
+        key = (
+            row["dataset"],
+            row.get("model_type", "logistic_regression"),
+            row["binning_strategy"],
+            row["training_method"],
+        )
         baseline = baseline_lookup.get(key)
         if baseline is None:
             continue
@@ -937,10 +960,10 @@ def run_comparison_analysis(
     logging.info("=" * 80)
     logging.info("[PHASE] Comparison complete")
     logging.info(f"Results saved to: {output_dir}")
-    logging.info(f"\nFiles created:")
+    logging.info("\nFiles created:")
     logging.info(f"  - full_comparison.csv ({len(df_success)} experiments)")
-    logging.info(f"  - binning_comparison.csv")
-    logging.info(f"  - mitigation_comparison.csv")
+    logging.info("  - binning_comparison.csv")
+    logging.info("  - mitigation_comparison.csv")
     if best_configs is not None and not best_configs.empty:
         logging.info(f"  - best_configurations.csv ({len(best_configs)} configs)")
 

@@ -69,9 +69,7 @@ class SimilarityEngine:
 
         for k in self.k_values:
             if k >= n_samples:
-                logger.warning(
-                    "[WARNING] k=%d >= n_samples=%d, skipping", k, n_samples
-                )
+                logger.warning("[WARNING] k=%d >= n_samples=%d, skipping", k, n_samples)
                 continue
             try:
                 result = self._fm.individual_fairness_consistency(
