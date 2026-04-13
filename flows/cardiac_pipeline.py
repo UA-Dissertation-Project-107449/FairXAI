@@ -19,21 +19,20 @@ from prefect import flow, get_run_logger, task
 ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT_DIR / "src"))
 
-from fairxai.cli.runner_utils import (
+from fairxai.cli.runner_utils import (  # noqa: E402
     get_run_root,
     resolve_latest_run_dir,
     resolve_run_id,
     update_log_latest_pointer,
 )
-from fairxai.pipeline.stages import (
+from fairxai.pipeline.stages import (  # noqa: E402
     STAGES,
-    PipelineStage,
     get_stage_range,
     mark_stage_complete,
     resolve_stage,
     validate_prior_stages,
 )
-from fairxai.utils.logging_utils import summarize_run_logs
+from fairxai.utils.logging_utils import summarize_run_logs  # noqa: E402
 
 
 def _run_script(script_path: Path, args: list, env: dict) -> None:
