@@ -27,7 +27,8 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-from fairxai.cli.runner_base import get_project_root, setup_phase_logging
+from fairxai.cli.runner_base import get_project_root, setup_study_logging
+from fairxai.cli.runner_utils import resolve_run_id, update_study_pointer
 from fairxai.experiments.data_io import (
     default_exclude_columns,
 )
@@ -81,8 +82,23 @@ def main():
     args = parser.parse_args()
 
     project_root = get_project_root(Path(__file__))
-    setup_phase_logging(project_root, "hpo.log", verbose=args.verbose, stage_name="hpo")
+    study_id = resolve_run_id()
+    log_subdir = args.pipeline
+    setup_study_logging(
+        project_root,
+        "hpo",
+        study_id,
+        "hpo.log",
+        verbose=args.verbose,
+        log_subdir=log_subdir,
+    )
     logger = logging.getLogger(__name__)
+    update_study_pointer(
+        project_root / "logs" / log_subdir,
+        "hpo",
+        study_id,
+        logger,
+    )
 
     hpo_cfg_path = project_root / args.config
     hpo_cfg = load_yaml_config(str(hpo_cfg_path))

@@ -29,7 +29,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-from fairxai.cli.runner_base import get_project_root, setup_phase_logging
+from fairxai.cli.runner_base import get_project_root, setup_study_logging
+from fairxai.cli.runner_utils import resolve_run_id, update_study_pointer
 from fairxai.utils.config import load_yaml_config
 
 logger = logging.getLogger(__name__)
@@ -249,11 +250,21 @@ def main():
     args = parser.parse_args()
 
     project_root = get_project_root(Path(__file__))
-    setup_phase_logging(
+    study_id = resolve_run_id()
+    log_subdir = args.pipeline
+    setup_study_logging(
         project_root,
-        "feature_selection_study.log",
+        "feature_selection",
+        study_id,
+        "study.log",
         verbose=args.verbose,
-        stage_name="feature_selection_study",
+        log_subdir=log_subdir,
+    )
+    update_study_pointer(
+        project_root / "logs" / log_subdir,
+        "feature_selection",
+        study_id,
+        logger,
     )
 
     study_cfg_path = project_root / args.config

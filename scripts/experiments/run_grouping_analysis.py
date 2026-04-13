@@ -270,7 +270,12 @@ def main() -> None:
     args = parse_args()
     verbose = 2 if args.vv else (1 if args.v else 0)
     setup_phase_logging(
-        _ROOT, "grouping", verbose=verbose, run_id=args.run_id, stage_name="grouping"
+        _ROOT,
+        "grouping.log",
+        verbose=verbose,
+        run_id=args.run_id,
+        stage_name="preprocess",
+        sub_stage="grouping",
     )
 
     # Load config
