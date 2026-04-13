@@ -8,6 +8,8 @@ on:
       - requirements.txt
       - src/**
       - scripts/**
+      - tests/**
+      - flows/**
       - configs/**
       - .github/workflows/**
   workflow_dispatch:
@@ -40,20 +42,26 @@ jobs:
       - name: Upgrade pip
         run: python3 -m pip install --upgrade pip
 
-      - name: Install package (core)
-        run: python3 -m pip install -e .
+      - name: Install package (experiment profile)
+        run: python3 -m pip install -e ".[experiment]"
 
       - name: Install CI tooling
-        run: python3 -m pip install black isort build
+        run: python3 -m pip install black isort build ruff pytest jenkspy
 
       - name: Black format check
-        run: black --check src scripts
+        run: black --check src scripts tests flows
 
       - name: isort check
-        run: isort --check-only src scripts
+        run: isort --check-only src scripts tests flows
+
+      - name: Ruff lint check
+        run: ruff check src scripts tests flows
 
       - name: Build wheel and sdist
         run: python3 -m build
 
       - name: CLI help smoke check
         run: python3 -m fairxai.cli.characterize --help
+
+      - name: Unit tests (no viz — matplotlib not installed in PR CI)
+        run: pytest tests/unit/ -q --ignore=tests/unit/test_viz_smoke.py
