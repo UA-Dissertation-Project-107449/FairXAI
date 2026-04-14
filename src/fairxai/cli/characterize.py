@@ -78,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
             triage_project_root=args.triage_project_root,
         )
     except Exception as exc:
-        print(f"[ERROR] Characterization failed: {exc}", file=sys.stderr)
+        print(f"Characterization failed: {exc}", file=sys.stderr)
         return 1
 
     if args.print_json:
