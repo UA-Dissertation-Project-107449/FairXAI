@@ -64,6 +64,22 @@ def load_dataset(
     Returns:
         Tuple of (X_train, y_train, sensitive_train, X_test, y_test, sensitive_test)
     """
+
+    def _drop_duplicate_alias_columns(df: pd.DataFrame, label: str) -> pd.DataFrame:
+        """Drop duplicate Pandas-suffixed aliases like ``col.1`` when ``col`` exists."""
+        duplicate_aliases = []
+        for col in df.columns:
+            if "." not in col:
+                continue
+            base, suffix = col.rsplit(".", 1)
+            if suffix.isdigit() and base in df.columns:
+                duplicate_aliases.append(col)
+
+        if duplicate_aliases:
+            logging.info("  %s: dropping duplicate alias columns %s", label, duplicate_aliases)
+            df = df.drop(columns=duplicate_aliases)
+        return df
+
     logging.info(f"\nLoading dataset: {dataset_name}")
 
     train_scaled = data_dir / f"{dataset_name}_train_scaled.csv"
@@ -87,6 +103,11 @@ def load_dataset(
         test_df = pd.read_csv(test_raw)
         train_raw_df = train_df
         test_raw_df = test_df
+
+    train_df = _drop_duplicate_alias_columns(train_df, "train")
+    test_df = _drop_duplicate_alias_columns(test_df, "test")
+    train_raw_df = _drop_duplicate_alias_columns(train_raw_df, "train_raw")
+    test_raw_df = _drop_duplicate_alias_columns(test_raw_df, "test_raw")
 
     logging.info(f"  Train: {len(train_df)} samples")
     logging.info(f"  Test: {len(test_df)} samples")
