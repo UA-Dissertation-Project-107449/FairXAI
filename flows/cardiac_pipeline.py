@@ -376,30 +376,31 @@ def cardiac_pipeline(
     else:
         logger.info("[4/10] preprocess — SKIPPED (outside active range)")
 
-    # Stage 4b — Grouping (sub-step; after preprocess, before train)
-    if _should_run(4) and run_grouping:
-        wait = [preprocess_data_task] if preprocess_data_task else []
-        grouping_task = run_grouping_stage.submit(run_id, datasets, verbose, wait_for=wait)
-    else:
-        reason = "disabled" if _should_run(4) and not run_grouping else "outside active range"
-        logger.info(f"[4b] grouping — SKIPPED ({reason})")
-
     # Stage 5 — Train baseline
     if _should_run(5):
-        wait = (
-            [grouping_task or preprocess_data_task]
-            if (grouping_task or preprocess_data_task)
-            else []
-        )
+        wait = [preprocess_data_task] if preprocess_data_task else []
         train_baseline_model_task = train_baseline_model.submit(
             run_id, datasets, model_types, verbose, wait_for=wait
         )
     else:
         logger.info("[5/10] train — SKIPPED (outside active range)")
 
+    # Stage 4b — Grouping (sub-step)
+    # Full runs execute this after training so prediction-dependent similarity
+    # artifacts are available. If stage 5 is not active, it falls back to
+    # running after preprocess only.
+    if _should_run(4) and run_grouping:
+        wait_source = train_baseline_model_task or preprocess_data_task
+        wait = [wait_source] if wait_source else []
+        grouping_task = run_grouping_stage.submit(run_id, datasets, verbose, wait_for=wait)
+    else:
+        reason = "disabled" if _should_run(4) and not run_grouping else "outside active range"
+        logger.info(f"[4b] grouping — SKIPPED ({reason})")
+
     # Stage 6 — Assess fairness
     if _should_run(6):
-        wait = [train_baseline_model_task] if train_baseline_model_task else []
+        wait_source = grouping_task or train_baseline_model_task
+        wait = [wait_source] if wait_source else []
         assess_predictions_task = assess_predictions.submit(
             run_id, datasets, model_types, verbose, wait_for=wait
         )
@@ -463,6 +464,11 @@ def cardiac_pipeline(
         future = task_map[stage_num]
         if future is not None:
             _checkpoint(stage_num, future)
+
+    # Grouping is a sub-step (4b) and may not be part of checkpoint stages.
+    # Always wait explicitly so log summaries include its final output.
+    if grouping_task is not None:
+        grouping_task.result()
 
     # --- Log summary --------------------------------------------------------
     run_log_dir = ROOT_DIR / "logs" / "cardiac" / "runs" / run_id
