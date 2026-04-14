@@ -389,7 +389,7 @@ def main():
             if missing_analysis["total_missing"] == 0:
                 logging.info("[SUCCESS] No missing values detected")
             else:
-                logging.warning(f"⚠️  Found {missing_analysis['total_missing']} missing values")
+                logging.warning(f"Found {missing_analysis['total_missing']} missing values")
                 for col, info in missing_analysis["missing_by_column"].items():
                     logging.warning(
                         f"  {col}: {info['count']} ({info['percentage']:.1f}%) - {info['action']}"
@@ -406,7 +406,11 @@ def main():
             # Step 2: Stratified train/test split
             logging.info("\n--- Stratified Train/Test Split ---")
             train_df, test_df = preprocessor.stratified_split(
-                df_clean, target=target_col, test_size=test_size, random_state=random_state
+                df_clean,
+                target=target_col,
+                test_size=test_size,
+                random_state=random_state,
+                context_label=f"dataset={dataset_name}, binning={binning_strategy or 'default'}",
             )
 
             # Verify split maintains distributions
@@ -467,6 +471,19 @@ def main():
             ]
             sens_cols_test = available_sensitive(test_df, sensitive_attrs) + [
                 c for c in ["sex_extended", "sex_bin"] if c in test_df.columns
+            ]
+
+            # Avoid duplicate column names in scaled outputs (which pandas later
+            # re-labels as ".1", ".2", ... and can trigger noisy warnings).
+            sens_cols_train = [
+                c
+                for c in dict.fromkeys(sens_cols_train)
+                if c not in X_train_scaled_df.columns and c != target_col
+            ]
+            sens_cols_test = [
+                c
+                for c in dict.fromkeys(sens_cols_test)
+                if c not in X_test_scaled_df.columns and c != target_col
             ]
 
             train_scaled = pd.concat(
