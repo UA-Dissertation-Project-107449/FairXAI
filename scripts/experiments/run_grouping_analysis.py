@@ -142,7 +142,7 @@ def run_dataset(
         logger.info("[SUCCESS] group_cluster written back to %s", processed_path.name)
 
     except ClusteringError as exc:
-        logger.error("[ERROR] clustering failed for %s: %s", dataset, exc)
+        logger.error("clustering failed for %s: %s", dataset, exc)
         return  # Can't proceed without cluster labels
 
     # -- 2. Per-cluster fairness (requires predictions) ----------------
@@ -295,7 +295,7 @@ def main() -> None:
     methods = _resolve_methods(args.methods or [], config)
 
     if not datasets:
-        logger.error("[ERROR] No datasets found. Pass --datasets or ensure processed CSVs exist.")
+        logger.error("No datasets found. Pass --datasets or ensure processed CSVs exist.")
         sys.exit(1)
 
     logger.info(
@@ -306,7 +306,7 @@ def main() -> None:
         try:
             run_dataset(dataset, run_root, output_dir, config, methods)
         except Exception as exc:
-            logger.error("[ERROR] dataset %s failed: %s", dataset, exc, exc_info=True)
+            logger.error("dataset %s failed: %s", dataset, exc, exc_info=True)
 
     logger.info("[SUCCESS] done — artifacts in %s", output_dir)
 

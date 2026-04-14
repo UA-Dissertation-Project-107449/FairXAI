@@ -299,7 +299,7 @@ def apply_mitigation_techniques(
             logging.info(f"  Recall: {result['test_metrics']['recall']:.3f}")
 
         except Exception as e:
-            logging.error(f"[ERROR] Failed to apply {technique_name}: {e}")
+            logging.error(f"Failed to apply {technique_name}: {e}")
             logging.exception(e)
 
     return results

@@ -170,7 +170,7 @@ def _run_one(
         duration = time.monotonic() - t0
         if process.returncode != 0:
             logger.error(
-                f"[ERROR] RUN mode={mode} model={model_type} "
+                f"RUN mode={mode} model={model_type} "
                 f"(exit {process.returncode}) — see {run_root}"
             )
             return {
@@ -185,7 +185,7 @@ def _run_one(
     except subprocess.TimeoutExpired:
         if process is not None:
             _stop_process(process)
-        logger.error(f"[ERROR] TIMEOUT mode={mode} model={model_type} (>600s)")
+        logger.error(f"TIMEOUT mode={mode} model={model_type} (>600s)")
         return {"mode": mode, "model": model_type, "status": "timeout", "duration_s": 600}
     except KeyboardInterrupt:
         if process is not None:
@@ -200,7 +200,7 @@ def _run_one(
     except Exception as exc:
         if process is not None and process.poll() is None:
             _stop_process(process)
-        logger.error(f"[ERROR] {exc}")
+        logger.error(f"{exc}")
         return {
             "mode": mode,
             "model": model_type,
@@ -358,7 +358,7 @@ def main():
                     try:
                         status = future.result()
                     except Exception as exc:
-                        logger.error(f"[ERROR] RUN mode={mode} model={model_type} crashed: {exc}")
+                        logger.error(f"RUN mode={mode} model={model_type} crashed: {exc}")
                         stop_event.set()
                         _terminate_active_processes()
                         status = {

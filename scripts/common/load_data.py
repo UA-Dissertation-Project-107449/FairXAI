@@ -101,12 +101,12 @@ def main():
                 datasets[dataset_name] = loader.load_dataset(dataset_name, str(data_external))
                 logging.info(f"[SUCCESS] Loaded {dataset_name}: {len(datasets[dataset_name])} rows")
             except Exception as e:
-                logging.error(f"[ERROR] Failed to load {dataset_name}: {e}")
+                logging.error(f"Failed to load {dataset_name}: {e}")
     else:
         datasets = loader.load_all_cardiac_datasets(str(data_external))
 
     if not datasets:
-        logging.error("[ERROR] No datasets loaded. Exiting.")
+        logging.error("No datasets loaded. Exiting.")
         return
 
     # Process each dataset
@@ -143,7 +143,7 @@ def main():
             logging.info(f"  Heart disease: {df_raw['heart_disease'].value_counts().to_dict()}")
 
         except Exception as e:
-            logging.error(f"[ERROR] Failed to verify/save {dataset_name}: {e}")
+            logging.error(f"Failed to verify/save {dataset_name}: {e}")
             continue
 
     # Save summaries

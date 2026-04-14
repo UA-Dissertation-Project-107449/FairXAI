@@ -194,33 +194,35 @@ def log_fairness_metrics(metrics: Dict, split_name: str):
         logging.info(f"\n  {attr.upper()} - Group Fairness:")
 
         for metric_name, metric_data in attr_metrics.items():
-            is_fair = "[SUCCESS]" if metric_data.get("is_fair", False) else "[ERROR]"
+            fair = metric_data.get("is_fair", False)
+            tag = "[SUCCESS]" if fair else "[FAIL]"
+            log = logging.info if fair else logging.warning
 
             if metric_name == "demographic_parity":
                 diff = metric_data["max_difference"]
-                logging.info(f"    {is_fair} Demographic Parity: {diff:.3f} max difference")
+                log(f"    {tag} Demographic Parity: {diff:.3f} max difference")
 
             elif metric_name == "equalized_odds":
                 tpr_diff = metric_data["tpr_max_difference"]
                 fpr_diff = metric_data["fpr_max_difference"]
-                logging.info(
-                    f"    {is_fair} Equalized Odds: TPR diff={tpr_diff:.3f}, FPR diff={fpr_diff:.3f}"
-                )
+                log(f"    {tag} Equalized Odds: TPR diff={tpr_diff:.3f}, FPR diff={fpr_diff:.3f}")
 
             elif metric_name == "equal_opportunity":
                 diff = metric_data["max_difference"]
-                logging.info(f"    {is_fair} Equal Opportunity: {diff:.3f} TPR difference")
+                log(f"    {tag} Equal Opportunity: {diff:.3f} TPR difference")
 
             elif metric_name == "predictive_parity":
                 diff = metric_data["max_difference"]
-                logging.info(f"    {is_fair} Predictive Parity: {diff:.3f} precision difference")
+                log(f"    {tag} Predictive Parity: {diff:.3f} precision difference")
 
     # Calibration
     for attr, calib_data in metrics.get("calibration", {}).items():
         logging.info(f"\n  {attr.upper()} - Calibration:")
-        is_fair = "[SUCCESS]" if calib_data.get("is_fair", False) else "[ERROR]"
+        fair = calib_data.get("is_fair", False)
+        tag = "[SUCCESS]" if fair else "[FAIL]"
+        log = logging.info if fair else logging.warning
         max_ece_diff = calib_data["max_ece_difference"]
-        logging.info(f"    {is_fair} Max ECE difference: {max_ece_diff:.4f}")
+        log(f"    {tag} Max ECE difference: {max_ece_diff:.4f}")
 
         for group, group_calib in calib_data["group_calibration"].items():
             logging.info(f"      {group}: ECE={group_calib['ece']:.4f}")
@@ -361,7 +363,7 @@ def main():
             )
             all_results[dataset_name] = results
         except Exception as e:
-            logging.exception(f"[ERROR] Failed to assess {dataset_name}: {e}")
+            logging.exception(f"Failed to assess {dataset_name}: {e}")
             continue
 
     # Save combined results

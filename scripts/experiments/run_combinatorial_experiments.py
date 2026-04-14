@@ -877,7 +877,7 @@ def run_single_experiment(
         return results
 
     except Exception as e:
-        logger.error(f"[ERROR] Experiment {exp_id} failed: {str(e)}")
+        logger.error(f"Experiment {exp_id} failed: {str(e)}")
         duration = (datetime.now() - start_time).total_seconds()
 
         return {

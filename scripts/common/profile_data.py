@@ -210,7 +210,7 @@ def main():
         for attr, balance in profile["representation_balance"].items():
             if balance["size_ratio"] and balance["size_ratio"] > 3.0:
                 issues.append(
-                    f"[ERROR] High representation imbalance in {attr} (ratio: {balance['size_ratio']:.1f}x)"
+                    f"High representation imbalance in {attr} (ratio: {balance['size_ratio']:.1f}x)"
                 )
 
         # Check label imbalance
@@ -218,7 +218,7 @@ def main():
             spd = imbalance["statistical_parity_difference"]
             if spd["max_difference"] > 0.15:  # >15% difference
                 issues.append(
-                    f"[ERROR] Significant statistical parity violation in {attr} (diff: {spd['max_difference']:.1%})"
+                    f"Significant statistical parity violation in {attr} (diff: {spd['max_difference']:.1%})"
                 )
 
         if issues:
