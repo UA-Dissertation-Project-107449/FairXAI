@@ -2,7 +2,7 @@
 
 Verbosity levels
 ----------------
-0 (default) — quiet: console shows [PHASE]/[SUCCESS]/[ERROR] tags,
+0 (default) — quiet: console shows [PHASE]/[SUCCESS]/[FAIL] markers,
               plus any WARNING+ messages.
 1 (-v)      — verbose: console shows all INFO+ messages.
 2 (-vv)     — debug: console shows all DEBUG+ messages.
@@ -24,7 +24,7 @@ class _PhaseFilter(logging.Filter):
         if record.levelno >= logging.WARNING:
             return True
         msg = record.getMessage()
-        return msg.startswith("[PHASE]") or msg.startswith("[SUCCESS]") or msg.startswith("[ERROR]")
+        return msg.startswith("[PHASE]") or msg.startswith("[SUCCESS]") or msg.startswith("[FAIL]")
 
 
 class _WarningFormatter(logging.Formatter):

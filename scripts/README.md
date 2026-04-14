@@ -105,7 +105,7 @@ All scripts accept a `-v` / `-vv` flag (stacks with `action='count'`):
 
 | Level | Flag | Console output |
 |-------|------|----------------|
-| 0 (default) | — | `[PHASE]`/`[SUCCESS]`/`[ERROR]` tags + WARNING and above |
+| 0 (default) | — | `[PHASE]`/`[SUCCESS]` markers + WARNING and above |
 | 1 | `-v` | All INFO+ messages |
 | 2 | `-vv` | All DEBUG+ messages |
 
