@@ -201,7 +201,7 @@ def plot_categorical_distribution_grid(
                 ax.text(
                     0.98,
                     0.98,
-                    "⚠️ Imbalanced",
+                    "Imbalanced",
                     transform=ax.transAxes,
                     bbox=dict(boxstyle="round", facecolor="yellow", alpha=0.7),
                     fontsize=9,

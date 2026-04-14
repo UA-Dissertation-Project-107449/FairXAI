@@ -131,7 +131,7 @@ class ExperimentVersioning:
         with open(manifest_path, "w") as f:
             yaml.dump(manifest, f, default_flow_style=False, sort_keys=False)
 
-        self.logger.info(f"✓ Saved manifest: {manifest_path}")
+        self.logger.info(f"[SUCCESS] Saved manifest: {manifest_path}")
         return manifest_path
 
     def save_results(
@@ -170,7 +170,7 @@ class ExperimentVersioning:
         else:
             raise ValueError(f"Unsupported format: {format}")
 
-        self.logger.debug(f"✓ Saved results: {results_path}")
+        self.logger.debug(f"[SUCCESS] Saved results: {results_path}")
         return results_path
 
     def save_predictions(
@@ -211,7 +211,7 @@ class ExperimentVersioning:
             with open(pred_path, "w") as f:
                 json.dump(predictions, f, indent=2, default=str)
 
-        self.logger.debug(f"✓ Saved predictions: {pred_path}")
+        self.logger.debug(f"[SUCCESS] Saved predictions: {pred_path}")
         return pred_path
 
     def archive_previous_run(self) -> Optional[Path]:
@@ -249,7 +249,7 @@ class ExperimentVersioning:
         (self.latest_dir / "models").mkdir(exist_ok=True)
         (self.latest_dir / "xai").mkdir(exist_ok=True)
 
-        self.logger.info(f"✓ Archived previous run to: {archive_path}")
+        self.logger.info(f"[SUCCESS] Archived previous run to: {archive_path}")
         return archive_path
 
     def load_experiment(self, exp_id: str, from_archive: bool = False) -> Dict[str, Any]:
@@ -351,5 +351,5 @@ class ExperimentVersioning:
         with open(summary_path, "w") as f:
             json.dump(summary, f, indent=2)
 
-        self.logger.info(f"✓ Created run summary: {summary_path}")
+        self.logger.info(f"[SUCCESS] Created run summary: {summary_path}")
         return summary

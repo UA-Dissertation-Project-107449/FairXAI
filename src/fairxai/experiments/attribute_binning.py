@@ -1051,7 +1051,7 @@ def generate_summary_report(
     with open(output_file, "w") as f:
         f.write("\n".join(report))
 
-    logger.info(f"✓ Summary report saved: {output_file}")
+    logger.info(f"Summary report saved: {output_file}")
 
 
 def _append_cross_attribute_section(report: List[str], results: List[Dict]) -> None:

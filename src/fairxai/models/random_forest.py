@@ -126,7 +126,7 @@ class RandomForestModel(SklearnClassifierWrapper):
             y_train_proba = self.predict_proba(X_train)
             self.training_metrics = self._calculate_metrics(y_train, y_train_pred, y_train_proba)
 
-            logger.info("✓ cuML RandomForest training complete")
+            logger.info("cuML RandomForest training complete")
             logger.info(f"  Train Accuracy: {self.training_metrics['accuracy']:.4f}")
             logger.info(f"  Train AUC-ROC: {self.training_metrics['auc_roc']:.4f}")
             return self.training_metrics

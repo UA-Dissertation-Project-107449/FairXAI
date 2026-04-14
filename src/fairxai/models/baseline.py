@@ -83,7 +83,7 @@ class BaselineLogisticRegression:
 
         self.training_metrics = self._calculate_metrics(y_train, y_train_pred, y_train_proba)
 
-        logging.info("✓ Training complete")
+        logging.info("Training complete")
         logging.info(f"  Train Accuracy: {self.training_metrics['accuracy']:.4f}")
         logging.info(f"  Train AUC-ROC: {self.training_metrics['auc_roc']:.4f}")
 
@@ -190,7 +190,7 @@ class BaselineLogisticRegression:
             },
             filepath,
         )
-        logging.info(f"✓ Model saved to: {filepath}")
+        logging.info(f"Model saved to: {filepath}")
 
     def load(self, filepath: str):
         """Load model from disk."""
@@ -198,7 +198,7 @@ class BaselineLogisticRegression:
         self.model = data["model"]
         self.feature_names = data["feature_names"]
         self.training_metrics = data["training_metrics"]
-        logging.info(f"✓ Model loaded from: {filepath}")
+        logging.info(f"Model loaded from: {filepath}")
 
 
 def generate_predictions_with_metadata(

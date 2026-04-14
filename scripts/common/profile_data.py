@@ -145,19 +145,17 @@ def main():
                 logging.info(f"    {group}: {rate:.2%} disease prevalence")
 
             spd = imbalance["statistical_parity_difference"]
-            logging.info(f"    ⚠️  Max difference: {spd['max_difference']:.2%}")
+            logging.info(f"Max difference: {spd['max_difference']:.2%}")
             if spd["max_ratio"]:
-                logging.info(f"    ⚠️  Max ratio: {spd['max_ratio']:.2f}x")
+                logging.info(f"Max ratio: {spd['max_ratio']:.2f}x")
 
         logging.info("\n--- Missing Values ---")
         if profile["missing_value_analysis"]["total_missing"] > 0:
-            logging.warning(
-                f"  ⚠️  Total missing: {profile['missing_value_analysis']['total_missing']}"
-            )
+            logging.warning(f"Total missing: {profile['missing_value_analysis']['total_missing']}")
             for col, count in profile["missing_value_analysis"]["columns_with_missing"].items():
                 logging.warning(f"    {col}: {count} missing")
         else:
-            logging.info("  [SUCCESS] No missing values")
+            logging.info("[SUCCESS] No missing values")
 
         # Save individual profile
         profile_file = results_profiling / f"{dataset_name}_data_profile.json"
@@ -222,11 +220,15 @@ def main():
                 )
 
         if issues:
-            logging.warning("  Potential fairness issues detected:")
+            logging.warning(
+                "  Potential fairness issues detected for dataset=%s (%d)",
+                dataset_name,
+                len(issues),
+            )
             for issue in issues:
-                logging.warning(f"    {issue}")
+                logging.info("    - %s", issue)
         else:
-            logging.info("  [SUCCESS] No major fairness issues detected in raw data")
+            logging.info("[SUCCESS] No major fairness issues detected in raw data")
 
     logging.info(f"\n{'='*60}")
     logging.info("[PHASE] Data profiling complete")
