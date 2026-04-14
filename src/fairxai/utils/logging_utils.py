@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import warnings
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
@@ -142,6 +143,15 @@ def setup_logging(
     logger.addHandler(warning_handler)
     logger.addHandler(error_handler)
 
+    # Prevent third-party plotting internals from dominating phase logs.
+    for noisy_logger in (
+        "matplotlib",
+        "matplotlib.font_manager",
+        "PIL",
+        "PIL.PngImagePlugin",
+    ):
+        logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+
     # --- Aggregate run log (append mode, spans all phases) ------------------
     if aggregate_log is not None:
         aggregate_log.parent.mkdir(parents=True, exist_ok=True)
@@ -183,11 +193,37 @@ def setup_logging(
 # ---------------------------------------------------------------------------
 
 
-def _count_log_lines(path: Path) -> int:
-    """Count non-empty lines in a log file — one line ≈ one record."""
+_LOG_RECORD_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} - ")
+
+
+def _count_log_records(path: Path) -> int:
+    """Count timestamped log records (robust to multi-line log messages)."""
     if not path.exists():
         return 0
-    return sum(1 for line in path.read_text().splitlines() if line.strip())
+    record_count = 0
+    saw_content = False
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        saw_content = True
+        if _LOG_RECORD_RE.match(line):
+            record_count += 1
+
+    # Fallback for non-standard logs that still contain content.
+    if saw_content and record_count == 0:
+        return 1
+    return record_count
+
+
+def _collect_phase_counts(phase_dir: Path, suffix: str) -> tuple[int, Dict[str, int]]:
+    """Collect total + per-file counts for *_warnings.log / *_errors.log files."""
+    per_file: Dict[str, int] = {}
+    total = 0
+    for log_path in sorted(phase_dir.glob(f"*_{suffix}.log")):
+        count = _count_log_records(log_path)
+        per_file[log_path.name] = count
+        total += count
+    return total, per_file
 
 
 def summarize_run_logs(run_log_dir: Path) -> Dict[str, Any]:
@@ -210,6 +246,10 @@ def summarize_run_logs(run_log_dir: Path) -> Dict[str, Any]:
         "phases": {},
         "total_warnings": 0,
         "total_errors": 0,
+        "counting": {
+            "method": "timestamped_log_records",
+            "note": "Counts WARNING/ERROR records, not raw lines, so multi-line messages count once.",
+        },
     }
 
     if not run_log_dir.is_dir():
@@ -219,13 +259,19 @@ def summarize_run_logs(run_log_dir: Path) -> Dict[str, Any]:
         if not phase_dir.is_dir():
             continue
 
-        warn_count = sum(_count_log_lines(f) for f in phase_dir.glob("*_warnings.log"))
-        err_count = sum(_count_log_lines(f) for f in phase_dir.glob("*_errors.log"))
+        warn_count, warn_files = _collect_phase_counts(phase_dir, "warnings")
+        err_count, err_files = _collect_phase_counts(phase_dir, "errors")
 
-        summary["phases"][phase_dir.name] = {
+        phase_summary: Dict[str, Any] = {
             "warnings": warn_count,
             "errors": err_count,
         }
+        if warn_files:
+            phase_summary["warning_files"] = warn_files
+        if err_files:
+            phase_summary["error_files"] = err_files
+
+        summary["phases"][phase_dir.name] = phase_summary
         summary["total_warnings"] += warn_count
         summary["total_errors"] += err_count
 
