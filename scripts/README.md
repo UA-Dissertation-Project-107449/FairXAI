@@ -6,15 +6,25 @@ Entry points for running FairXAI pipelines and experiments.
 
 ```
 scripts/
-├── common/                 # Pipeline-agnostic runners
-├── cardiac/                # Cardiac wrappers (add --pipeline cardiac)
+├── common/                 # Pipeline-agnostic runners (train_baseline, assess_predictions, …)
+├── cardiac/                # Cardiac orchestrator + thin wrappers (add --pipeline cardiac)
 ├── dermatology/            # Dermatology wrappers (TODO)
-└── experiments/            # Experiment runners (age binning, mitigation, combinatorial, comparison)
+├── experiments/            # Pipeline experiment stages (called by flows/cardiac_pipeline.py)
+│   ├── run_attribute_binning_analysis.py  # Stage 7: sweep 26+ age-binning strategies
+│   ├── run_mitigation_comparison.py       # Stage 8: pre/in/post-processing mitigation
+│   ├── run_combinatorial_experiments.py   # Stage 9: full experiment matrix
+│   ├── run_experiment_comparison.py       # Stage 10: Pareto frontier + cross-experiment plots
+│   └── _gates.py                          # Shared recall-gate utilities
+└── studies/                # Standalone studies (NOT pipeline stages — run independently)
+    ├── run_hpo.py                         # Hyperparameter optimisation (run before pipeline)
+    ├── run_feature_selection_study.py     # Sensitive-attribute ablation study
+    ├── run_grouping_analysis.py           # Clustering + similarity subgroup discovery
+    └── generate_dissertation_plots.py     # Batch-generate dissertation figures from a run
 ```
 
 ## Run order (cardiac)
 
-| Phase | Script | Description |
+| Stage | Script | Description |
 |-------|--------|-------------|
 | 1 | `load_data.py` | Download / locate raw CSVs |
 | 2 | `profile_data.py` | Generate profiling JSONs (complexity, imbalance, …) |
@@ -22,12 +32,12 @@ scripts/
 | 4 | `preprocess_data.py` | Clean, encode, bin — all binning variants for combinatorial |
 | 5 | `train_baseline.py` | Train baseline models |
 | 6 | `assess_baseline_fairness.py` | Compute fairness metrics on baselines |
-| 7 | `age_binning_analysis.py` | Age-binning sensitivity analysis |
-| 8 | `mitigation_comparison.py` | Pre-/in-/post-processing mitigation comparison |
-| 9 | `run_combinatorial.py` | Combinatorial experiment matrix |
-| 10 | `compare_experiments.py` | Cross-experiment comparison |
+| 7 | `experiments/run_attribute_binning_analysis.py` | Age-binning sensitivity analysis (26+ strategies) |
+| 8 | `experiments/run_mitigation_comparison.py` | Pre-/in-/post-processing mitigation comparison |
+| 9 | `experiments/run_combinatorial_experiments.py` | Full experiment matrix |
+| 10 | `experiments/run_experiment_comparison.py` | Cross-experiment comparison + Pareto frontier |
 
-Phase 3 is controlled by the `RUN_RECOMMENDATIONS` env var (default `true`).
+Stage 3 is controlled by the `RUN_RECOMMENDATIONS` env var (default `true`).
 
 ## Explainability (XAI) configuration
 
@@ -172,7 +182,29 @@ python3 flows/cardiac_pipeline.py \
 
 ## Outputs
 
-All outputs are written under `output/<pipeline>/runs/<run_id>/` when `RUN_ID` is set. If not set, outputs go to the default pipeline folders under `output/<pipeline>/`.
+Pipeline outputs go to `output/<pipeline>/runs/<run_id>/` — `RUN_ID` is always required.
+Study outputs go to `output/<pipeline>/studies/<study_type>/` — standalone, not run-scoped.
+
+```
+output/cardiac/
+├── runs/
+│   └── run_<timestamp>_<pid>_<uuid>/
+│       ├── profiling/
+│       ├── recommendations/
+│       ├── baseline/{models/, results/, fairness/}
+│       └── experiments/full/{attribute_binning/, mitigation/, comparisons/, …}
+├── studies/
+│   ├── hpo/                         # flat: best_params_*.json + latest.txt
+│   ├── feature_selection/
+│   │   └── <study_id>/{study_summary.json, runs/fs_<mode>__<model>/baseline/}
+│   ├── grouping/
+│   │   └── <study_id>/{cluster_assignments.csv, …}
+│   └── dissertation_figures/
+│       └── <run_id>/{fairness/, transformations/, cross_model/}
+├── latest_run -> runs/<latest>
+├── latest_run.txt
+└── run_history.jsonl
+```
 
 ## Utility scripts
 
@@ -181,31 +213,44 @@ Two helper scripts live at the **project root** (not inside `scripts/`):
 - **`setup.sh`** — bootstraps the virtual environment, checks Python ≥ 3.10, installs `requirements.txt`.
 - **`cleanup.sh`** — removes generated outputs (`output/`, `data/processed/`, `data/raw/`, `logs/`). Flags: `--output-only`, `--keep-latest`, `--nuke-env`, `--dry-run`, `-y`.
 
-## Experiments
+## Studies
 
-| Script | Purpose |
-|--------|---------|
-| `experiments/run_hpo.py` | Hyperparameter optimization (GridSearchCV / RandomizedSearchCV). Run before combinatorial sweep. Outputs `output/<pipeline>/hpo/best_params_{dataset}_{model}.json`. |
-| `experiments/run_combinatorial_experiments.py` | Full experiment matrix. Auto-loads HPO params from `output/<pipeline>/hpo/` if present. Accepts `--feature-selection-mode` (see data/README.md). |
-| `experiments/run_attribute_binning_analysis.py` | Age-binning sweep (26 strategies across 5 families). |
-| `experiments/run_mitigation_comparison.py` | Focused mitigation strategy comparison. |
-| `experiments/run_experiment_comparison.py` | Cross-experiment comparison (Pareto frontier, trade-off scatter). |
+Standalone investigations that run independently of the main pipeline.
+Run them before or after pipeline runs as needed — they do not block pipeline execution.
+
+| Script | Purpose | Output |
+|--------|---------|--------|
+| `studies/run_hpo.py` | Hyperparameter optimisation (GridSearchCV/RandomizedSearchCV). Auto-loaded by combinatorial sweep. | `output/<pipeline>/studies/hpo/best_params_{dataset}_{model}.json` |
+| `studies/run_feature_selection_study.py` | Sensitive-attribute ablation — trains baselines for each feature-selection mode × model. | `output/<pipeline>/studies/feature_selection/<study_id>/` |
+| `studies/run_grouping_analysis.py` | Clustering + similarity subgroup discovery. Writes `group_cluster` back to processed CSVs. | `output/<pipeline>/studies/grouping/<study_id>/` |
+| `studies/generate_dissertation_plots.py` | Batch-generate dissertation figures from a completed pipeline run. | `output/<pipeline>/studies/dissertation_figures/<run_id>/` |
 
 ### HPO workflow
 
-HPO should run before the main combinatorial sweep:
+HPO should run before the combinatorial sweep for better hyperparameters:
 
 ```bash
-python scripts/experiments/run_hpo.py --pipeline cardiac
-# → writes output/cardiac/hpo/best_params_<dataset>_<model>.json
+python scripts/studies/run_hpo.py --pipeline cardiac --datasets cleveland
+# → writes output/cardiac/studies/hpo/best_params_cleveland_<model>.json
 
-python scripts/experiments/run_combinatorial_experiments.py --pipeline cardiac
-# → auto-loads HPO params if output/cardiac/hpo/ exists
+# Main pipeline auto-loads HPO params when they exist:
+python flows/cardiac_pipeline.py --datasets cleveland
 ```
 
 HPO uses `n_jobs=-1` (it is the only process running). The combinatorial sweep then uses the
 HPO-found params as model defaults, with hardware overrides (`device`, `n_jobs`) re-applied on
 top so HPO cannot clobber GPU or threading settings.
+
+## Experiments
+
+Pipeline stages called automatically by `flows/cardiac_pipeline.py` and `scripts/cardiac/cardiac_pipeline.sh`.
+
+| Script | Purpose |
+|--------|---------|
+| `experiments/run_attribute_binning_analysis.py` | Stage 7: age-binning sweep (26+ strategies across 5 families). |
+| `experiments/run_mitigation_comparison.py` | Stage 8: focused mitigation strategy comparison. |
+| `experiments/run_combinatorial_experiments.py` | Stage 9: full experiment matrix. Auto-loads HPO params from `output/<pipeline>/studies/hpo/`. |
+| `experiments/run_experiment_comparison.py` | Stage 10: cross-experiment comparison (Pareto frontier, trade-off scatter). |
 
 ### Feature selection mode
 

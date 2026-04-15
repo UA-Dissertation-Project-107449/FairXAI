@@ -1427,7 +1427,7 @@ def run_combinatorial_analysis(
     # Generate all experiment combinations
     experiments = []
     # HPO: load best params directory (auto-detected; silently skipped when absent).
-    hpo_output_dir = project_root / f"output/{pipeline}/hpo"
+    hpo_output_dir = project_root / f"output/{pipeline}/studies/hpo"
     hpo_dir: Optional[Path] = hpo_output_dir if hpo_output_dir.exists() else None
     if hpo_dir:
         logger.info(f"[HPO] Using pre-computed HPO params from: {hpo_dir}")

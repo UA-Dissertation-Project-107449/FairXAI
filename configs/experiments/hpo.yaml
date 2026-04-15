@@ -5,7 +5,7 @@
 #       in-processing technique listed under mitigation_techniques in combinatorial.yaml).
 #
 # Flow:
-#   1. Run scripts/experiments/run_hpo.py → output/cardiac/hpo/best_params_<dataset>_<model>.json
+#   1. Run scripts/studies/run_hpo.py → output/cardiac/studies/hpo/best_params_<dataset>_<model>.json
 #   2. The combinatorial runner / train_baseline.py loads those files and uses
 #      them as model defaults, so every subsequent experiment benefits from tuned params.
 #
@@ -56,4 +56,4 @@ grids:
       colsample_bytree: [0.7, 0.9]
 
 # Output directory (relative to project root)
-output_dir: output/cardiac/hpo
+output_dir: output/cardiac/studies/hpo
