@@ -94,6 +94,8 @@ def test_all_four_models_produce_prediction_csvs(tiny_pipeline_config, model_sub
         str(tiny_pipeline_config),
         "--pipeline",
         "cardiac",
+        "--output-dir",
+        str(tiny_pipeline_config / "baseline"),
         "--model-types",
         *model_subset,
     ]
