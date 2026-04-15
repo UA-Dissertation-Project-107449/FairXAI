@@ -257,9 +257,9 @@ def _select_top_experiments_for_xai(
     """Select top-k experiments for deferred XAI, using fairness-first ordering.
 
     Ranking tiers (applied per-dataset when ``per_dataset=True``):
-    1. Tier 1 (strict): recall full_pass AND fairness gate passed → sorted by score desc
-    2. Tier 2 (strict): recall lower_tier AND fairness gate passed → sorted by score desc
-    3. Fallback (when strict set is empty): all scored configs → sorted by
+    1. Tier 1 (strict): recall full_pass AND fairness gate passed; sorted by score desc
+    2. Tier 2 (strict): recall lower_tier AND fairness gate passed; sorted by score desc
+    3. Fallback (when strict set is empty): all scored configs; sorted by
        fairness_gap asc then score desc; tagged ``selection_mode='fallback'``
 
     Experiments that failed the recall hard floor gate (``gate_recall_tier='fail'``)
@@ -822,16 +822,12 @@ def run_single_experiment(
     start_time = datetime.now()
 
     try:
-        logger.info(f"\n{'='*80}")
-        logger.info(f"Experiment {exp_id}")
-        logger.info(f"{'='*80}")
-        logger.info(f"Dataset: {config['dataset']}")
-        logger.info(f"Binning: {config['binning_strategy']}")
-        logger.info(f"Mitigation: {config['mitigation_technique']}")
         logger.info(
-            f"Model: {config.get('model_type', 'logistic_regression')} [{config.get('model_variant', 'default')}]"
+            f"[EXPERIMENT] id={exp_id} dataset={config['dataset']} "
+            f"binning={config['binning_strategy']} mitigation={config['mitigation_technique']} "
+            f"training={config['training_method']} "
+            f"model={config.get('model_type', 'logistic_regression')}[{config.get('model_variant', 'default')}]"
         )
-        logger.info(f"Training: {config['training_method']}")
 
         # Load data
         data = load_processed_data(config["dataset"], config["binning_strategy"], processed_dir)
@@ -856,8 +852,10 @@ def run_single_experiment(
                 "No sensitive/group columns available for mitigation; check preprocessing and config"
             )
 
-        logger.info(f"Data loaded: train={len(splits['X_train'])}, test={len(splits['X_test'])}")
-        logger.info(f"Features: {splits['X_train'].shape[1]}")
+        logger.info(
+            f"[DATA] train_rows={len(splits['X_train'])} test_rows={len(splits['X_test'])} "
+            f"n_features={splits['X_train'].shape[1]}"
+        )
 
         # Train model based on training method
         if config["training_method"] == "kfold_cv":
@@ -873,7 +871,9 @@ def run_single_experiment(
             "status": "success",
         }
 
-        logger.info(f"[SUCCESS] Experiment {exp_id} completed in {duration:.1f}s")
+        logger.info(
+            f"[SUCCESS] Experiment complete: exp_id={exp_id} duration_seconds={duration:.1f}"
+        )
         return results
 
     except Exception as e:
@@ -903,7 +903,7 @@ def run_single_split_experiment(
     """
     Run experiment with single train/test split.
     """
-    logger.info("\nTraining with single train/test split...")
+    logger.info("[TRAINING] method=single_split")
     xai_cfg = config.get("xai", {})
     xai_enabled = _is_xai_enabled_for_phase(xai_cfg)
 
@@ -949,7 +949,7 @@ def run_single_split_experiment(
             "predictions": {"y_pred": y_pred, "y_proba": y_proba},
         }
     elif combo_chain:
-        # Sequential combo: pre → in → post chain
+        # Sequential combo: pre to in to post chain
         fairness_base_params = config.get("fairness_base_model_params")
         result = engine.apply_combo(
             techniques=combo_chain,
@@ -1065,7 +1065,7 @@ def run_cv_experiment(
     Run experiment with k-fold cross-validation.
     """
     n_folds = config.get("cv_folds", 5)
-    logger.info(f"\nTraining with {n_folds}-fold cross-validation...")
+    logger.info(f"[TRAINING] method=kfold_cv folds={n_folds}")
 
     # Combine train and test for CV (we'll use full dataset for CV)
     X_full = pd.concat([splits["X_train"], splits["X_test"]], ignore_index=True)
@@ -1160,7 +1160,7 @@ def run_cv_experiment(
             )
 
         for fold_idx, (train_idx, val_idx) in enumerate(folds):
-            logger.info(f"\nMitigation CV fold {fold_idx + 1}/{n_folds}...")
+            logger.info(f"[FOLD] method=mitigation_cv fold={fold_idx + 1}/{n_folds}")
 
             X_train = X_full.iloc[train_idx]
             y_train = y_full.iloc[train_idx]
@@ -1236,7 +1236,9 @@ def run_cv_experiment(
                     except Exception as exc:
                         logger.warning(f"  Fold {fold_idx} XAI failed: {exc}")
                 elif raw_fold_model is not None:
-                    logger.info(f"  Fold {fold_idx}: XAI skipped — model type not XAI-compatible")
+                    logger.info(
+                        f"[XAI] fold={fold_idx + 1}/{n_folds} skipped=model_type_not_xai_compatible"
+                    )
 
             fold_results.append(fold_result_entry)
 
@@ -1297,9 +1299,9 @@ def run_cv_experiment(
     )
 
     agg = cv_results["aggregated_metrics"]
-    logger.info(f"  Accuracy: {agg['accuracy']['mean']:.3f} ± {agg['accuracy']['std']:.3f}")
-    logger.info(f"  Recall: {agg['recall']['mean']:.3f} ± {agg['recall']['std']:.3f}")
-    logger.info(f"  F1: {agg['f1_score']['mean']:.3f} ± {agg['f1_score']['std']:.3f}")
+    logger.info(f"  Accuracy: {agg['accuracy']['mean']:.3f} +/- {agg['accuracy']['std']:.3f}")
+    logger.info(f"  Recall: {agg['recall']['mean']:.3f} +/- {agg['recall']['std']:.3f}")
+    logger.info(f"  F1: {agg['f1_score']['mean']:.3f} +/- {agg['f1_score']['std']:.3f}")
 
     return {
         "experiment_id": exp_id,
@@ -1336,10 +1338,10 @@ def run_combinatorial_analysis(
     )
     logger = logging.getLogger(__name__)
 
-    logger.info("=" * 80)
-    logger.info("COMBINATORIAL FAIRNESS EXPERIMENTS")
-    logger.info("=" * 80)
     logger.info("[PHASE] Combinatorial experiments started")
+    logger.info(
+        f"[RUN_CONTEXT] pipeline={pipeline} run_id={run_id or 'none'} config_path={config_path}"
+    )
 
     # Load configuration
     config_path = Path(config_path)
@@ -1368,7 +1370,7 @@ def run_combinatorial_analysis(
         )
         sys.exit(1)
 
-    # Load gate thresholds: experiment config overrides → thresholds.yaml fallback.
+    # Load gate thresholds: experiment config overrides with thresholds.yaml fallback.
     # Must happen before any experiment result is annotated or ranked.
     gate_thresholds = load_gate_thresholds(config, project_root)
     logger.info(
@@ -1490,7 +1492,7 @@ def run_combinatorial_analysis(
 
                             experiments.append((exp_id, exp_config))
 
-    # Combo experiments: pre → in → post chains, logistic_regression only.
+    # Combo experiments: pre to in to post chains, logistic_regression only.
     for combo in config.get("mitigation_combos", []):
         for dataset in selected_datasets:
             if isinstance(fairness_base_params_cfg, dict) and dataset in fairness_base_params_cfg:
@@ -1529,22 +1531,22 @@ def run_combinatorial_analysis(
                         experiments.append((exp_id, exp_config))
 
     total_experiments = len(experiments)
-    logger.info(f"\nTotal experiments to run: {total_experiments}")
-    logger.info(f"  Datasets: {len(selected_datasets)} -> {selected_datasets}")
+    logger.info(f"[PLAN] Total experiments: {total_experiments}")
+    logger.info(f"  Datasets ({len(selected_datasets)}): {selected_datasets}")
     logger.info(f"  Binning strategies: {len(config['binning_strategies'])}")
     logger.info(f"  Mitigation techniques: {len(config['mitigation_techniques'])}")
     logger.info(f"  Training methods: {len(config['training_methods'])}")
-    logger.info(f"  Model types: {len(model_types)} -> {model_types}")
+    logger.info(f"  Model types ({len(model_types)}): {model_types}")
     logger.info(f"  Parallel jobs: {n_jobs}")
 
     # Save manifests first
-    logger.info("\nSaving experiment manifests...")
+    logger.info("Saving experiment manifests...")
     for exp_id, exp_config in experiments:
         _sm = "holdout" if exp_config["training_method"] == "single_split" else "cv"
         versioning.save_manifest(exp_id, exp_config, split_method=_sm)
 
     # Run experiments
-    logger.info("\nStarting experiments...")
+    logger.info("Starting experiments...")
     project_root = Path(__file__).parent.parent.parent
     processed_dir = Path(config["paths"]["processed_dir"])
     if not processed_dir.is_absolute():
@@ -1555,7 +1557,7 @@ def run_combinatorial_analysis(
         # Sequential execution
         results = []
         for i, (exp_id, exp_config) in enumerate(experiments, 1):
-            logger.info(f"\n[{i}/{total_experiments}] Running experiment {exp_id}...")
+            logger.info(f"[RUN] Experiment {i}/{total_experiments}: exp_id={exp_id}")
             result = run_single_experiment(
                 exp_id, exp_config, versioning, processed_dir, schema_cfg, logger, target_col
             )
@@ -1586,7 +1588,7 @@ def run_combinatorial_analysis(
         per_dataset = bool(xai_cfg_global.get("top_k_per_dataset", True))
         selected = _select_top_experiments_for_xai(results, top_k=top_k, per_dataset=per_dataset)
 
-        logger.info("\nStarting deferred XAI replay for top configurations...")
+        logger.info("[XAI] Starting deferred replay for top configurations")
         logger.info(f"  Selected configs: {len(selected)}")
 
         if selected:
@@ -1633,22 +1635,18 @@ def run_combinatorial_analysis(
                     )
 
     # Create summary
-    logger.info("\n" + "=" * 80)
-    logger.info("EXPERIMENTS COMPLETE")
-    logger.info("=" * 80)
-
     versioning.create_summary()
+    logger.info("[PHASE] Combinatorial experiments complete")
 
     # Count successes and failures
     n_success = sum(1 for r in results if r["execution"]["status"] == "success")
     n_failed = total_experiments - n_success
 
-    logger.info("\nResults summary:")
+    logger.info("[SUMMARY] Results")
     logger.info(f"  Total experiments: {total_experiments}")
     logger.info(f"  Successful: {n_success}")
     logger.info(f"  Failed: {n_failed}")
-    logger.info(f"\nResults saved to: {versioning.latest_dir}")
-    logger.info("[PHASE] Combinatorial experiments complete")
+    logger.info(f"Results saved to: {versioning.latest_dir}")
 
     if run_id:
         update_latest_pointer(base_output_dir, versioning.latest_dir, logger)

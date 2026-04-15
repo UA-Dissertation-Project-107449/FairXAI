@@ -87,9 +87,9 @@ def evaluate_recall_gate(
 
     Tiers
     -----
-    - ``recall < hard_floor``               → fail  (hard exclusion, never ranked)
-    - ``hard_floor ≤ recall < min_recall``  → lower_tier  (included, ranked below full_pass)
-    - ``recall ≥ min_recall``               → full_pass
+    - ``recall < hard_floor``: fail (hard exclusion, never ranked)
+    - ``hard_floor <= recall < min_recall``: lower_tier (included, ranked below full_pass)
+    - ``recall >= min_recall``: full_pass
 
     Parameters
     ----------
@@ -132,7 +132,7 @@ def evaluate_fairness_gate(
     Parameters
     ----------
     fairness_gap:
-        Max demographic parity (or equalized odds) difference; ``None`` → pass
+        Max demographic parity (or equalized odds) difference; ``None`` passes
         with a warning (missing fairness data is not penalised here).
     max_violation:
         Maximum tolerated fairness gap (e.g. 0.10).

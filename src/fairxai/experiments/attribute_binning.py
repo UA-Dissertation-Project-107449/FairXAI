@@ -791,7 +791,7 @@ def analyze_strategy_comprehensive(
         overall_sensitive_distribution, cross_attribute_impact,
         bins, labels.
     """
-    # Normalise sensitive_col → list
+    # Normalise sensitive_col to list
     if isinstance(sensitive_col, str):
         sensitive_cols = [sensitive_col]
     else:
@@ -799,9 +799,7 @@ def analyze_strategy_comprehensive(
 
     primary_attr = sensitive_cols[0]
 
-    logger.info(f"\n{'='*60}")
-    logger.info(f"Analyzing strategy: {strategy_name} on {dataset_name}")
-    logger.info(f"{'='*60}")
+    logger.info(f"[ANALYSIS] strategy={strategy_name} dataset={dataset_name}")
 
     # Apply binning
     df_binned = apply_binning(df, bins, labels, col, "age_group_exp")

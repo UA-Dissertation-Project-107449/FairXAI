@@ -120,7 +120,7 @@ def load_all_results(versioning: ExperimentVersioning) -> pd.DataFrame:
                     dp_diffs = []
                     eq_diffs = []
 
-                    # New structure: group_fairness -> {attr} -> {demographic_parity, equalized_odds}
+                    # New structure: group_fairness to {attr} to {demographic_parity, equalized_odds}
                     group_fairness = fairness.get("group_fairness", {})
                     if group_fairness:
                         for attr, metrics in group_fairness.items():
@@ -152,7 +152,7 @@ def load_all_results(versioning: ExperimentVersioning) -> pd.DataFrame:
                                 if pd.notna(fpr_diff):
                                     eq_diffs.append(fpr_diff)
 
-                    # Legacy structure: fairness_metrics -> demographic_parity / equalized_odds
+                    # Legacy structure: fairness_metrics with demographic_parity / equalized_odds
                     if "demographic_parity" in fairness:
                         for attr, metrics in fairness["demographic_parity"].items():
                             max_diff = metrics.get("max_difference", np.nan)
@@ -208,7 +208,7 @@ def compare_binning_strategies(df: pd.DataFrame, output_dir: Path):
     """
     Create binning strategy comparison table.
 
-    Pivot table: binning_strategy × dataset with performance metrics
+    Pivot table: binning_strategy x dataset with performance metrics
     """
     if df.empty:
         logging.warning("No data for binning comparison")
@@ -241,7 +241,7 @@ def compare_mitigation_techniques(df: pd.DataFrame, output_dir: Path):
     """
     Create mitigation technique comparison table.
 
-    Pivot table: mitigation_technique × dataset with performance metrics
+    Pivot table: mitigation_technique x dataset with performance metrics
     """
     if df.empty:
         logging.warning("No data for mitigation comparison")
@@ -278,9 +278,10 @@ def filter_best_configurations(
     """Filter configurations using fairness-first gate logic (consistent with combinatorial runner).
 
     Gates (applied as hard exclusions, config-driven):
-    1. Recall hard floor: recall < ``recall_hard_floor`` → excluded
-    2. Fairness gate: ``fairness_gap > max_fairness_violation`` → excluded
-    3. Performance drop: ``(baseline_score - score) / baseline_score > performance_threshold`` → excluded
+     1. Recall hard floor: exclude when recall < ``recall_hard_floor``
+     2. Fairness gate: exclude when ``fairness_gap > max_fairness_violation``
+     3. Performance drop: exclude when
+         ``(baseline_score - score) / baseline_score > performance_threshold``
 
     When strict gates filter everything, a fallback CSV is emitted (ranked by
     fairness_gap asc, score desc) tagged with ``selection_mode='fallback'``.
@@ -372,7 +373,7 @@ def filter_best_configurations(
         logging.info(f"  Found {len(best_df)} configurations meeting strict gates")
         return best_df
 
-    # Fallback: no configs passed strict gates → emit fallback shortlist
+    # Fallback: no configs passed strict gates; emit fallback shortlist
     logging.warning(
         "No configurations passed strict gates "
         f"(recall_hard_floor={recall_hard_floor:.2f}, "
@@ -424,8 +425,8 @@ def _extract_per_group_fairness(fairness_metrics: dict) -> list:
     Returns a list of records:
         {sensitive_attr, group, metric, value}
 
-    Covers group_fairness → {attr} → {demographic_parity, equalized_odds,
-    equal_opportunity, predictive_parity} → group_rates / group_metrics.
+    Covers group_fairness to {attr} to {demographic_parity, equalized_odds,
+    equal_opportunity, predictive_parity} to group_rates / group_metrics.
     """
     records = []
     group_fairness = fairness_metrics.get("group_fairness", {}) if fairness_metrics else {}
@@ -634,9 +635,6 @@ def run_comparison_analysis(
     if fairness_threshold is not None:
         gate_thresholds["max_fairness_violation"] = float(fairness_threshold)
 
-    logging.info("=" * 80)
-    logging.info("EXPERIMENT COMPARISON")
-    logging.info("=" * 80)
     logging.info("[PHASE] Comparison started")
     logging.info(
         f"Gate thresholds: recall_hard_floor={gate_thresholds['recall_hard_floor']:.2f}, "
@@ -663,6 +661,11 @@ def run_comparison_analysis(
         if (candidate / "manifests").exists() or (candidate / "results").exists():
             run_dir = candidate
 
+    logging.info(
+        f"[RUN_CONTEXT] pipeline={pipeline} run_id={run_id or 'none'} "
+        f"base_output_dir={base_output_dir} run_dir={run_dir if run_dir else 'not_found'}"
+    )
+
     if run_dir is None or not run_dir.exists():
         logging.error(f"No run directory found under {base_output_dir}")
         logging.error("Run combinatorial experiments first")
@@ -676,16 +679,18 @@ def run_comparison_analysis(
     run_root = run_dir.parent.parent if run_dir else None
 
     # Load all results
-    logging.info("\nLoading experiment results...")
+    logging.info("Loading experiment results...")
     df = load_all_results(versioning)
 
     if df.empty:
         logging.error("No results loaded")
         return
 
-    logging.info(f"Loaded {len(df)} experiments")
-    logging.info(f"  Successful: {(df['status'] == 'success').sum()}")
-    logging.info(f"  Failed: {(df['status'] == 'failed').sum()}")
+    logging.info(
+        f"Loaded experiments: total={len(df)} "
+        f"successful={(df['status'] == 'success').sum()} "
+        f"failed={(df['status'] == 'failed').sum()}"
+    )
 
     # Filter successful experiments
     df_success = df[df["status"] == "success"].copy()
@@ -774,16 +779,16 @@ def run_comparison_analysis(
     # Save full results table
     full_results_file = output_dir / "full_comparison.csv"
     df_success.to_csv(full_results_file, index=False)
-    logging.info(f"\n[SUCCESS] Saved full results: {full_results_file}")
+    logging.info(f"[SUCCESS] Saved full results: {full_results_file}")
 
     # Create comparison tables
-    logging.info("\nGenerating comparison tables...")
+    logging.info("Generating comparison tables...")
 
     compare_binning_strategies(df_success, output_dir)
     compare_mitigation_techniques(df_success, output_dir)
 
     # Filter best configurations
-    logging.info("\nFiltering best configurations...")
+    logging.info("Filtering best configurations...")
     best_configs = filter_best_configurations(
         df_success,
         output_dir,
@@ -831,7 +836,7 @@ def run_comparison_analysis(
     combo_counts.to_csv(combo_file, index=False)
     logging.info(f"[SUCCESS] Saved experiment counts: {combo_file}")
 
-    # Trade-off visuals (per dataset, then per dataset × model_type)
+    # Trade-off visuals (per dataset, then per dataset x model_type)
     if not no_plots:
         for dataset in sorted(df_success["dataset"].unique()):
             subset = df_success[df_success["dataset"] == dataset].copy()
@@ -955,17 +960,13 @@ def run_comparison_analysis(
         logging.debug("Skipping per-group comparison: run_root not available")
 
     # Print summary
-    logging.info("\n" + "=" * 80)
-    logging.info("COMPARISON COMPLETE")
-    logging.info("=" * 80)
     logging.info("[PHASE] Comparison complete")
-    logging.info(f"Results saved to: {output_dir}")
-    logging.info("\nFiles created:")
-    logging.info(f"  - full_comparison.csv ({len(df_success)} experiments)")
-    logging.info("  - binning_comparison.csv")
-    logging.info("  - mitigation_comparison.csv")
+    logging.info(
+        f"[SUMMARY] output_dir={output_dir} successful_experiments={len(df_success)} "
+        f"best_configs={0 if best_configs is None else len(best_configs)}"
+    )
     if best_configs is not None and not best_configs.empty:
-        logging.info(f"  - best_configurations.csv ({len(best_configs)} configs)")
+        logging.info(f"Best configurations saved: count={len(best_configs)}")
 
 
 def main():

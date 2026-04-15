@@ -59,7 +59,7 @@ def load_dataset_for_binning(
     Returns:
         DataFrame with age_raw, sex, and heart_disease columns
     """
-    logging.info(f"\nLoading dataset: {dataset_name}")
+    logging.info(f"Loading dataset: {dataset_name}")
 
     file_path = data_dir / f"{dataset_name}_standardized.csv"
 
@@ -104,7 +104,7 @@ def run_strategy_analysis(
     Returns:
         Analysis result dictionary
     """
-    logging.info(f"\nAnalyzing strategy: {strategy_name}")
+    logging.info(f"Analyzing strategy: {strategy_name}")
 
     try:
         # Create binning strategy (config-driven)
@@ -179,7 +179,7 @@ def run_analysis(
     # Keep single primary attr for backward-compat helpers (e.g. load_dataset)
     primary_sensitive_col = sensitive_attrs[0] if sensitive_attrs else "sex"
 
-    # Resolve data directory early — needed for auto-detection
+    # Resolve data directory early - needed for auto-detection
     data_dir = project_root / pipeline_cfg["paths"]["raw_dir"]
 
     if datasets:
@@ -288,7 +288,7 @@ def run_analysis(
         "fairness": scoring_cfg.get("fairness_sensitivity_weight", 0.30),
     }
 
-    logging.info("\nScoring weights:")
+    logging.info("Scoring weights:")
     logging.info(f"  Sample size: {scoring_weights['sample_size']:.0%}")
     logging.info(f"  Group balance: {scoring_weights['balance']:.0%}")
     logging.info(f"  Fairness sensitivity: {scoring_weights['fairness']:.0%}")
@@ -297,9 +297,7 @@ def run_analysis(
     all_results = []
 
     for dataset_name in datasets:
-        logging.info(f"\n{'='*80}")
-        logging.info(f"PROCESSING: {dataset_name.upper()}")
-        logging.info(f"{'='*80}")
+        logging.info("[DATASET] Processing dataset=%s", dataset_name)
 
         try:
             # Load dataset
@@ -340,9 +338,7 @@ def run_analysis(
         )
 
     # Generate comparison and reports
-    logging.info(f"\n{'='*80}")
-    logging.info("GENERATING COMPARISON REPORT")
-    logging.info(f"{'='*80}")
+    logging.info("[PHASE] Generating comparison report")
 
     # Comparison table
     comparison_df = compare_strategies(all_results, by_dataset=True)
@@ -353,7 +349,7 @@ def run_analysis(
     report_file = output_dir / f"attribute_binning_report_{timestamp}.md"
 
     comparison_df.to_csv(csv_file, index=False)
-    logging.info(f"\n[SUCCESS] Saved CSV: {csv_file}")
+    logging.info(f"[SUCCESS] Saved CSV: {csv_file}")
 
     with open(json_file, "w") as f:
         json.dump(all_results, f, indent=2, default=str)
@@ -364,15 +360,11 @@ def run_analysis(
     logging.info(f"[SUCCESS] Saved Report: {report_file}")
 
     # Print summary
-    logging.info(f"\n{'='*80}")
-    logging.info("RESULTS SUMMARY")
-    logging.info(f"{'='*80}")
-    logging.info("\n" + comparison_df.to_string(index=False))
+    logging.info("Results summary: rows=%d", len(comparison_df))
+    logging.debug("Comparison table:\n%s", comparison_df.to_string(index=False))
 
     # Recommendations
-    logging.info(f"\n{'='*80}")
-    logging.info("RECOMMENDATIONS")
-    logging.info(f"{'='*80}")
+    logging.info("[PHASE] Recommendations")
 
     # Find top strategies per dataset (using pre-computed scores)
     for dataset in datasets:
@@ -383,7 +375,7 @@ def run_analysis(
         # Sort by pre-computed score
         dataset_results.sort(key=lambda x: x.get("score", 0), reverse=True)
 
-        logging.info(f"\nTop 3 strategies for {dataset}:")
+        logging.info(f"Top 3 strategies for {dataset}:")
         for i, result in enumerate(dataset_results[:3], 1):
             metrics = result["fairness_metrics"]
             logging.info(f"  {i}. {result['strategy']} (score: {result['score']:.3f})")
@@ -394,14 +386,11 @@ def run_analysis(
                 f"SP diff: {metrics['max_sp_difference']:.3f}"
             )
 
-    logging.info(f"\n{'='*80}")
-    logging.info("EXPERIMENT COMPLETE")
-    logging.info(f"{'='*80}")
-    logging.info(f"\nResults saved to: {output_dir}")
+    logging.info("[PHASE] Attribute binning analysis complete")
+    logging.info(f"Results saved to: {output_dir}")
     logging.info(f"  - Comparison CSV: {csv_file.name}")
     logging.info(f"  - Detailed JSON: {json_file.name}")
     logging.info(f"  - Summary Report: {report_file.name}")
-    logging.info("[PHASE] Attribute binning analysis complete")
 
     if run_id:
         update_latest_pointer(base_output, run_dir, logger)
