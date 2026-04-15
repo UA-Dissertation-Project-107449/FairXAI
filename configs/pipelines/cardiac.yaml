@@ -4,10 +4,6 @@ paths:
   external_dir: data/external/cardiac
   raw_dir: data/raw/cardiac
   processed_dir: data/processed/cardiac
-  experiments_dir: output/cardiac/baseline/latest_run/results
-  models_dir: output/cardiac/baseline/latest_run/models
-  results_fairness_dir: output/cardiac/baseline/latest_run/fairness
-  results_binning_dir: output/cardiac/experiments/full/latest_run/binning
 
 runtime:
   datasets: [cleveland]

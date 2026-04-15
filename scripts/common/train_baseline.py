@@ -30,7 +30,6 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from fairxai.cli.runner_base import load_pipeline_config, resolve_project_root, setup_phase_logging
-from fairxai.cli.runner_utils import archive_latest_run
 from fairxai.data.feature_selection import build_feature_set
 from fairxai.experiments.data_io import build_schema_excludes, resolve_base_dataset
 from fairxai.explainability.tabular import (
@@ -297,13 +296,24 @@ def main():
         help="Optional dataset names to train (CLI override).",
     )
     parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help=(
+            "Override baseline output directory (baseline_root). "
+            "results/ and models/ are created inside this path. "
+            "Used by scripts/studies/run_feature_selection_study.py to "
+            "place sub-run artifacts under studies/feature_selection/<study_id>/."
+        ),
+    )
+    parser.add_argument(
         "--use-hpo",
         action="store_true",
         default=False,
         help=(
             "Load best hyperparameters from a previous HPO run "
-            "(output/cardiac/hpo/best_params_<dataset>_<model>.json). "
-            "Run scripts/experiments/run_hpo.py first."
+            "(output/cardiac/studies/hpo/best_params_<dataset>_<model>.json). "
+            "Run scripts/studies/run_hpo.py first."
         ),
     )
     parser.add_argument(
@@ -349,13 +359,18 @@ def main():
         schema_cfg = json.load(f)
     data_processed = project_root / pipeline_cfg["paths"]["processed_dir"]
     run_id = os.getenv("RUN_ID")
-    if run_id:
-        baseline_root = project_root / f"output/{pipeline}/runs/{run_id}/baseline"
-        experiments_dir = baseline_root / "results"
-        models_dir = baseline_root / "models"
+    if args.output_dir:
+        baseline_root = Path(args.output_dir)
     else:
-        experiments_dir = project_root / pipeline_cfg["paths"]["experiments_dir"]
-        models_dir = project_root / pipeline_cfg["paths"]["models_dir"]
+        if not run_id:
+            raise RuntimeError(
+                "RUN_ID is not set and --output-dir was not provided. "
+                "train_baseline.py must be called from the pipeline (RUN_ID exported) "
+                "or via a study script that passes --output-dir."
+            )
+        baseline_root = project_root / f"output/{pipeline}/runs/{run_id}/baseline"
+    experiments_dir = baseline_root / "results"
+    models_dir = baseline_root / "models"
     setup_phase_logging(
         project_root,
         "training_baseline.log",
@@ -363,19 +378,11 @@ def main():
         run_id=run_id,
         stage_name="train",
     )
-    if not run_id:
-        baseline_root = project_root / f"output/{pipeline}/baseline"
 
     # Setup
     logging.info("[PHASE] Baseline training started")
     logging.info(f"Effective project root: {project_root}")
     logging.info(f"Resolved pipeline config: {pipeline_cfg_path}")
-    if not run_id:
-        archive_latest_run(
-            baseline_root,
-            enabled=(os.getenv("ARCHIVE_BASELINE", "true").lower() == "true"),
-            logger=logging.getLogger(__name__),
-        )
 
     logging.info(f"  Run root: {baseline_root}")
     logging.info(f"  Models will be saved to: {models_dir}")
@@ -498,7 +505,7 @@ def main():
 
             try:
                 model_class = get_model_class(model_type)
-                hpo_dir = project_root / f"output/{pipeline}/hpo" if args.use_hpo else None
+                hpo_dir = project_root / f"output/{pipeline}/studies/hpo" if args.use_hpo else None
                 model_params = _build_model_params(
                     model_type,
                     training_cfg,

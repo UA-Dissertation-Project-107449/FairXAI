@@ -18,11 +18,12 @@ def archive_latest_run(base_dir: Path, enabled: bool, logger: logging.Logger) ->
         return
     latest_dir = base_dir / "latest_run"
     archives_dir = base_dir / "archived_runs"
-    archives_dir.mkdir(parents=True, exist_ok=True)
 
     has_files = latest_dir.exists() and any(p.is_file() for p in latest_dir.rglob("*"))
     if not has_files:
         return
+
+    archives_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     archive_path = archives_dir / f"run_{timestamp}"
@@ -63,6 +64,46 @@ def resolve_run_id(explicit: Optional[str] = None) -> str:
 
 def get_run_root(base_results: Path, run_id: str) -> Path:
     return base_results / "runs" / _sanitize_run_id(run_id)
+
+
+def get_study_root(
+    base_results: Path,
+    study_type: str,
+    study_id: Optional[str] = None,
+) -> Path:
+    """Return the output directory for a standalone study.
+
+    ``base_results / "studies" / study_type``        — when *study_id* is omitted (flat, e.g. HPO).
+    ``base_results / "studies" / study_type / study_id`` — when *study_id* is provided.
+    """
+    root = base_results / "studies" / study_type
+    return root / _sanitize_run_id(study_id) if study_id else root
+
+
+def update_output_study_pointer(
+    base_results: Path,
+    study_type: str,
+    study_id: str,
+) -> None:
+    """Write ``studies/<study_type>/latest.txt`` — mirrors :func:`update_latest_pointer` for runs.
+
+    Creates the study-type directory if absent, then atomically updates the
+    ``latest.txt`` pointer to *study_id*.
+    """
+    study_root = get_study_root(base_results, study_type)
+    study_root.mkdir(parents=True, exist_ok=True)
+
+    lock_path = study_root / ".latest_study.lock"
+    fd = _acquire_lock(lock_path)
+    if fd is None:
+        logging.getLogger(__name__).warning(
+            "Could not acquire latest-study pointer lock for %s; skipping update.", study_type
+        )
+        return
+    try:
+        (study_root / "latest.txt").write_text(study_id)
+    finally:
+        _release_lock(lock_path, fd)
 
 
 def resolve_latest_run_dir(base_results: Path) -> Optional[Path]:

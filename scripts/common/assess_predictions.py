@@ -303,13 +303,14 @@ def main():
     project_root = Path(__file__).parent.parent.parent
     pipeline_cfg = load_pipeline_config(project_root, pipeline)
     run_id = os.getenv("RUN_ID")
-    if run_id:
-        baseline_root = project_root / f"output/{pipeline}/runs/{run_id}/baseline"
-        experiments_dir = baseline_root / "results"
-        results_dir = baseline_root / "fairness"
-    else:
-        experiments_dir = project_root / pipeline_cfg["paths"]["experiments_dir"]
-        results_dir = project_root / pipeline_cfg["paths"]["results_fairness_dir"]
+    if not run_id:
+        raise RuntimeError(
+            "RUN_ID is not set. assess_predictions.py must be called from the pipeline "
+            "with RUN_ID exported."
+        )
+    baseline_root = project_root / f"output/{pipeline}/runs/{run_id}/baseline"
+    experiments_dir = baseline_root / "results"
+    results_dir = baseline_root / "fairness"
     # Setup
     setup_phase_logging(
         project_root,
