@@ -39,7 +39,7 @@ import pandas as pd
 matplotlib.use("Agg")
 
 # Ensure the project src is importable when running as a script
-_ROOT = Path(__file__).resolve().parent.parent
+_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_ROOT / "src"))
 
 from fairxai.viz.experiment_plots import (
@@ -64,7 +64,7 @@ logger = logging.getLogger(__name__)
 
 _RUNS_BASE = _ROOT / "output" / "cardiac" / "runs"
 _DATA_PROCESSED = _ROOT / "data" / "processed" / "cardiac"
-_OUT_BASE = _ROOT / "output" / "cardiac" / "dissertation_figures"
+_OUT_BASE = _ROOT / "output" / "cardiac" / "studies" / "dissertation_figures"
 
 # Sensitive attribute names as used in fairness JSONs (with _cat) and in CSV columns (without)
 _SENSITIVE_ATTRS = ["age_group_cat", "sex_cat"]

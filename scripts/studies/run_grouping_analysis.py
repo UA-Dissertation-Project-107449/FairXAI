@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """
-Run clustering and similarity subgroup discovery (stage 4b).
+Run clustering and similarity subgroup discovery (standalone study).
 
 Discovers latent patient subgroups via unsupervised clustering and evaluates
 per-cluster fairness.  Writes ``group_cluster`` back to the processed CSV so
-downstream stages (train, assess) treat clusters as a sensitive attribute.
+subsequent pipeline runs treat clusters as a sensitive attribute.
+
+Output: output/<pipeline>/studies/grouping/<study_id>/
 
 Usage:
-    python scripts/experiments/run_grouping_analysis.py --run-id latest
-    python scripts/experiments/run_grouping_analysis.py --run-id 2026-04-10_run_01 \\
+    python scripts/studies/run_grouping_analysis.py
+    python scripts/studies/run_grouping_analysis.py \\
         --datasets cleveland --methods kmeans hierarchical
-    RUN_GROUPING=false bash scripts/cardiac/cardiac_pipeline.sh  # skip entirely
+    # Optionally load baseline predictions for per-cluster fairness:
+    python scripts/studies/run_grouping_analysis.py --run-id <pipeline_run_id>
 """
 
 import argparse
@@ -24,8 +27,13 @@ import pandas as pd
 # Add src to path (matches pattern used in other scripts)
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-from fairxai.cli.runner_base import get_project_root, setup_phase_logging
-from fairxai.cli.runner_utils import get_run_root, resolve_run_id
+from fairxai.cli.runner_base import get_project_root, setup_study_logging
+from fairxai.cli.runner_utils import (
+    get_run_root,
+    get_study_root,
+    resolve_run_id,
+    update_output_study_pointer,
+)
 from fairxai.clustering import (
     ClusteringEngine,
     ClusteringError,
@@ -363,8 +371,17 @@ def run_dataset(
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Grouping & similarity subgroup discovery (stage 4b)")
-    p.add_argument("--run-id", default=None, help="Run ID or 'latest'")
+    p = argparse.ArgumentParser(description="Grouping & similarity subgroup discovery (standalone study)")
+    p.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional: pipeline run ID to load baseline predictions for per-cluster fairness",
+    )
+    p.add_argument(
+        "--pipeline",
+        default="cardiac",
+        help="Pipeline name (default: cardiac)",
+    )
     p.add_argument(
         "--datasets",
         nargs="+",
@@ -378,6 +395,11 @@ def parse_args() -> argparse.Namespace:
         help="Clustering methods to use: kmeans hierarchical dbscan gaussian_mixture",
     )
     p.add_argument("--config", default=None, help="Path to clustering.yaml (optional override)")
+    p.add_argument(
+        "--study-id",
+        default=None,
+        help="Override auto-generated study ID (useful for tests and reproducible runs)",
+    )
     p.add_argument("-v", action="store_true", help="Verbose logging")
     p.add_argument("-vv", action="store_true", help="Debug logging")
     return p.parse_args()
@@ -386,13 +408,15 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     verbose = 2 if args.vv else (1 if args.v else 0)
-    setup_phase_logging(
+    pipeline = args.pipeline
+    study_id = args.study_id if args.study_id else resolve_run_id()
+    setup_study_logging(
         _ROOT,
+        "grouping",
+        study_id,
         "grouping.log",
         verbose=verbose,
-        run_id=args.run_id,
-        stage_name="preprocess",
-        sub_stage="grouping",
+        log_subdir=pipeline,
     )
 
     # Load config
@@ -403,10 +427,14 @@ def main() -> None:
     else:
         config = load_yaml_config(str(config_path))
 
-    # Resolve run root
-    run_id = resolve_run_id(args.run_id)
-    run_root = get_run_root(_ROOT / "output" / "cardiac", run_id)
-    output_dir = run_root / "grouping"
+    # Study output dir (not tied to a pipeline run)
+    base_results = _ROOT / "output" / pipeline
+    output_dir = get_study_root(base_results, "grouping", study_id)
+
+    # Optionally resolve a pipeline run root to load baseline predictions
+    run_root: Path | None = None
+    if args.run_id:
+        run_root = get_run_root(base_results, args.run_id)
 
     datasets = _resolve_datasets(args.datasets or [], config)
     methods = _resolve_methods(args.methods or [], config)
@@ -416,15 +444,18 @@ def main() -> None:
         sys.exit(1)
 
     logger.info(
-        "[PHASE] grouping analysis — run_id=%s datasets=%s methods=%s", run_id, datasets, methods
+        "[PHASE] grouping study — study_id=%s datasets=%s methods=%s", study_id, datasets, methods
     )
+    if run_root:
+        logger.info("[PHASE] predictions loaded from run: %s", run_root)
 
     for dataset in datasets:
         try:
-            run_dataset(dataset, run_root, output_dir, config, methods)
+            run_dataset(dataset, run_root or output_dir, output_dir, config, methods)
         except Exception as exc:
             logger.error("dataset %s failed: %s", dataset, exc, exc_info=True)
 
+    update_output_study_pointer(base_results, "grouping", study_id)
     logger.info("[SUCCESS] done — artifacts in %s", output_dir)
 
 

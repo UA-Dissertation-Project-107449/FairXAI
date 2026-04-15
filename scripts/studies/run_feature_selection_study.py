@@ -1,19 +1,25 @@
 """Feature selection study — sensitive-attribute ablation.
 
 Runs train_baseline.py for each combination of feature-selection mode × dataset × model,
-collecting results under output/<pipeline>/feature_selection_study/.
+collecting results under output/<pipeline>/studies/feature_selection/<study_id>/.
+
+Training sub-runs land at:
+  output/<pipeline>/studies/feature_selection/<study_id>/runs/fs_<mode>__<model>/baseline/
+
+Study-level summary/manifest land at:
+  output/<pipeline>/studies/feature_selection/<study_id>/
 
 Usage
 -----
 # All modes, all models, all configured datasets
-python scripts/experiments/run_feature_selection_study.py --pipeline cardiac
+python scripts/studies/run_feature_selection_study.py --pipeline cardiac
 
 # Single mode
-python scripts/experiments/run_feature_selection_study.py --pipeline cardiac \
+python scripts/studies/run_feature_selection_study.py --pipeline cardiac \
     --modes exclude_sensitive include_all_sensitive
 
 # Dry-run: print commands without executing
-python scripts/experiments/run_feature_selection_study.py --pipeline cardiac --dry-run
+python scripts/studies/run_feature_selection_study.py --pipeline cardiac --dry-run
 """
 
 import argparse
@@ -30,7 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from fairxai.cli.runner_base import get_project_root, setup_study_logging
-from fairxai.cli.runner_utils import resolve_run_id, update_study_pointer
+from fairxai.cli.runner_utils import resolve_run_id, update_output_study_pointer, update_study_pointer
 from fairxai.utils.config import load_yaml_config
 
 logger = logging.getLogger(__name__)
@@ -47,8 +53,8 @@ DEFAULT_MODES = [
 ]
 
 
-def _build_run_id(mode: str, model_type: str) -> str:
-    return f"feature_selection_study/fs_{mode}__{model_type}"
+def _build_sub_run_key(mode: str, model_type: str) -> str:
+    return f"fs_{mode}__{model_type}"
 
 
 def _register_process(process: subprocess.Popen) -> None:
@@ -84,6 +90,7 @@ def _run_one(
     pipeline: str,
     model_type: str,
     mode: str,
+    study_id: str,
     rfe_top_k: int,
     verbose: bool,
     dry_run: bool,
@@ -95,12 +102,15 @@ def _run_one(
 
     train_baseline.py has no --datasets flag — it reads dataset list from the pipeline
     config. One subprocess call per (mode, model_type) covers all configured datasets.
-    Output is routed to output/<pipeline>/runs/fs_study_<mode>/ via RUN_ID.
+    Output is routed via --output-dir to:
+      output/<pipeline>/studies/feature_selection/<study_id>/runs/fs_<mode>__<model>/baseline/
     Returns a status dict with timing and exit code.
     """
-    run_id = _build_run_id(mode, model_type)
-    run_root = project_root / f"output/{pipeline}/runs/{run_id}"
-    baseline_root = run_root / "baseline"
+    sub_key = _build_sub_run_key(mode, model_type)
+    baseline_root = (
+        project_root
+        / f"output/{pipeline}/studies/feature_selection/{study_id}/runs/{sub_key}/baseline"
+    )
     results_dir = baseline_root / "results"
     models_dir = baseline_root / "models"
 
@@ -110,6 +120,8 @@ def _run_one(
         str(project_root / "scripts" / "common" / "train_baseline.py"),
         "--pipeline",
         pipeline,
+        "--output-dir",
+        str(baseline_root),
         "--model-types",
         model_type,
         "--feature-selection-mode",
@@ -126,7 +138,6 @@ def _run_one(
 
     env = {
         **os.environ,
-        "RUN_ID": run_id,
         "PYTHONUNBUFFERED": "1",
     }
     if threads_per_worker > 0:
@@ -140,11 +151,11 @@ def _run_one(
             }
         )
 
-    logger.info(f"[PHASE] RUN mode={mode} model={model_type} (RUN_ID={run_id})")
+    logger.info(f"[PHASE] RUN mode={mode} model={model_type}")
     logger.info(f"[PHASE] OUTPUT results={results_dir}")
     logger.info(f"[PHASE] OUTPUT models={models_dir}")
     if dry_run:
-        logger.info(f"[PHASE] DRY-RUN RUN_ID={run_id} {' '.join(cmd)}")
+        logger.info(f"[PHASE] DRY-RUN {' '.join(cmd)}")
         return {"mode": mode, "model": model_type, "status": "dry_run", "duration_s": 0}
 
     if stop_event.is_set():
@@ -171,7 +182,7 @@ def _run_one(
         if process.returncode != 0:
             logger.error(
                 f"RUN mode={mode} model={model_type} "
-                f"(exit {process.returncode}) — see {run_root}"
+                f"(exit {process.returncode}) — see {baseline_root.parent}"
             )
             return {
                 "mode": mode,
@@ -275,11 +286,11 @@ def main():
     model_types = args.model_types or study_cfg.get("models", ["logistic_regression"])
     rfe_top_k = int(study_cfg.get("rfe_top_k", 10))
 
-    # Summary JSON goes here; actual training outputs go to
-    # output/<pipeline>/runs/fs_study_<mode>/ via RUN_ID.
-    summary_dir = project_root / study_cfg.get(
-        "output_dir", f"output/{args.pipeline}/feature_selection_study"
+    # Study output: summary/manifest + training sub-runs all under studies/feature_selection/<study_id>/
+    study_base = project_root / study_cfg.get(
+        "output_dir", f"output/{args.pipeline}/studies/feature_selection"
     )
+    summary_dir = study_base / study_id
     summary_dir.mkdir(parents=True, exist_ok=True)
     summary_path = summary_dir / "study_summary.json"
     manifest_path = summary_dir / "study_manifest.json"
@@ -324,6 +335,7 @@ def main():
                     pipeline=args.pipeline,
                     model_type=model_type,
                     mode=mode,
+                    study_id=study_id,
                     rfe_top_k=rfe_top_k,
                     verbose=args.verbose,
                     dry_run=args.dry_run,
@@ -344,6 +356,7 @@ def main():
                         args.pipeline,
                         model_type,
                         mode,
+                        study_id,
                         rfe_top_k,
                         args.verbose,
                         args.dry_run,
@@ -401,6 +414,7 @@ def main():
 
     manifest = {
         "pipeline": args.pipeline,
+        "study_id": study_id,
         "config": str(study_cfg_path),
         "modes": modes,
         "datasets_from_pipeline_config": datasets,
@@ -412,18 +426,21 @@ def main():
         "runs": [
             {
                 **run,
-                "run_id": _build_run_id(run["mode"], run["model"]),
-                "run_root": str(
+                "sub_key": _build_sub_run_key(run["mode"], run["model"]),
+                "baseline_root": str(
                     project_root
-                    / f"output/{args.pipeline}/runs/{_build_run_id(run['mode'], run['model'])}"
+                    / f"output/{args.pipeline}/studies/feature_selection/{study_id}"
+                    f"/runs/{_build_sub_run_key(run['mode'], run['model'])}/baseline"
                 ),
                 "results_dir": str(
                     project_root
-                    / f"output/{args.pipeline}/runs/{_build_run_id(run['mode'], run['model'])}/baseline/results"
+                    / f"output/{args.pipeline}/studies/feature_selection/{study_id}"
+                    f"/runs/{_build_sub_run_key(run['mode'], run['model'])}/baseline/results"
                 ),
                 "models_dir": str(
                     project_root
-                    / f"output/{args.pipeline}/runs/{_build_run_id(run['mode'], run['model'])}/baseline/models"
+                    / f"output/{args.pipeline}/studies/feature_selection/{study_id}"
+                    f"/runs/{_build_sub_run_key(run['mode'], run['model'])}/baseline/models"
                 ),
             }
             for run in results
@@ -442,6 +459,11 @@ def main():
     else:
         logger.info(f"[SUCCESS] Study summary written: {summary_path}")
         logger.info(f"[SUCCESS] Study manifest written: {manifest_path}")
+        update_output_study_pointer(
+            project_root / f"output/{args.pipeline}",
+            "feature_selection",
+            study_id,
+        )
     if failed:
         sys.exit(1)
 

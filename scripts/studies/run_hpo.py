@@ -7,15 +7,15 @@ runner and train_baseline.py.
 Usage
 -----
 # All models on all configured datasets
-python scripts/experiments/run_hpo.py --pipeline cardiac
+python scripts/studies/run_hpo.py --pipeline cardiac
 
 # Single model / single dataset
-python scripts/experiments/run_hpo.py --pipeline cardiac \\
+python scripts/studies/run_hpo.py --pipeline cardiac \\
     --model-types logistic_regression random_forest \\
     --datasets cleveland
 
 # Dry-run: print what would run without fitting
-python scripts/experiments/run_hpo.py --pipeline cardiac --dry-run
+python scripts/studies/run_hpo.py --pipeline cardiac --dry-run
 """
 
 import argparse
@@ -28,7 +28,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from fairxai.cli.runner_base import get_project_root, setup_study_logging
-from fairxai.cli.runner_utils import resolve_run_id, update_study_pointer
+from fairxai.cli.runner_utils import resolve_run_id, update_output_study_pointer, update_study_pointer
 from fairxai.experiments.data_io import (
     default_exclude_columns,
 )
@@ -190,6 +190,11 @@ def main():
                 logger.error(f"  [FAIL] {model_type}/{dataset}: {exc}")
 
     logger.info("\n[DONE] HPO complete.")
+    update_output_study_pointer(
+        project_root / f"output/{args.pipeline}",
+        "hpo",
+        study_id,
+    )
 
 
 if __name__ == "__main__":
