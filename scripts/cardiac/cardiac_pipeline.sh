@@ -44,7 +44,6 @@ resolve_stage() {
 # Configuration
 # ======================================================================
 RUN_ATTRIBUTE_BINNING=${RUN_ATTRIBUTE_BINNING:-${RUN_AGE_BINNING:-true}}
-RUN_GROUPING=${RUN_GROUPING:-true}
 RUN_MITIGATION=${RUN_MITIGATION:-true}
 RUN_COMBINATORIAL=${RUN_COMBINATORIAL:-true}
 RUN_COMPARISON=${RUN_COMPARISON:-true}
@@ -241,7 +240,6 @@ echo "Working directory: $ROOT_DIR"
 echo "Run ID:           $RUN_ID"
 echo "Stages:           $START_NUM..${END_NUM}  (${STAGE_NAME[$START_NUM]} → ${STAGE_NAME[$END_NUM]})"
 echo "Attr binning:     $RUN_ATTRIBUTE_BINNING"
-echo "Grouping:         $RUN_GROUPING"
 echo "Mitigation:       $RUN_MITIGATION"
 echo "Combinatorial:    $RUN_COMBINATORIAL"
 echo "Comparison:       $RUN_COMPARISON"
@@ -311,14 +309,6 @@ if should_run 4; then
     fi
     python3 "$ROOT_DIR/scripts/cardiac/preprocess.py" $PREPROCESS_ARGS "${DATASET_ARGS[@]}" $VERBOSE_FLAG
     mark_done 4 "preprocess"
-    # Stage 4b — Grouping (sub-step; runs after preprocess, before train)
-    if [[ "$RUN_GROUPING" == "true" ]]; then
-        echo "[PHASE 4b] Grouping & similarity subgroup discovery"
-        python3 "$ROOT_DIR/scripts/experiments/run_grouping_analysis.py" \
-            --config "$GROUPING_CONFIG" --run-id "$RUN_ID" "${DATASET_ARGS[@]}" $VERBOSE_FLAG
-    else
-        echo "[4b] Grouping — SKIPPED (disabled)"
-    fi
     echo ""
 else
     echo "[4/10] preprocess — SKIPPED (outside active range)"
@@ -435,7 +425,6 @@ should_run 4 && echo "  - Processed data:     $ROOT_DIR/data/processed/cardiac"
 should_run 2 && echo "  - Profiling:          $RUN_ROOT/profiling"
 should_run 3 && [[ "$RUN_RECOMMENDATIONS" == "true" ]] && echo "  - Recommendations:    $RUN_ROOT/recommendations"
 should_run 5 && echo "  - Baseline:           $RUN_ROOT/baseline"
-should_run 4 && [[ "$RUN_GROUPING" == "true" ]] && echo "  - Grouping:           $RUN_ROOT/grouping"
 should_run 7 && [[ "$RUN_ATTRIBUTE_BINNING" == "true" ]] && echo "  - Attr binning:       $RUN_ROOT/experiments/full/attribute_binning"
 should_run 8 && [[ "$RUN_MITIGATION" == "true" ]] && echo "  - Mitigation:         $RUN_ROOT/experiments/full/mitigation"
 should_run 9 && [[ "$RUN_COMBINATORIAL" == "true" ]] && echo "  - Combinatorial:      $RUN_ROOT/experiments/full"
