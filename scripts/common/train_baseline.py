@@ -383,6 +383,12 @@ def main():
     logging.info("[PHASE] Baseline training started")
     logging.info(f"Effective project root: {project_root}")
     logging.info(f"Resolved pipeline config: {pipeline_cfg_path}")
+    logging.info(
+        "Run context: pipeline=%s run_id=%s data_processed=%s",
+        pipeline,
+        run_id or "none",
+        data_processed,
+    )
 
     logging.info(f"  Run root: {baseline_root}")
     logging.info(f"  Models will be saved to: {models_dir}")
@@ -421,7 +427,7 @@ def main():
         )
         return
 
-    logging.info(f"\nFound {len(train_files)} datasets to train on")
+    logging.info(f"Found {len(train_files)} datasets to train on")
 
     # Train model(s) for each dataset
     results_summary = {}
@@ -434,9 +440,7 @@ def main():
             logging.warning(f"Test file not found for {dataset_name}, skipping")
             continue
 
-        logging.info(f"\n{'='*60}")
-        logging.info(f"Dataset: {dataset_name}")
-        logging.info(f"{'='*60}")
+        logging.info("[DATASET] Training dataset=%s", dataset_name)
 
         # Load data
         train_df = pd.read_csv(train_file)
@@ -501,7 +505,7 @@ def main():
         results_summary.setdefault(dataset_name, {})
 
         for model_type in model_types:
-            logging.info(f"\n--- Training model: {model_type} ---")
+            logging.info("[MODEL] Training model=%s dataset=%s", model_type, dataset_name)
 
             try:
                 model_class = get_model_class(model_type)
@@ -527,7 +531,7 @@ def main():
                 continue
 
             if fs_mode == "rfe_top_k":
-                # Two-pass: quick first fit on all features → importances → reduce → retrain
+                # Two-pass: quick first fit on all features to importances to reduce to retrain.
                 logging.info(
                     f"  [rfe_top_k] first-pass fit on {len(X_train_full.columns)} features"
                 )
@@ -541,11 +545,18 @@ def main():
                     trained_model=first_pass,
                 )
                 X_test = X_test_full[feature_cols]
-                logging.info(f"  [rfe_top_k] selected {len(feature_cols)} features: {feature_cols}")
+                feature_preview = feature_cols[:10]
+                preview_suffix = "..." if len(feature_cols) > 10 else ""
+                logging.info(
+                    "  [rfe_top_k] selected %d features: %s%s",
+                    len(feature_cols),
+                    feature_preview,
+                    preview_suffix,
+                )
 
             train_metrics = model.train(X_train, y_train)
 
-            logging.info("\n--- Evaluation ---")
+            logging.info("Evaluation:")
             test_metrics_default = model.evaluate(X_test, y_test, threshold=0.5)
 
             logging.info("Test Set Performance (threshold=0.5):")
@@ -560,7 +571,7 @@ def main():
             logging.info(f"    TN: {cm['tn']:3d}  FP: {cm['fp']:3d}")
             logging.info(f"    FN: {cm['fn']:3d}  TP: {cm['tp']:3d}")
 
-            logging.info("\n--- Threshold Analysis ---")
+            logging.info("Threshold analysis:")
             threshold_results = []
 
             for threshold in thresholds_to_test:
@@ -574,7 +585,7 @@ def main():
                     f"F1={metrics['f1_score']:.3f}"
                 )
 
-            logging.info("\n--- Feature Importance (Top 10) ---")
+            logging.info("Feature importance (top 10):")
             feature_importance = model.get_feature_importance()
             display_metric = (
                 "coefficient"
@@ -587,7 +598,7 @@ def main():
                     if pd.notna(val):
                         logging.info(f"  {row['feature']:20s}: {float(val):+.4f}")
 
-            logging.info("\n--- Generating Predictions ---")
+            logging.info("Generating predictions:")
             train_predictions = generate_predictions_with_metadata(
                 model, X_train, y_train, sensitive_train, threshold=0.5
             )
@@ -600,12 +611,12 @@ def main():
 
             logging.info(f"  Train predictions: {len(train_predictions)}")
             logging.info(
-                f"    Near threshold (±0.1): {n_near_threshold_train} "
+                f"    Near threshold (+/-0.1): {n_near_threshold_train} "
                 f"({n_near_threshold_train/len(train_predictions):.1%})"
             )
             logging.info(f"  Test predictions: {len(test_predictions)}")
             logging.info(
-                f"    Near threshold (±0.1): {n_near_threshold_test} "
+                f"    Near threshold (+/-0.1): {n_near_threshold_test} "
                 f"({n_near_threshold_test/len(test_predictions):.1%})"
             )
 
@@ -618,7 +629,11 @@ def main():
             train_predictions.to_csv(train_pred_file, index=False)
             test_predictions.to_csv(test_pred_file, index=False)
 
-            logging.info("\n[SUCCESS] Predictions saved:")
+            logging.info(
+                "[SUCCESS] Predictions saved for dataset=%s model=%s",
+                dataset_name,
+                model_type,
+            )
             logging.info(f"  Train: {train_pred_file}")
             logging.info(f"  Test: {test_pred_file}")
 
@@ -643,7 +658,7 @@ def main():
             )
 
             if xai_cfg.get("cv_enabled", True) and xai_cfg.get("enabled", True):
-                logging.info("\n--- Cross-Validated XAI ---")
+                logging.info("Cross-validated XAI:")
                 try:
                     cv_lime_n = int(xai_cfg.get("cv_lime_instances", 3))
                     cv_shap_max = int(xai_cfg.get("global_max_samples", 1000))
@@ -747,12 +762,17 @@ def main():
     with open(results_file, "w") as f:
         json.dump(results_summary, f, indent=2, default=str)
 
-    logging.info(f"\n{'='*60}")
     logging.info("[PHASE] Baseline training complete")
-    logging.info(f"{'='*60}")
+    n_models_trained = sum(
+        1 for ds_results in results_summary.values() for r in ds_results.values() if r.get("status") == "success"
+    )
+    logging.info(
+        "Training summary: datasets=%d models_trained=%d",
+        len(results_summary),
+        n_models_trained,
+    )
     logging.info(f"Models saved to: {models_dir}")
     logging.info(f"Results saved to: {experiments_dir}")
-    logging.info("\nNext step: Run fairness assessment on predictions (Phase 4)")
 
 
 if __name__ == "__main__":

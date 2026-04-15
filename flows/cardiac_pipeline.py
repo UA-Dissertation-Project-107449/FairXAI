@@ -289,24 +289,22 @@ def cardiac_pipeline(
         first_stage = resolve_stage(resume_from)
         validate_prior_stages(run_root, first_stage, ROOT_DIR)
         logger.info(
-            f"Resume validation passed — prior stages through "
+            f"Resume validation passed - prior stages through "
             f"{first_stage.number - 1} are complete."
         )
 
     # --- Banner -------------------------------------------------------------
     first = active_stages[0]
     last = active_stages[-1]
-    logger.info("======================================================================")
-    logger.info("CARDIAC FAIRNESS PIPELINE")
-    logger.info("======================================================================")
-    logger.info(f"Run ID:       {run_id}")
-    logger.info(f"Stages:       {first.number}..{last.number}  ({first.name} → {last.name})")
-    logger.info(f"Attr binning: {run_attribute_binning}")
-    logger.info(f"Mitigation:   {run_mitigation}")
-    logger.info(f"Combinatorial:{run_combinatorial}")
-    logger.info(f"Comparison:   {run_comparison}")
-    logger.info(f"Datasets:     {datasets if datasets else 'config/default'}")
-    logger.info(f"Model types:  {model_types if model_types else 'config/default'}")
+    logger.info("[PHASE] Cardiac fairness pipeline started")
+    logger.info(f"Run ID: {run_id}")
+    logger.info(f"Stage window: {first.number}..{last.number} ({first.name} to {last.name})")
+    logger.info(f"Attribute binning enabled: {run_attribute_binning}")
+    logger.info(f"Mitigation enabled: {run_mitigation}")
+    logger.info(f"Combinatorial enabled: {run_combinatorial}")
+    logger.info(f"Comparison enabled: {run_comparison}")
+    logger.info(f"Datasets override: {datasets if datasets else 'config/default'}")
+    logger.info(f"Model types override: {model_types if model_types else 'config/default'}")
 
     # --- Helper: checkpoint after a successful task -------------------------
     def _checkpoint(stage_num: int, future):
@@ -326,62 +324,62 @@ def cardiac_pipeline(
     combinatorial_task = None
     comparison_task = None
 
-    # Stage 1 — Load
+    # Stage 1 - Load
     if _should_run(1):
         load_data_task = load_data.submit(run_id, datasets, verbose)
     else:
-        logger.info("[1/10] load — SKIPPED (outside active range)")
+        logger.info("[1/10] load - skipped (outside active range)")
 
-    # Stage 2 — Profile
+    # Stage 2 - Profile
     if _should_run(2):
         wait = [load_data_task] if load_data_task else []
         profile_task = profile_data.submit(run_id, datasets, verbose, wait_for=wait)
     else:
-        logger.info("[2/10] profile — SKIPPED (outside active range)")
+        logger.info("[2/10] profile - skipped (outside active range)")
 
-    # Stage 3 — Recommendations
+    # Stage 3 - Recommendations
     if _should_run(3):
         wait = [profile_task] if profile_task else []
         recommendations_task = generate_recommendations.submit(run_id, verbose, wait_for=wait)
     else:
-        logger.info("[3/10] recommend — SKIPPED (outside active range)")
+        logger.info("[3/10] recommend - skipped (outside active range)")
 
-    # Stage 4 — Preprocess
+    # Stage 4 - Preprocess
     if _should_run(4):
         wait = [profile_task] if profile_task else []
         preprocess_data_task = preprocess_data.submit(
             run_id, run_combinatorial, datasets, verbose, wait_for=wait
         )
     else:
-        logger.info("[4/10] preprocess — SKIPPED (outside active range)")
+        logger.info("[4/10] preprocess - skipped (outside active range)")
 
-    # Stage 5 — Train baseline
+    # Stage 5 - Train baseline
     if _should_run(5):
         wait = [preprocess_data_task] if preprocess_data_task else []
         train_baseline_model_task = train_baseline_model.submit(
             run_id, datasets, model_types, verbose, wait_for=wait
         )
     else:
-        logger.info("[5/10] train — SKIPPED (outside active range)")
+        logger.info("[5/10] train - skipped (outside active range)")
 
-    # Stage 6 — Assess fairness
+    # Stage 6 - Assess fairness
     if _should_run(6):
         wait = [train_baseline_model_task] if train_baseline_model_task else []
         assess_predictions_task = assess_predictions.submit(
             run_id, datasets, model_types, verbose, wait_for=wait
         )
     else:
-        logger.info("[6/10] assess — SKIPPED (outside active range)")
+        logger.info("[6/10] assess - skipped (outside active range)")
 
-    # Stage 7 — Attribute binning (optional + gated)
+    # Stage 7 - Attribute binning (optional + gated)
     if _should_run(7) and run_attribute_binning:
         wait = [assess_predictions_task] if assess_predictions_task else []
         age_task = analyze_attribute_binning.submit(run_id, datasets, verbose, wait_for=wait)
     else:
         reason = "disabled" if not run_attribute_binning else "outside active range"
-        logger.info(f"[7/10] attribute_binning — SKIPPED ({reason})")
+        logger.info(f"[7/10] attribute_binning - skipped ({reason})")
 
-    # Stage 8 — Mitigation (optional + gated)
+    # Stage 8 - Mitigation (optional + gated)
     if _should_run(8) and run_mitigation:
         wait = [assess_predictions_task] if assess_predictions_task else []
         mitigation_task = compare_mitigation_techniques.submit(
@@ -389,9 +387,9 @@ def cardiac_pipeline(
         )
     else:
         reason = "disabled" if not run_mitigation else "outside active range"
-        logger.info(f"[8/10] mitigation — SKIPPED ({reason})")
+        logger.info(f"[8/10] mitigation - skipped ({reason})")
 
-    # Stage 9 — Combinatorial (optional + gated)
+    # Stage 9 - Combinatorial (optional + gated)
     if _should_run(9) and run_combinatorial:
         wait = [assess_predictions_task] if assess_predictions_task else []
         combinatorial_task = run_combinatorial_experiments.submit(
@@ -399,9 +397,9 @@ def cardiac_pipeline(
         )
     else:
         reason = "disabled" if not run_combinatorial else "outside active range"
-        logger.info(f"[9/10] combinatorial — SKIPPED ({reason})")
+        logger.info(f"[9/10] combinatorial - skipped ({reason})")
 
-    # Stage 10 — Comparison (optional + gated)
+    # Stage 10 - Comparison (optional + gated)
     if _should_run(10) and run_comparison:
         wait = (
             [combinatorial_task]
@@ -411,7 +409,7 @@ def cardiac_pipeline(
         comparison_task = compare_experiments.submit(run_id, verbose, wait_for=wait)
     else:
         reason = "disabled" if not run_comparison else "outside active range"
-        logger.info(f"[10/10] compare — SKIPPED ({reason})")
+        logger.info(f"[10/10] compare - skipped ({reason})")
 
     # --- Collect results & write checkpoints --------------------------------
     task_map = {
@@ -437,15 +435,13 @@ def cardiac_pipeline(
     if log_summary["total_warnings"] or log_summary["total_errors"]:
         logger.info(
             f"Log summary: {log_summary['total_warnings']} warning(s), "
-            f"{log_summary['total_errors']} error(s) — see {run_log_dir / 'run_summary.json'}"
+            f"{log_summary['total_errors']} error(s) - see {run_log_dir / 'run_summary.json'}"
         )
 
     # --- Summary ------------------------------------------------------------
-    logger.info("======================================================================")
-    logger.info("PIPELINE COMPLETE")
-    logger.info("======================================================================")
-    logger.info(f"Stages executed: {first.name} → {last.name}")
-    logger.info("Output saved to:")
+    logger.info("[PHASE] Cardiac fairness pipeline complete")
+    logger.info(f"Stages executed: {first.name} to {last.name}")
+    logger.info("Output paths:")
     logger.info(f"  - Run root:           {run_root}")
     if _should_run(1):
         logger.info(f"  - Raw data:           {ROOT_DIR}/data/raw/cardiac")

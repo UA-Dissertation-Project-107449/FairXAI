@@ -90,9 +90,7 @@ def assess_dataset_fairness(
     Returns:
         Dictionary with assessment results
     """
-    logging.info(f"\n{'='*60}")
-    logging.info(f"Assessing: {dataset_name}")
-    logging.info(f"{'='*60}")
+    logging.info("[DATASET] Assessing fairness dataset_model=%s", dataset_name)
 
     # Load predictions
     train_df = pd.read_csv(train_file)
@@ -108,7 +106,7 @@ def assess_dataset_fairness(
 
     # Check if decoding worked
     if "age_group_cat" in train_df.columns and "sex_cat" in train_df.columns:
-        logging.info("\n--- Decoded Sensitive Attributes ---")
+        logging.info("Decoded sensitive attributes:")
         logging.info(f"Age groups: {train_df['age_group_cat'].value_counts().to_dict()}")
         logging.info(f"Sex: {train_df['sex_cat'].value_counts().to_dict()}")
 
@@ -139,7 +137,7 @@ def assess_dataset_fairness(
         feature_cols = None
 
     # Calculate metrics for train set
-    logging.info("\n--- Train Set Fairness ---")
+    logging.info("Train split fairness metrics:")
     train_metrics = metrics_calculator.calculate_all_metrics(train_df, feature_cols)
     results["train_metrics"] = train_metrics
 
@@ -147,7 +145,7 @@ def assess_dataset_fairness(
     log_fairness_metrics(train_metrics, "Train")
 
     # Calculate metrics for test set
-    logging.info("\n--- Test Set Fairness ---")
+    logging.info("Test split fairness metrics:")
     test_metrics = metrics_calculator.calculate_all_metrics(test_df, feature_cols)
     results["test_metrics"] = test_metrics
 
@@ -168,7 +166,7 @@ def assess_dataset_fairness(
             default=lambda o: float(o) if isinstance(o, (np.integer, np.floating)) else str(o),
         )
 
-    logging.info(f"\n[SUCCESS] Fairness assessment saved to: {output_file}")
+    logging.info(f"[SUCCESS] Fairness assessment saved to: {output_file}")
 
     # Create summary table
     summary_train = summarize_fairness_results(train_metrics)
@@ -191,7 +189,7 @@ def log_fairness_metrics(metrics: Dict, split_name: str):
 
     # Group fairness
     for attr, attr_metrics in metrics.get("group_fairness", {}).items():
-        logging.info(f"\n  {attr.upper()} - Group Fairness:")
+        logging.info(f"  {split_name} {attr.upper()} group fairness:")
 
         for metric_name, metric_data in attr_metrics.items():
             fair = metric_data.get("is_fair", False)
@@ -217,7 +215,7 @@ def log_fairness_metrics(metrics: Dict, split_name: str):
 
     # Calibration
     for attr, calib_data in metrics.get("calibration", {}).items():
-        logging.info(f"\n  {attr.upper()} - Calibration:")
+        logging.info(f"  {split_name} {attr.upper()} calibration:")
         fair = calib_data.get("is_fair", False)
         tag = "[SUCCESS]" if fair else "[FAIL]"
         log = logging.info if fair else logging.warning
@@ -230,7 +228,7 @@ def log_fairness_metrics(metrics: Dict, split_name: str):
     # Individual fairness
     if "individual_fairness" in metrics and metrics["individual_fairness"]:
         ind_fair = metrics["individual_fairness"]
-        logging.info("\n  Individual Fairness (k-NN consistency):")
+        logging.info(f"  {split_name} individual fairness (k-NN consistency):")
         logging.info(f"    Mean consistency: {ind_fair['mean_consistency']:.3f}")
         logging.info(f"    Median consistency: {ind_fair['median_consistency']:.3f}")
 
@@ -320,6 +318,13 @@ def main():
         stage_name="assess",
     )
     logging.info("[PHASE] Fairness assessment started")
+    logging.info(
+        "Run context: pipeline=%s run_id=%s predictions_dir=%s output_dir=%s",
+        pipeline,
+        run_id,
+        experiments_dir,
+        results_dir,
+    )
     results_dir.mkdir(parents=True, exist_ok=True)
 
     # Initialize fairness calculator
@@ -345,7 +350,7 @@ def main():
         logging.error("Please run baseline training first (Phase 3)")
         return
 
-    logging.info(f"Found {len(train_files)} datasets to assess")
+    logging.info(f"Found {len(train_files)} prediction pairs to assess")
 
     # Process each dataset
     all_results = {}
@@ -377,12 +382,10 @@ def main():
             default=lambda o: float(o) if isinstance(o, (np.integer, np.floating)) else str(o),
         )
 
-    logging.info(f"\n{'='*60}")
     logging.info("[PHASE] Fairness assessment complete")
-    logging.info(f"{'='*60}")
+    logging.info("Fairness assessment summary: assessed=%d", len(all_results))
     logging.info(f"Results saved to: {results_dir}")
     logging.info(f"Combined report: {combined_file}")
-    logging.info("\nNext step: Create visualization notebook (Phase 5)")
 
 
 if __name__ == "__main__":

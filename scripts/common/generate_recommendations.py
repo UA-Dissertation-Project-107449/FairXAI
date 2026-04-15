@@ -152,6 +152,13 @@ def main():
     )
 
     logging.info("[PHASE] Generating fairness triage recommendations")
+    logging.info(
+        "Run context: pipeline=%s run_id=%s output_dir=%s format=%s",
+        pipeline,
+        run_id or "none",
+        output_dir,
+        args.format,
+    )
 
     # Parse overrides
     overrides = {}
@@ -173,9 +180,7 @@ def main():
         # --- Pipeline mode: process all registered datasets ---
         _process_pipeline_datasets(engine, project_root, pipeline, args, output_dir)
 
-    logging.info(f"\n{'='*60}")
     logging.info("[PHASE] Recommendation generation complete")
-    logging.info(f"{'='*60}")
     logging.info(f"Output saved to: {output_dir}")
 
 
@@ -237,9 +242,7 @@ def _process_pipeline_datasets(engine, project_root, pipeline, args, output_dir)
 
     for filepath in dataset_files:
         dataset_name = filepath.stem.replace("_standardized", "")
-        logging.info(f"\n{'='*60}")
-        logging.info(f"Generating recommendations: {dataset_name}")
-        logging.info(f"{'='*60}")
+        logging.info("[DATASET] Generating recommendations dataset=%s", dataset_name)
 
         # Build ingestion from the CSV with pipeline-level sensitive attrs
         ingestion = engine.ingest(
@@ -256,15 +259,14 @@ def _process_pipeline_datasets(engine, project_root, pipeline, args, output_dir)
 
 def _log_summary(report, dataset_name):
     """Log a concise summary of the triage result."""
-    logging.info(f"\n--- Triage Summary: {dataset_name} ---")
+    logging.info("Triage summary dataset=%s", dataset_name)
     logging.info(f"  Readiness: {report.readiness_status.value}")
     logging.info(f"  P0 (critical): {report.critical_count}")
     logging.info(f"  P1 (high): {report.high_count}")
     logging.info(f"  Total recommendations: {len(report.recommendations)}")
 
     for rec in report.recommendations:
-        icon = {"P0": "🔴", "P1": "🟠", "P2": "🟡", "P3": "🔵"}.get(rec.priority.value, "⚪")
-        logging.info(f"  {icon} [{rec.priority.value}][{rec.category.value}] {rec.title}")
+        logging.info(f"  [{rec.priority.value}][{rec.category.value}] {rec.title}")
 
     if report.limitations:
         logging.info("  Limitations:")
