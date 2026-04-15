@@ -2,10 +2,10 @@
 
 Verbosity levels
 ----------------
-0 (default) — quiet: console shows [PHASE]/[SUCCESS]/[FAIL] markers,
+0 (default) - quiet: console shows [PHASE]/[SUCCESS]/[FAIL] markers,
               plus any WARNING+ messages.
-1 (-v)      — verbose: console shows all INFO+ messages.
-2 (-vv)     — debug: console shows all DEBUG+ messages.
+1 (-v)      - verbose: console shows all INFO+ messages.
+2 (-vv)     - debug: console shows all DEBUG+ messages.
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ class _ErrorFormatter(logging.Formatter):
 
 
 def _normalise_verbosity(verbose: Union[bool, int]) -> int:
-    """Accept legacy ``bool`` (``True`` → 1) or an ``int`` level."""
+    """Accept legacy ``bool`` (``True`` maps to 1) or an ``int`` level."""
     if isinstance(verbose, bool):
         return int(verbose)
     return max(0, min(int(verbose), 2))
@@ -143,12 +143,21 @@ def setup_logging(
     logger.addHandler(warning_handler)
     logger.addHandler(error_handler)
 
-    # Prevent third-party plotting internals from dominating phase logs.
+    # Prevent third-party library internals from dominating run logs.
     for noisy_logger in (
         "matplotlib",
         "matplotlib.font_manager",
         "PIL",
         "PIL.PngImagePlugin",
+        # Fairness/XAI dependencies can emit very verbose DEBUG internals.
+        "fairlearn",
+        "fairlearn.reductions",
+        "numba",
+        "numba.core",
+        "numba.core.byteflow",
+        "numba.core.interpreter",
+        "numba.core.ssa",
+        "numba.core.typeinfer",
     ):
         logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 

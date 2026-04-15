@@ -156,7 +156,7 @@ class FairnessPerCluster:
                 )
                 if v > 0.7:
                     logger.warning(
-                        "[WARNING] cluster ↔ %s: Cramér's V=%.3f — cluster may be "
+                        "[WARNING] cluster vs %s: Cramers_V=%.3f - cluster may be "
                         "recovering existing attribute split",
                         attr,
                         v,

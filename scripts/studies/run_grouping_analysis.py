@@ -55,7 +55,7 @@ _CLUSTERING_CONFIG = _ROOT / "configs" / "experiments" / "clustering.yaml"
 
 
 def _resolve_datasets(cli_datasets: list[str], config: dict) -> list[str]:
-    """Flag → config → discover from processed dir."""
+    """Flag to config to discover from processed dir."""
     if cli_datasets:
         return cli_datasets
     from_config = (config.get("data", {}) or {}).get("datasets", [])
@@ -78,7 +78,7 @@ def _resolve_datasets(cli_datasets: list[str], config: dict) -> list[str]:
 
 
 def _resolve_methods(cli_methods: list[str], config: dict) -> list[str]:
-    """Flag → config keys → all four."""
+    """Flag to config keys to all four."""
     if cli_methods:
         return [m.lower() for m in cli_methods]
     from_config = list((config.get("clustering_methods", {}) or {}).keys())
@@ -225,7 +225,7 @@ def run_dataset(
     config: dict,
     methods: list[str],
 ) -> None:
-    logger.info("[PHASE] grouping — dataset: %s", dataset)
+    logger.info("[DATASET] grouping dataset=%s", dataset)
 
     try:
         df, processed_path, source_meta = _load_grouping_dataframe(dataset)
@@ -245,7 +245,7 @@ def run_dataset(
         .get("exclude", ["heart_disease", "age_group", "sex", "ethnicity", "group_cluster"])
     )
 
-    # Build method config — restrict to requested methods
+    # Build method config - restrict to requested methods
     method_cfg = {
         k: v for k, v in (config.get("clustering_methods", {}) or {}).items() if k in methods
     }
@@ -260,7 +260,7 @@ def run_dataset(
         # Write cluster_assignments.csv
         assignments = cluster_result.to_assignments_df()
         assignments.to_csv(ds_out / "cluster_assignments.csv")
-        logger.info("[SUCCESS] cluster_assignments.csv — %d clusters", cluster_result.n_clusters)
+        logger.info("[SUCCESS] cluster_assignments.csv clusters=%d", cluster_result.n_clusters)
 
         # Persist group_cluster to canonical processed CSV and split sources.
         df["group_cluster"] = cluster_result.group_cluster.values
@@ -298,7 +298,7 @@ def run_dataset(
         fairness_df.to_csv(ds_out / "fairness_by_cluster.csv", index=False)
 
         corr_df = fpc.cramers_v_matrix(merged, cluster_col="group_cluster")
-        _report("correlation_matrix (Cramér's V)", corr_df if not corr_df.empty else None)
+        _report("correlation_matrix (Cramers V)", corr_df if not corr_df.empty else None)
         corr_df.to_csv(ds_out / "correlation_matrix.csv", index=False)
     else:
         logger.info(
@@ -362,7 +362,7 @@ def run_dataset(
             "[INFO] similarity: no %r column found (run stage 5 first). Skipping.", pred_col
         )
 
-    logger.info("[SUCCESS] grouping complete — %s", ds_out)
+    logger.info("[SUCCESS] grouping complete: output_dir=%s", ds_out)
 
 
 # ------------------------------------------------------------------
@@ -443,11 +443,16 @@ def main() -> None:
         logger.error("No datasets found. Pass --datasets or ensure processed CSVs exist.")
         sys.exit(1)
 
+    logger.info("[PHASE] grouping study started")
     logger.info(
-        "[PHASE] grouping study — study_id=%s datasets=%s methods=%s", study_id, datasets, methods
+        "[RUN_CONTEXT] pipeline=%s study_id=%s datasets=%s methods=%s output_dir=%s run_root=%s",
+        pipeline,
+        study_id,
+        datasets,
+        methods,
+        output_dir,
+        run_root if run_root else "none",
     )
-    if run_root:
-        logger.info("[PHASE] predictions loaded from run: %s", run_root)
 
     for dataset in datasets:
         try:
@@ -456,7 +461,7 @@ def main() -> None:
             logger.error("dataset %s failed: %s", dataset, exc, exc_info=True)
 
     update_output_study_pointer(base_results, "grouping", study_id)
-    logger.info("[SUCCESS] done — artifacts in %s", output_dir)
+    logger.info("[SUCCESS] grouping study complete: output_dir=%s", output_dir)
 
 
 if __name__ == "__main__":

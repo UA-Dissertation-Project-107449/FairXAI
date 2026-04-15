@@ -42,6 +42,8 @@ matplotlib.use("Agg")
 _ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_ROOT / "src"))
 
+from fairxai.cli.runner_base import setup_study_logging
+
 from fairxai.viz.experiment_plots import (
     save_cross_model_radar,
     save_intersectional_heatmap,
@@ -59,7 +61,6 @@ from fairxai.viz.transformations import (
     plot_transformation_impact,
 )
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
 _RUNS_BASE = _ROOT / "output" / "cardiac" / "runs"
@@ -88,7 +89,7 @@ def _resolve_run_dir(run_id: str) -> Path:
         if not candidates:
             raise FileNotFoundError(f"No run directories found under {_RUNS_BASE}")
         chosen = candidates[0]
-        logger.info("Resolved --run-id latest → %s", chosen.name)
+        logger.info("Resolved --run-id latest to %s", chosen.name)
         return chosen
     run_dir = _RUNS_BASE / run_id
     if not run_dir.exists():
@@ -188,12 +189,12 @@ def _generate_fairness_plots(
     baseline_jsons = sorted(fairness_dir.glob("*_logistic_regression_fairness_assessment.json"))
     if baseline_jsons:
         before_json = baseline_jsons[0]
-        # Use the same file for both if no experiment JSON is available
+        # Use the same file for both if no experiment JSON is available.
         for attr in _SENSITIVE_ATTRS:
             attr_short = attr.replace("_cat", "")
             result = plot_group_performance_gaps(
                 before_json,
-                before_json,  # placeholder — replace with experiment JSON for real before/after
+                before_json,  # placeholder; replace with experiment JSON for real before/after
                 attr,
                 out_dir / f"group_performance_gaps_{attr_short}.png",
             )
@@ -229,7 +230,7 @@ def _generate_transformation_plots(
     out_dir.mkdir(parents=True, exist_ok=True)
     _phase("transformation plots")
 
-    # 4. Transformation impact — best LR mitigation vs baseline (from full_comparison.csv)
+    # 4. Transformation impact - best LR mitigation vs baseline (from full_comparison.csv)
     if full_df is not None:
         baseline_rows = full_df[full_df["mitigation_technique"] == "baseline"]
         non_baseline = full_df[full_df["mitigation_technique"] != "baseline"]
@@ -269,7 +270,7 @@ def _generate_transformation_plots(
     else:
         logger.warning("[WARNING] transformation_impact: full_comparison.csv missing")
 
-    # 5. Before/after distributions — look for train prediction CSVs (pre- and post-SMOTE split)
+    # 5. Before/after distributions - look for train prediction CSVs (pre- and post-SMOTE split)
     results_dir = run_dir / "baseline" / "results"
     pred_csvs = sorted(results_dir.glob("cleveland_logistic_regression_train_predictions.csv"))
     if pred_csvs:
@@ -294,7 +295,7 @@ def _generate_transformation_plots(
             results_dir,
         )
 
-    # 6. Scaling effects — raw vs scaled using processed train CSV
+    # 6. Scaling effects - raw vs scaled using processed train CSV
     raw_csv = _DATA_PROCESSED / "cleveland_train.csv"
     scaled_csv = _DATA_PROCESSED / "cleveland_train_scaled.csv"
     if raw_csv.exists() and scaled_csv.exists():
@@ -355,7 +356,7 @@ def _generate_cross_model_plots(
     else:
         logger.warning("[WARNING] mitigation_effectiveness_matrix: full_comparison.csv missing")
 
-    # 10. All-model Pareto — support both f1_value (new) and f1_score (old) column naming
+    # 10. All-model Pareto - support both f1_value (new) and f1_score (old) column naming
     if full_df is not None:
         x_col = "f1_value" if "f1_value" in full_df.columns else "f1_score"
         result = save_pareto_all_models(full_df, out_dir / "pareto_all_models.png", x_col=x_col)
@@ -380,12 +381,26 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    setup_study_logging(
+        _ROOT,
+        "dissertation_figures",
+        args.run_id,
+        "dissertation_figures.log",
+        verbose=False,
+        log_subdir="cardiac",
+    )
+
     run_dir = _resolve_run_dir(args.run_id)
     comparisons_dir = run_dir / "experiments" / "full" / "comparisons"
     fairness_dir = run_dir / "baseline" / "fairness"
     out_base = _OUT_BASE / run_dir.name
-    logger.info("[PHASE] generate_dissertation_plots — run: %s", run_dir.name)
-    logger.info("[PHASE] output: %s", out_base)
+    logger.info("[PHASE] Dissertation plot generation started")
+    logger.info(
+        "[RUN_CONTEXT] requested_run_id=%s resolved_run_id=%s output_dir=%s",
+        args.run_id,
+        run_dir.name,
+        out_base,
+    )
 
     full_df = _safe_read_csv(comparisons_dir / "full_comparison.csv")
     per_group_df = _safe_read_csv(comparisons_dir / "per_group_comparison.csv")
@@ -395,7 +410,7 @@ def main() -> None:
     _generate_transformation_plots(run_dir, full_df, out_base / "transformations")
     _generate_cross_model_plots(full_df, per_group_df, summary_df, out_base / "cross_model")
 
-    logger.info("[SUCCESS] done — figures saved to %s", out_base)
+    logger.info("[SUCCESS] Dissertation figures generated: output_dir=%s", out_base)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ class ViolationDensityMapper:
     """Map fairness violation hotspots on a PCA 2D projection.
 
     Low k-NN consistency scores (near 0) indicate regions where similar
-    patients receive inconsistent predictions — potential individual fairness
+    patients receive inconsistent predictions, indicating potential individual fairness
     violations.  These are shown in red; high-consistency regions in blue.
 
     Args:
@@ -130,7 +130,7 @@ class ViolationDensityMapper:
             fig.savefig(output_file, dpi=150, bbox_inches="tight")
             plt.close(fig)
 
-            logger.info("[SUCCESS] violation_density_map.png → %s", output_file)
+            logger.info("[SUCCESS] violation_density_map saved to %s", output_file)
             return ViolationMapResult(output_file=output_file, n_samples=n, k_used=self.k)
 
         except Exception as exc:

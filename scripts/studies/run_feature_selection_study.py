@@ -1,6 +1,6 @@
-"""Feature selection study — sensitive-attribute ablation.
+"""Feature selection study - sensitive-attribute ablation.
 
-Runs train_baseline.py for each combination of feature-selection mode × dataset × model,
+Runs train_baseline.py for each combination of feature-selection mode x dataset x model,
 collecting results under output/<pipeline>/studies/feature_selection/<study_id>/.
 
 Training sub-runs land at:
@@ -100,7 +100,7 @@ def _run_one(
 ) -> dict:
     """Run train_baseline.py for one (mode, model_type) combo across all datasets.
 
-    train_baseline.py has no --datasets flag — it reads dataset list from the pipeline
+    train_baseline.py has no --datasets flag - it reads dataset list from the pipeline
     config. One subprocess call per (mode, model_type) covers all configured datasets.
     Output is routed via --output-dir to:
       output/<pipeline>/studies/feature_selection/<study_id>/runs/fs_<mode>__<model>/baseline/
@@ -151,11 +151,11 @@ def _run_one(
             }
         )
 
-    logger.info(f"[PHASE] RUN mode={mode} model={model_type}")
-    logger.info(f"[PHASE] OUTPUT results={results_dir}")
-    logger.info(f"[PHASE] OUTPUT models={models_dir}")
+    logger.info(
+        f"[RUN] mode={mode} model={model_type} results_dir={results_dir} models_dir={models_dir}"
+    )
     if dry_run:
-        logger.info(f"[PHASE] DRY-RUN {' '.join(cmd)}")
+        logger.info(f"[DRY_RUN] command={' '.join(cmd)}")
         return {"mode": mode, "model": model_type, "status": "dry_run", "duration_s": 0}
 
     if stop_event.is_set():
@@ -182,7 +182,7 @@ def _run_one(
         if process.returncode != 0:
             logger.error(
                 f"RUN mode={mode} model={model_type} "
-                f"(exit {process.returncode}) — see {baseline_root.parent}"
+                f"(exit {process.returncode}) - see {baseline_root.parent}"
             )
             return {
                 "mode": mode,
@@ -226,7 +226,7 @@ def _run_one(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="FairXAI feature selection study — sensitive-attribute ablation"
+        description="FairXAI feature selection study - sensitive-attribute ablation"
     )
     parser.add_argument("--pipeline", default="cardiac", help="Pipeline config name")
     parser.add_argument(
@@ -303,28 +303,24 @@ def main():
         model_n_jobs = -1
         threads_per_worker = 0
 
-    logger.info("[PHASE] FAIRXAI FEATURE SELECTION STUDY")
-    logger.info(f"[PHASE] Pipeline: {args.pipeline}")
-    logger.info(f"[PHASE] Datasets: {datasets} (all processed per subprocess call)")
-    logger.info(f"[PHASE] Models: {model_types}")
-    logger.info(f"[PHASE] Modes: {modes}")
-    logger.info(f"[PHASE] rfe_top_k: {rfe_top_k}")
+    logger.info("[PHASE] Feature selection study started")
     logger.info(
-        f"[PHASE] Jobs: {args.jobs}  model_n_jobs={model_n_jobs}  threads_per_worker={threads_per_worker or 'uncapped'}"
+        f"[RUN_CONTEXT] pipeline={args.pipeline} study_id={study_id} datasets={datasets} "
+        f"models={model_types} modes={modes} rfe_top_k={rfe_top_k} jobs={args.jobs} "
+        f"model_n_jobs={model_n_jobs} threads_per_worker={threads_per_worker or 'uncapped'} "
+        f"summary_path={summary_path} manifest_path={manifest_path} dry_run={args.dry_run}"
     )
-    logger.info(f"[PHASE] Summary path: {summary_path}")
-    logger.info(f"[PHASE] Manifest path: {manifest_path}")
 
-    # One subprocess per (mode, model_type) — each call covers all configured datasets.
+    # One subprocess per (mode, model_type) - each call covers all configured datasets.
     total = len(modes) * len(model_types)
-    logger.info(f"[PHASE] Total runs: {total}")
+    logger.info(f"[PLAN] Total runs: {total}")
 
     results = []
     stop_event = threading.Event()
     try:
         tasks = []
         for mode in modes:
-            logger.info(f"[PHASE] MODE {mode}")
+            logger.debug(f"Queued mode={mode}")
             for model_type in model_types:
                 tasks.append((mode, model_type))
 
@@ -347,7 +343,7 @@ def main():
                 if status["status"] == "interrupted":
                     raise KeyboardInterrupt
         else:
-            logger.info(f"[PHASE] PARALLEL up to {args.jobs} study jobs at a time")
+            logger.info(f"[RUN] Parallel mode enabled with jobs={args.jobs}")
             with cf.ThreadPoolExecutor(max_workers=args.jobs) as executor:
                 future_map = {
                     executor.submit(
@@ -452,10 +448,9 @@ def main():
 
     succeeded = sum(1 for r in results if r["status"] == "success")
     failed = sum(1 for r in results if r["status"] not in ("success", "dry_run"))
-    logger.info(f"[PHASE] Results: {succeeded}/{total} succeeded, {failed} failed")
+    logger.info(f"[SUMMARY] runs={total} succeeded={succeeded} failed={failed}")
     if args.dry_run:
-        logger.info(f"[PHASE] Study summary will be written to: {summary_path}")
-        logger.info(f"[PHASE] Study manifest will be written to: {manifest_path}")
+        logger.info(f"[DRY_RUN] summary_path={summary_path} manifest_path={manifest_path}")
     else:
         logger.info(f"[SUCCESS] Study summary written: {summary_path}")
         logger.info(f"[SUCCESS] Study manifest written: {manifest_path}")

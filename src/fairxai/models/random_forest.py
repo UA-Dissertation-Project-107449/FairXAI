@@ -23,9 +23,9 @@ class RandomForestModel(SklearnClassifierWrapper):
     cuML is not installed or if GPU initialisation fails.
 
     cuML differences handled transparently:
-    - No ``class_weight`` parameter → balanced ``sample_weight`` is computed
+        - No ``class_weight`` parameter; balanced ``sample_weight`` is computed
       at fit time via :func:`sklearn.utils.class_weight.compute_sample_weight`.
-    - Output arrays may be ``cupy.ndarray`` → converted to NumPy before return.
+        - Output arrays may be ``cupy.ndarray`` and are converted to NumPy before return.
     - ``n_jobs`` is ignored when using the cuML backend (GPU handles parallelism).
     """
 
@@ -126,16 +126,18 @@ class RandomForestModel(SklearnClassifierWrapper):
             y_train_proba = self.predict_proba(X_train)
             self.training_metrics = self._calculate_metrics(y_train, y_train_pred, y_train_proba)
 
-            logger.info("cuML RandomForest training complete")
-            logger.info(f"  Train Accuracy: {self.training_metrics['accuracy']:.4f}")
-            logger.info(f"  Train AUC-ROC: {self.training_metrics['auc_roc']:.4f}")
+            logger.info(
+                "[SUCCESS] cuML RandomForest training complete: "
+                f"train_accuracy={self.training_metrics['accuracy']:.4f} "
+                f"train_auc_roc={self.training_metrics['auc_roc']:.4f}"
+            )
             return self.training_metrics
 
         return super().train(X_train, y_train)
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
         proba = super().predict_proba(X)
-        # cuML may return cupy arrays — coerce to NumPy for downstream compatibility.
+        # cuML may return cupy arrays; coerce to NumPy for downstream compatibility.
         try:
             import cupy as cp  # type: ignore[import-not-found]
 

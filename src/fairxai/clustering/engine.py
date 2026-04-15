@@ -142,7 +142,7 @@ class ClusteringEngine:
         df = pd.DataFrame(rows)
         out = output_dir / "cluster_diagnostics.csv"
         df.to_csv(out, index=False)
-        logger.info("[SUCCESS] cluster_diagnostics.csv → %s", out)
+        logger.info("[SUCCESS] cluster_diagnostics saved to %s", out)
         return out
 
     # ------------------------------------------------------------------

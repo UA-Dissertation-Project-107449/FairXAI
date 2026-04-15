@@ -101,7 +101,7 @@ class SimilarityEngine:
         df = pd.DataFrame(result.to_df_rows())
         out = output_dir / "similarity_fairness_scores.csv"
         df.to_csv(out, index=False)
-        logger.info("[SUCCESS] similarity_fairness_scores.csv → %s", out)
+        logger.info("[SUCCESS] similarity_fairness_scores saved to %s", out)
         return out
 
     # ------------------------------------------------------------------

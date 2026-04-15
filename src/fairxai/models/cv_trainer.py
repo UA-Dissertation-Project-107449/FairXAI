@@ -260,7 +260,7 @@ class CVTrainer:
             fold_results = []
             for fold_idx, (train_idx, val_idx) in enumerate(folds):
                 self.logger.info(
-                    f"\n[FOLD {fold_idx + 1}/{self._last_effective_folds}] Training..."
+                    f"[FOLD {fold_idx + 1}/{self._last_effective_folds}] training"
                 )
 
                 X_train = X.iloc[train_idx]
@@ -291,15 +291,9 @@ class CVTrainer:
                 fold_results.append(fold_result)
                 self.logger.info(
                     f"  [FOLD {fold_idx + 1}/{self._last_effective_folds}] "
-                    f"Accuracy: {fold_result['val_metrics']['accuracy']:.3f}"
-                )
-                self.logger.info(
-                    f"  [FOLD {fold_idx + 1}/{self._last_effective_folds}] "
-                    f"Recall: {fold_result['val_metrics']['recall']:.3f}"
-                )
-                self.logger.info(
-                    f"  [FOLD {fold_idx + 1}/{self._last_effective_folds}] "
-                    f"F1: {fold_result['val_metrics']['f1_score']:.3f}"
+                    f"accuracy={fold_result['val_metrics']['accuracy']:.3f} "
+                    f"recall={fold_result['val_metrics']['recall']:.3f} "
+                    f"f1={fold_result['val_metrics']['f1_score']:.3f}"
                 )
 
         # Aggregate results
@@ -337,12 +331,10 @@ class CVTrainer:
             }
 
         # Log aggregated results
-        self.logger.info(f"\n{'='*60}")
-        self.logger.info("Cross-Validation Results (mean ± std):")
-        self.logger.info(f"{'='*60}")
+        self.logger.info("Cross-validation results (mean +/- std):")
         for metric_name, stats in aggregated.items():
             self.logger.info(
-                f"  {metric_name:12s}: {stats['mean']:.3f} ± {stats['std']:.3f} "
+                f"  {metric_name:12s}: {stats['mean']:.3f} +/- {stats['std']:.3f} "
                 f"(min: {stats['min']:.3f}, max: {stats['max']:.3f})"
             )
 
@@ -414,7 +406,7 @@ class CVTrainer:
                     f"({shap_exp.shap_values.shape[0]} samples)"
                 )
             except Exception as exc:
-                self.logger.warning(f"  Fold {fold_idx}: SHAP global failed — {exc}")
+                self.logger.warning(f"  Fold {fold_idx}: SHAP global failed - {exc}")
 
             # --- SHAP on validation data (local) ---
             try:
@@ -431,7 +423,7 @@ class CVTrainer:
                     f"({shap_local.shap_values.shape[0]} samples)"
                 )
             except Exception as exc:
-                self.logger.warning(f"  Fold {fold_idx}: SHAP local failed — {exc}")
+                self.logger.warning(f"  Fold {fold_idx}: SHAP local failed - {exc}")
         else:
             self.logger.info(f"  Fold {fold_idx}: SHAP skipped by configuration")
 
@@ -452,7 +444,9 @@ class CVTrainer:
                         class_names=["no_disease", "disease"],
                     )
                 except Exception as exc:
-                    self.logger.warning(f"  Fold {fold_idx}: LIME explainer build failed — {exc}")
+                    self.logger.warning(
+                        f"  Fold {fold_idx}: LIME explainer build failed - {exc}"
+                    )
 
             for idx in targets_in_fold:
                 try:
@@ -486,7 +480,7 @@ class CVTrainer:
                     self.logger.info(f"  Fold {fold_idx}: LIME explained instance {idx}")
                 except Exception as exc:
                     self.logger.warning(
-                        f"  Fold {fold_idx}: LIME failed for instance {idx} — {exc}"
+                        f"  Fold {fold_idx}: LIME failed for instance {idx} - {exc}"
                     )
 
         return xai_result

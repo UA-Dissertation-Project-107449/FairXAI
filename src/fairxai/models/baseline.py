@@ -83,9 +83,11 @@ class BaselineLogisticRegression:
 
         self.training_metrics = self._calculate_metrics(y_train, y_train_pred, y_train_proba)
 
-        logging.info("Training complete")
-        logging.info(f"  Train Accuracy: {self.training_metrics['accuracy']:.4f}")
-        logging.info(f"  Train AUC-ROC: {self.training_metrics['auc_roc']:.4f}")
+        logging.info(
+            "[SUCCESS] LogisticRegression training complete: "
+            f"train_accuracy={self.training_metrics['accuracy']:.4f} "
+            f"train_auc_roc={self.training_metrics['auc_roc']:.4f}"
+        )
 
         return self.training_metrics
 

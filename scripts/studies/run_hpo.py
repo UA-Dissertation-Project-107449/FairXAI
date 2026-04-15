@@ -1,6 +1,6 @@
 """Hyperparameter optimisation (HPO) orchestration script.
 
-Runs GridSearchCV / RandomizedSearchCV for each requested model × dataset
+Runs GridSearchCV / RandomizedSearchCV for each requested model x dataset
 combination and saves best params as JSON files consumed by the combinatorial
 runner and train_baseline.py.
 
@@ -120,21 +120,17 @@ def main():
     cv_folds = int(hpo_cfg.get("cv_folds", 5))
     recall_floor = float(hpo_cfg.get("recall_hard_floor", 0.60))
 
-    logger.info("=" * 70)
-    logger.info("FAIRXAI HYPERPARAMETER OPTIMISATION")
-    logger.info("=" * 70)
-    logger.info(f"Pipeline : {args.pipeline}")
-    logger.info(f"Datasets : {datasets}")
-    logger.info(f"Models   : {model_types}")
-    logger.info(f"Binning  : {binning}")
-    logger.info(f"Scoring  : {scoring}")
-    logger.info(f"CV folds : {cv_folds}")
-    logger.info(f"Output   : {output_dir}")
+    logger.info("[PHASE] HPO study started")
+    logger.info(
+        f"[RUN_CONTEXT] pipeline={args.pipeline} study_id={study_id} datasets={datasets} "
+        f"models={model_types} binning={binning} scoring={scoring} cv_folds={cv_folds} "
+        f"output_dir={output_dir} dry_run={args.dry_run}"
+    )
 
     grids_cfg = hpo_cfg.get("grids", {})
 
     for dataset in datasets:
-        logger.info(f"\n[DATASET] {dataset}")
+        logger.info(f"[DATASET] name={dataset}")
 
         train_df = _load_processed_data(dataset, binning, processed_dir)
         exclude_cols = default_exclude_columns(schema_cfg, train_df.columns.tolist())
@@ -162,10 +158,16 @@ def main():
             n_iter = int(grid_entry.get("n_iter", 20))
 
             if args.dry_run:
-                logger.info(f"  [DRY-RUN] Would search {model_type} on {dataset}: {param_grid}")
+                logger.info(
+                    f"  [DRY_RUN] dataset={dataset} model={model_type} "
+                    f"search={search_mode} params={param_grid}"
+                )
                 continue
 
-            logger.info(f"\n  [HPO] {model_type} on {dataset}")
+            logger.info(
+                f"  [HPO] dataset={dataset} model={model_type} "
+                f"search={search_mode} n_iter={n_iter}"
+            )
             try:
                 result = run_hpo(
                     model_type=model_type,
@@ -183,13 +185,13 @@ def main():
                 result["dataset"] = dataset
                 save_hpo_results(result, out_path)
                 logger.info(
-                    f"  [OK] {model_type}/{dataset}: "
-                    f"best_{scoring}={result['best_score']:.4f} → {out_path.name}"
+                    f"  [SUCCESS] dataset={dataset} model={model_type} "
+                    f"best_{scoring}={result['best_score']:.4f} output={out_path.name}"
                 )
             except Exception as exc:
-                logger.error(f"  [FAIL] {model_type}/{dataset}: {exc}")
+                logger.error(f"  [FAILED] dataset={dataset} model={model_type} error={exc}")
 
-    logger.info("\n[DONE] HPO complete.")
+    logger.info("[PHASE] HPO study complete")
     update_output_study_pointer(
         project_root / f"output/{args.pipeline}",
         "hpo",
