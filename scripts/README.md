@@ -191,8 +191,8 @@ output/cardiac/
 │   └── run_<timestamp>_<pid>_<uuid>/
 │       ├── profiling/
 │       ├── recommendations/
-│       ├── baseline/{models/, results/, fairness/}
-│       └── experiments/full/{attribute_binning/, mitigation/, comparisons/, …}
+│       ├── baseline/{models/, results/predictions/, prediction_fairness/}
+│       └── experiments/{attribute_binning/, mitigation/, comparisons/data/, comparisons/plots/, …}
 ├── studies/
 │   ├── hpo/                         # flat: best_params_*.json + latest.txt
 │   ├── feature_selection/

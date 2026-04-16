@@ -275,15 +275,18 @@ def _log_summary(report, dataset_name):
 
 
 def _save_report(report, output_dir, name, fmt):
-    """Write report to disk in requested format(s)."""
+    """Write report to disk in requested format(s), under a per-dataset subdir."""
+    dataset_dir = output_dir / name
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+
     if fmt in ("json", "both"):
-        json_path = output_dir / f"{name}_triage.json"
+        json_path = dataset_dir / "triage.json"
         with open(json_path, "w", encoding="utf-8") as f:
             f.write(to_json_string(report))
         logging.info(f"[SUCCESS] JSON saved: {json_path}")
 
     if fmt in ("markdown", "both"):
-        md_path = output_dir / f"{name}_triage.md"
+        md_path = dataset_dir / "triage.md"
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(to_markdown(report))
         logging.info(f"[SUCCESS] Markdown saved: {md_path}")

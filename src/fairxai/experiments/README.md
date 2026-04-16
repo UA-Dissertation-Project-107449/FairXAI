@@ -39,7 +39,7 @@ shared data I/O helpers used across experiment scripts.
 Experiment artifacts are expected under run directories such as:
 
 ```text
-output/{pipeline}/{latest_run|runs/{run_id}}/experiments/full/
+output/{pipeline}/{latest_run|runs/{run_id}}/experiments/
 ├── manifests/{dataset}/{holdout|cv}/
 ├── results/{dataset}/{holdout|cv}/
 ├── predictions/{dataset}/{holdout|cv}/
@@ -61,7 +61,7 @@ Typical config sources consumed by scripts using this module:
 from pathlib import Path
 from fairxai.experiments import ExperimentVersioning, create_binning_strategy
 
-versioning = ExperimentVersioning(Path("output/cardiac/latest_run/experiments/full"))
+versioning = ExperimentVersioning(Path("output/cardiac/latest_run/experiments"))
 exp_id = versioning.generate_experiment_id()
 
 bins, labels = create_binning_strategy(df, "quantile_5", col="age_raw")

@@ -224,7 +224,7 @@ scoring:
   min_group_size_threshold: 30  # Minimum for statistical validity
 
 output:
-  results_dir: "output/cardiac/experiments/full/latest_run/attribute_binning"
+  results_dir: "output/cardiac/experiments/attribute_binning"
   artifacts:
     - comparison_table_csv
     - stability_analysis_csv

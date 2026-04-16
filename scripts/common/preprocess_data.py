@@ -236,9 +236,9 @@ def main():
         stage_name="preprocess",
     )
     if run_id:
-        results_fairness = project_root / f"output/{pipeline}/runs/{run_id}/profiling/fairness"
+        results_fairness = project_root / f"output/{pipeline}/runs/{run_id}/profiling/data_fairness"
     else:
-        results_fairness = project_root / f"output/{pipeline}/profiling/fairness"
+        results_fairness = project_root / f"output/{pipeline}/profiling/data_fairness"
 
     # Setup
     logging.info("[PHASE] Preprocessing started")
@@ -535,8 +535,8 @@ def main():
                     logging.info(f"  {attr} - Max parity difference: {spd['max_difference']:.2%}")
 
             # Save fairness profiles
-            train_fairness_file = results_fairness / f"{dataset_name}_train_fairness.json"
-            test_fairness_file = results_fairness / f"{dataset_name}_test_fairness.json"
+            train_fairness_file = results_fairness / f"{dataset_name}_train.json"
+            test_fairness_file = results_fairness / f"{dataset_name}_test.json"
 
             with open(train_fairness_file, "w") as f:
                 json.dump(train_profile, f, indent=2, default=str)

@@ -454,13 +454,13 @@ def cardiac_pipeline(
     if _should_run(5):
         logger.info(f"  - Baseline:           {run_root}/baseline")
     if age_task:
-        logger.info(f"  - Attr binning:       {run_root}/experiments/full/attribute_binning")
+        logger.info(f"  - Attr binning:       {run_root}/experiments/attribute_binning")
     if mitigation_task:
-        logger.info(f"  - Mitigation:         {run_root}/experiments/full/mitigation")
+        logger.info(f"  - Mitigation:         {run_root}/experiments/mitigation")
     if combinatorial_task:
-        logger.info(f"  - Combinatorial:      {run_root}/experiments/full")
+        logger.info(f"  - Combinatorial:      {run_root}/experiments")
     if comparison_task:
-        logger.info(f"  - Comparison:         {run_root}/experiments/full/comparisons")
+        logger.info(f"  - Comparison:         {run_root}/experiments/comparisons")
 
 
 # ---------------------------------------------------------------------------
