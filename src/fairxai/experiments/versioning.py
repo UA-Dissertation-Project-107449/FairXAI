@@ -214,6 +214,34 @@ class ExperimentVersioning:
         self.logger.debug(f"[SUCCESS] Saved predictions: {pred_path}")
         return pred_path
 
+    def save_temp_model(self, exp_id: str, model: Any) -> Optional[Path]:
+        """
+        Pickle a trained model to models/_temp/{exp_id}.pkl.
+        The comparison script will promote top-N to models/ and delete _temp/.
+
+        Args:
+            exp_id: Experiment ID
+            model: Trained model object (must be picklable)
+
+        Returns:
+            Path to saved pkl, or None if model is None / not picklable
+        """
+        import pickle
+
+        if model is None:
+            return None
+        temp_dir = self.latest_dir / "models" / "_temp"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        pkl_path = temp_dir / f"{exp_id}.pkl"
+        try:
+            with open(pkl_path, "wb") as f:
+                pickle.dump(model, f)
+            self.logger.debug(f"[TEMP] Saved model: {pkl_path}")
+            return pkl_path
+        except Exception as exc:
+            self.logger.warning(f"Could not pickle model for {exp_id}: {exc}")
+            return None
+
     def archive_previous_run(self) -> Optional[Path]:
         """
         Archive the current latest_run to archived_runs/run_{datetime}.

@@ -245,9 +245,7 @@ def run_analysis(
         run_dir = get_run_root(base_output, run_id)
         run_dir.mkdir(parents=True, exist_ok=True)
         output_dir = (
-            Path(output_dir)
-            if output_dir
-            else run_dir / "experiments" / run_mode / "attribute_binning"
+            Path(output_dir) if output_dir else run_dir / "experiments" / "attribute_binning"
         )
     else:
         latest_dir = base_output / "latest_run"
@@ -344,9 +342,9 @@ def run_analysis(
     comparison_df = compare_strategies(all_results, by_dataset=True)
 
     # Save results
-    csv_file = output_dir / f"attribute_binning_comparison_{timestamp}.csv"
-    json_file = output_dir / f"attribute_binning_analysis_{timestamp}.json"
-    report_file = output_dir / f"attribute_binning_report_{timestamp}.md"
+    csv_file = output_dir / "comparison.csv"
+    json_file = output_dir / "analysis.json"
+    report_file = output_dir / "report.md"
 
     comparison_df.to_csv(csv_file, index=False)
     logging.info(f"[SUCCESS] Saved CSV: {csv_file}")

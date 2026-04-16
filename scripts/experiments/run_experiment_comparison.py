@@ -204,7 +204,7 @@ def create_summary_statistics(df: pd.DataFrame) -> pd.DataFrame:
     return summary
 
 
-def compare_binning_strategies(df: pd.DataFrame, output_dir: Path):
+def compare_binning_strategies(df: pd.DataFrame, output_dir: Path, plots_dir: Path = None):
     """
     Create binning strategy comparison table.
 
@@ -222,13 +222,13 @@ def compare_binning_strategies(df: pd.DataFrame, output_dir: Path):
         index="binning_strategy", columns="dataset", values=metric_col, aggfunc="mean"
     )
 
-    # Save
-    output_file = output_dir / "binning_comparison.csv"
+    # Save CSV in data/, heatmap PNG in plots/
+    output_file = output_dir / "binning_summary.csv"
     pivot.to_csv(output_file)
-    logging.info(f"[SUCCESS] Saved binning comparison: {output_file}")
+    logging.info(f"[SUCCESS] Saved binning summary: {output_file}")
 
-    # Heatmap
-    heatmap_file = output_dir / "binning_comparison_heatmap.png"
+    heatmap_dir = plots_dir if plots_dir else output_dir
+    heatmap_file = heatmap_dir / "binning_comparison_heatmap.png"
     save_comparison_heatmap(
         pivot, title="Binning Strategy Comparison (Composite Score)", output_file=heatmap_file
     )
@@ -237,7 +237,7 @@ def compare_binning_strategies(df: pd.DataFrame, output_dir: Path):
     return pivot
 
 
-def compare_mitigation_techniques(df: pd.DataFrame, output_dir: Path):
+def compare_mitigation_techniques(df: pd.DataFrame, output_dir: Path, plots_dir: Path = None):
     """
     Create mitigation technique comparison table.
 
@@ -254,13 +254,13 @@ def compare_mitigation_techniques(df: pd.DataFrame, output_dir: Path):
         index="mitigation_technique", columns="dataset", values=metric_col, aggfunc="mean"
     )
 
-    # Save
-    output_file = output_dir / "mitigation_comparison.csv"
+    # Save CSV in data/, heatmap PNG in plots/
+    output_file = output_dir / "mitigation_summary.csv"
     pivot.to_csv(output_file)
-    logging.info(f"[SUCCESS] Saved mitigation comparison: {output_file}")
+    logging.info(f"[SUCCESS] Saved mitigation summary: {output_file}")
 
-    # Heatmap
-    heatmap_file = output_dir / "mitigation_comparison_heatmap.png"
+    heatmap_dir = plots_dir if plots_dir else output_dir
+    heatmap_file = heatmap_dir / "mitigation_comparison_heatmap.png"
     save_comparison_heatmap(
         pivot, title="Mitigation Technique Comparison (Composite Score)", output_file=heatmap_file
     )
@@ -367,13 +367,14 @@ def filter_best_configurations(
 
     if not best_df.empty:
         best_df = best_df.sort_values(["dataset", "score"], ascending=[True, False])
-        output_file = output_dir / "best_configurations.csv"
+        best_df["is_fallback"] = False
+        output_file = output_dir / "top_configs.csv"
         best_df.to_csv(output_file, index=False)
-        logging.info(f"[SUCCESS] Saved best configurations: {output_file}")
+        logging.info(f"[SUCCESS] Saved top configurations: {output_file}")
         logging.info(f"  Found {len(best_df)} configurations meeting strict gates")
         return best_df
 
-    # Fallback: no configs passed strict gates; emit fallback shortlist
+    # Fallback: no configs passed strict gates; emit fallback shortlist merged into top_configs
     logging.warning(
         "No configurations passed strict gates "
         f"(recall_hard_floor={recall_hard_floor:.2f}, "
@@ -402,6 +403,7 @@ def filter_best_configurations(
                 "recall": recall,
                 "f1_score": row.get("f1_value"),
                 "selection_mode": "fallback",
+                "is_fallback": True,
                 "experiment_id": row["experiment_id"],
             }
         )
@@ -412,9 +414,10 @@ def filter_best_configurations(
             ["dataset", "fairness_gap", "score"],
             ascending=[True, True, False],
         )
-        fallback_file = output_dir / "best_configurations_fallback.csv"
-        fallback_df.to_csv(fallback_file, index=False)
-        logging.warning(f"[FALLBACK] Saved fallback shortlist: {fallback_file}")
+        # Write merged top_configs with is_fallback=True (no separate file)
+        top_configs_file = output_dir / "top_configs.csv"
+        fallback_df.to_csv(top_configs_file, index=False)
+        logging.warning(f"[FALLBACK] Saved fallback configs as top_configs: {top_configs_file}")
 
     return best_df  # empty DataFrame (strict set was empty)
 
@@ -505,18 +508,22 @@ def _load_baseline_per_group(run_root: Path, dataset: str, model_type: str) -> l
     extra source='baseline_assess' field so they can be distinguished.
     Falls back to an empty list if the JSON is absent or malformed.
     """
-    # Stage 6 writes to: {run_root}/baseline/fairness/{dataset}_{model_type}_fairness_assessment.json
-    json_path = (
-        run_root / "baseline" / "fairness" / f"{dataset}_{model_type}_fairness_assessment.json"
-    )
+    # Stage 6 writes to: {run_root}/baseline/prediction_fairness/fairness_report.json
+    # nested as {dataset: {model_type: {train_metrics: ..., test_metrics: ...}}}
+    json_path = run_root / "baseline" / "prediction_fairness" / "fairness_report.json"
     if not json_path.exists():
-        logging.debug(f"Baseline per-group JSON not found: {json_path}")
+        logging.debug(f"Baseline fairness report not found: {json_path}")
         return []
     try:
         with open(json_path) as f:
             data = json.load(f)
-        # The JSON has train_metrics and test_metrics; use test_metrics as the reference.
-        test_metrics = data.get("test_metrics", {})
+        # Navigate nested structure: data[dataset][model_type]
+        model_data = data.get(dataset, {}).get(model_type, {})
+        if not model_data:
+            logging.debug(f"No fairness data for {dataset}/{model_type} in {json_path}")
+            return []
+        # Use test_metrics as the reference
+        test_metrics = model_data.get("test_metrics", {})
         records = _extract_per_group_fairness(test_metrics)
         for r in records:
             r["source"] = "baseline_assess"
@@ -603,9 +610,74 @@ def _build_per_group_comparison(
         return
 
     pg_df = pd.DataFrame(rows)
-    pg_csv = output_dir / "per_group_comparison.csv"
+    pg_csv = output_dir / "per_group.csv"
     pg_df.to_csv(pg_csv, index=False)
     logging.info(f"[SUCCESS] Saved per-group comparison: {pg_csv} ({len(pg_df)} rows)")
+
+
+def _promote_top_n_models(versioning, df_success: "pd.DataFrame", save_top_n: int = 10) -> None:
+    """Move top-N experiment model PKLs from models/_temp/ to models/ and write index."""
+    import json
+    import shutil
+
+    if save_top_n <= 0:
+        return
+
+    temp_dir = versioning.latest_dir / "models" / "_temp"
+    models_dir = versioning.latest_dir / "models"
+
+    if not temp_dir.exists():
+        logging.debug("[TOP_N] No _temp/ dir found — model saving may not be enabled")
+        return
+
+    # Rank by composite score, take top N
+    rank_df = df_success[
+        [
+            "experiment_id",
+            "score_value",
+            "dataset",
+            "model_type",
+            "binning_strategy",
+            "mitigation_technique",
+        ]
+    ].copy()
+    rank_df = rank_df.dropna(subset=["score_value"]).sort_values("score_value", ascending=False)
+    top_ids = rank_df.head(save_top_n)["experiment_id"].tolist()
+
+    index_entries = []
+    promoted = 0
+    for rank, exp_id in enumerate(top_ids, start=1):
+        src = temp_dir / f"{exp_id}.pkl"
+        if not src.exists():
+            logging.debug(f"[TOP_N] No temp model for {exp_id}, skipping")
+            continue
+        dst = models_dir / f"{exp_id}.pkl"
+        shutil.move(str(src), str(dst))
+        row = rank_df[rank_df["experiment_id"] == exp_id].iloc[0]
+        index_entries.append(
+            {
+                "rank": rank,
+                "experiment_id": exp_id,
+                "composite_score": float(row["score_value"]),
+                "dataset": row.get("dataset", ""),
+                "model_type": row.get("model_type", ""),
+                "binning": row.get("binning_strategy", ""),
+                "mitigation": row.get("mitigation_technique", ""),
+            }
+        )
+        promoted += 1
+
+    # Clean up remaining temp models
+    shutil.rmtree(str(temp_dir), ignore_errors=True)
+
+    if index_entries:
+        index_path = models_dir / "top_models.json"
+        with open(index_path, "w") as f:
+            json.dump(index_entries, f, indent=2, default=str)
+        logging.info(f"[TOP_N] Promoted {promoted}/{save_top_n} models to {models_dir}")
+        logging.info(f"[TOP_N] Index saved: {index_path}")
+    else:
+        logging.warning("[TOP_N] No temp models found to promote")
 
 
 def run_comparison_analysis(
@@ -617,6 +689,7 @@ def run_comparison_analysis(
     verbose: int = 0,
     run_id: str = None,
     output_root: str = None,
+    save_top_n: int = 10,
 ):
     """Main comparison script."""
     project_root = get_project_root(Path(__file__))
@@ -652,12 +725,12 @@ def run_comparison_analysis(
             base_output_dir = candidate
             run_dir = resolve_latest_run_dir(base_output_dir)
     elif run_id:
-        run_dir = base_output_dir / "runs" / run_id / "experiments" / "full"
+        run_dir = base_output_dir / "runs" / run_id / "experiments"
     else:
         run_dir = resolve_latest_run_dir(base_output_dir)
 
     if run_dir is not None and not (run_dir / "manifests").exists():
-        candidate = run_dir / "experiments" / "full"
+        candidate = run_dir / "experiments"
         if (candidate / "manifests").exists() or (candidate / "results").exists():
             run_dir = candidate
 
@@ -674,9 +747,9 @@ def run_comparison_analysis(
     # Initialize versioning
     versioning = ExperimentVersioning(base_output_dir, run_dir=run_dir)
 
-    # Derive run_root: the directory that contains baseline/, experiments/full/, etc.
-    # run_dir is typically {run_root}/experiments/full.
-    run_root = run_dir.parent.parent if run_dir else None
+    # Derive run_root: the directory that contains baseline/, experiments/, etc.
+    # run_dir is typically {run_root}/experiments.
+    run_root = run_dir.parent if run_dir else None
 
     # Load all results
     logging.info("Loading experiment results...")
@@ -699,9 +772,13 @@ def run_comparison_analysis(
         logging.error("No successful experiments to analyze")
         return
 
-    # Create output directory
+    # Create output directories
     output_dir = versioning.latest_dir / "comparisons"
     output_dir.mkdir(exist_ok=True)
+    data_dir = output_dir / "data"
+    plots_dir = output_dir / "plots"
+    data_dir.mkdir(exist_ok=True)
+    plots_dir.mkdir(exist_ok=True)
 
     # Compute composite score for ranking
     for metric, weight in SCORE_WEIGHTS.items():
@@ -776,65 +853,42 @@ def run_comparison_analysis(
             if base_gap and base_gap > 0:
                 df_success.at[idx, "fairness_gain_pct"] = gain_score / base_gap
 
-    # Save full results table
-    full_results_file = output_dir / "full_comparison.csv"
+    # Mark pareto-optimal experiments per dataset (non-dominated on score_value vs fairness_gap)
+    df_success["is_pareto"] = False
+    for dataset in df_success["dataset"].unique():
+        mask = df_success["dataset"] == dataset
+        sub = df_success.loc[mask, ["score_value", "fairness_gap"]].copy()
+        for idx in sub.index:
+            sv, fg = sub.at[idx, "score_value"], sub.at[idx, "fairness_gap"]
+            if pd.isna(sv) or pd.isna(fg):
+                continue
+            dominated = sub[
+                (sub["score_value"] >= sv)
+                & (sub["fairness_gap"] <= fg)
+                & ~((sub["score_value"] == sv) & (sub["fairness_gap"] == fg))
+            ]
+            if dominated.empty:
+                df_success.at[idx, "is_pareto"] = True
+
+    # Save full results table (in data/ subdir)
+    full_results_file = data_dir / "full_comparison.csv"
     df_success.to_csv(full_results_file, index=False)
     logging.info(f"[SUCCESS] Saved full results: {full_results_file}")
 
     # Create comparison tables
     logging.info("Generating comparison tables...")
 
-    compare_binning_strategies(df_success, output_dir)
-    compare_mitigation_techniques(df_success, output_dir)
+    compare_binning_strategies(df_success, data_dir, plots_dir=plots_dir)
+    compare_mitigation_techniques(df_success, data_dir, plots_dir=plots_dir)
 
-    # Filter best configurations
+    # Filter best configurations (writes to data_dir now)
     logging.info("Filtering best configurations...")
     best_configs = filter_best_configurations(
         df_success,
-        output_dir,
+        data_dir,
         gate_thresholds,
         performance_threshold,
     )
-
-    # Diagnostics: repeated metrics
-    dup_cols = [
-        "dataset",
-        "training_method",
-        "binning_strategy",
-        "accuracy_value",
-        "recall_value",
-        "f1_value",
-        "auc_value",
-    ]
-    dup_groups = (
-        df_success.groupby(dup_cols, dropna=False)
-        .agg(
-            count=("experiment_id", "count"),
-            techniques=("mitigation_technique", lambda x: ",".join(sorted(set(x)))),
-        )
-        .reset_index()
-    )
-    dup_groups = dup_groups[dup_groups["count"] > 1]
-    dup_file = output_dir / "diagnostics_duplicate_metrics.csv"
-    dup_groups.to_csv(dup_file, index=False)
-    logging.info(f"[SUCCESS] Saved duplicate metrics diagnostics: {dup_file}")
-
-    # Diagnostics: failures (e.g., non-convergence)
-    failures = df[df["status"] == "failed"].copy()
-    if not failures.empty:
-        failure_file = output_dir / "diagnostics_failures.csv"
-        failures.to_csv(failure_file, index=False)
-        logging.info(f"[SUCCESS] Saved failure diagnostics: {failure_file}")
-
-    # Diagnostics: experiment duplication counts
-    combo_counts = (
-        df.groupby(["dataset", "binning_strategy", "mitigation_technique", "training_method"])
-        .agg(count=("experiment_id", "count"))
-        .reset_index()
-    )
-    combo_file = output_dir / "diagnostics_experiment_counts.csv"
-    combo_counts.to_csv(combo_file, index=False)
-    logging.info(f"[SUCCESS] Saved experiment counts: {combo_file}")
 
     # Trade-off visuals (per dataset, then per dataset x model_type)
     if not no_plots:
@@ -843,11 +897,11 @@ def run_comparison_analysis(
             if subset.empty:
                 continue
 
-            tradeoff_base = output_dir / f"tradeoff_{dataset}"
-            tradeoff_csv = tradeoff_base.with_suffix(".csv")
+            # Tradeoff: CSV in data/, PNG in plots/
+            tradeoff_csv = data_dir / f"tradeoff_{dataset}.csv"
             subset.to_csv(tradeoff_csv, index=False)
 
-            tradeoff_png = tradeoff_base.with_suffix(".png")
+            tradeoff_png = plots_dir / f"tradeoff_{dataset}.png"
             tradeoff_result = save_tradeoff_scatter(
                 subset,
                 x_col="score_value",
@@ -862,11 +916,14 @@ def run_comparison_analysis(
             else:
                 logging.warning(f"Tradeoff plot skipped (no data): {tradeoff_png}")
 
-            pareto_base = output_dir / f"pareto_{dataset}"
-            pareto_csv = pareto_base.with_suffix(".csv")
-            subset.to_csv(pareto_csv, index=False)
+            # Pareto: subset to pareto-flagged rows; CSV in data/, PNG in plots/
+            pareto_subset = (
+                subset[subset["is_pareto"]].copy() if "is_pareto" in subset.columns else subset
+            )
+            pareto_csv = data_dir / f"pareto_{dataset}.csv"
+            pareto_subset.to_csv(pareto_csv, index=False)
 
-            pareto_png = pareto_base.with_suffix(".png")
+            pareto_png = plots_dir / f"pareto_{dataset}.png"
             pareto_result = save_pareto_frontier(
                 subset,
                 x_col="score_value",
@@ -879,12 +936,12 @@ def run_comparison_analysis(
             else:
                 logging.warning(f"Pareto plot skipped (no data): {pareto_png}")
 
-            # Per-model Pareto plots: one per (dataset, model_type)
+            # Per-model Pareto plots: one per (dataset, model_type) — PNG only in plots/
             for model_type in sorted(subset["model_type"].dropna().unique()):
                 model_subset = subset[subset["model_type"] == model_type].copy()
                 if model_subset.empty or model_subset["fairness_gap"].isna().all():
                     continue
-                pareto_model_png = output_dir / f"pareto_{dataset}_{model_type}.png"
+                pareto_model_png = plots_dir / f"pareto_{dataset}_{model_type}.png"
                 pareto_model_result = save_pareto_frontier(
                     model_subset,
                     x_col="score_value",
@@ -918,7 +975,7 @@ def run_comparison_analysis(
         )
 
     summary_df = pd.DataFrame(summary_rows)
-    summary_csv = output_dir / "summary_top_configs.csv"
+    summary_csv = data_dir / "top_configs.csv"
     summary_df.to_csv(summary_csv, index=False)
     logging.info(f"[SUCCESS] Saved summary: {summary_csv}")
 
@@ -949,15 +1006,18 @@ def run_comparison_analysis(
             }
         )
     cross_model_df = pd.DataFrame(cross_model_rows)
-    cross_model_csv = output_dir / "cross_model_summary.csv"
+    cross_model_csv = data_dir / "cross_model_summary.csv"
     cross_model_df.to_csv(cross_model_csv, index=False)
     logging.info(f"[SUCCESS] Saved cross-model summary: {cross_model_csv}")
 
     # Per-subgroup before/after comparison (requires stage-6 baseline JSONs)
     if run_root is not None and run_root.exists():
-        _build_per_group_comparison(df_success, versioning, run_root, output_dir)
+        _build_per_group_comparison(df_success, versioning, run_root, data_dir)
     else:
         logging.debug("Skipping per-group comparison: run_root not available")
+
+    # Promote top N models from _temp/ to models/
+    _promote_top_n_models(versioning, df_success, save_top_n=save_top_n)
 
     # Print summary
     logging.info("[PHASE] Comparison complete")
@@ -996,6 +1056,12 @@ def main():
     )
     parser.add_argument("--no-plots", action="store_true", help="Disable plot generation")
     parser.add_argument(
+        "--save-top-n",
+        type=int,
+        default=10,
+        help="Number of top-ranked experiment models to promote from _temp/ (0 = skip)",
+    )
+    parser.add_argument(
         "-v", "--verbose", action="count", default=0, help="Verbosity: -v=info, -vv=debug"
     )
 
@@ -1010,6 +1076,7 @@ def main():
         verbose=args.verbose,
         run_id=args.run_id,
         output_root=args.output_root,
+        save_top_n=args.save_top_n,
     )
 
 

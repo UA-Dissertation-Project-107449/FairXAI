@@ -1040,6 +1040,10 @@ def run_single_split_experiment(
             xai_cfg=xai_cfg,
         )
 
+    # Save model to temp dir (comparison script will promote top-N and prune _temp/)
+    if model_for_xai is not None:
+        versioning.save_temp_model(exp_id, model_for_xai)
+
     logger.info(f"  Accuracy: {result['test_metrics']['accuracy']:.3f}")
     logger.info(f"  Recall: {result['test_metrics']['recall']:.3f}")
     logger.info(f"  F1: {result['test_metrics']['f1_score']:.3f}")
@@ -1403,7 +1407,7 @@ def run_combinatorial_analysis(
         base_output_dir = (
             Path(output_root) if output_root else (project_root / f"output/{pipeline}")
         )
-        run_dir = get_run_root(base_output_dir, run_id) / "experiments" / "full"
+        run_dir = get_run_root(base_output_dir, run_id) / "experiments"
         run_dir.mkdir(parents=True, exist_ok=True)
         versioning = ExperimentVersioning(base_output_dir, run_dir=run_dir)
     else:

@@ -342,9 +342,22 @@ def create_comparison_table(all_results):
         metrics = result["test_metrics"]
 
         # Extract key fairness metrics
+        # FairnessMetrics.calculate_all_metrics() returns:
+        #   {"group_fairness": {attr: {"demographic_parity": {...}, "equalized_odds": {...}}},
+        #    "individual_fairness": {...}}
         fairness = result.get("fairness", {})
-        demographic_parity = fairness.get("demographic_parity", {})
-        equalized_odds = fairness.get("equalized_odds", {})
+        group_fairness = fairness.get("group_fairness", {})
+        # Flatten per-attribute metrics into combined dicts keyed by attr
+        demographic_parity = {
+            attr: metrics.get("demographic_parity", {})
+            for attr, metrics in group_fairness.items()
+            if "demographic_parity" in metrics
+        }
+        equalized_odds = {
+            attr: metrics.get("equalized_odds", {})
+            for attr, metrics in group_fairness.items()
+            if "equalized_odds" in metrics
+        }
 
         row = {
             "dataset": result["dataset"],
@@ -371,8 +384,12 @@ def create_comparison_table(all_results):
         if equalized_odds:
             for attr, eo_metrics in equalized_odds.items():
                 if isinstance(eo_metrics, dict):
-                    tpr_diff = eo_metrics.get("tpr_difference", np.nan)
-                    fpr_diff = eo_metrics.get("fpr_difference", np.nan)
+                    tpr_diff = eo_metrics.get(
+                        "tpr_max_difference", eo_metrics.get("tpr_difference", np.nan)
+                    )
+                    fpr_diff = eo_metrics.get(
+                        "fpr_max_difference", eo_metrics.get("fpr_difference", np.nan)
+                    )
                     row[f"eq_odds_{attr}_tpr_diff"] = tpr_diff
                     row[f"eq_odds_{attr}_fpr_diff"] = fpr_diff
                     if pd.notna(tpr_diff):
@@ -403,6 +420,44 @@ def create_comparison_table(all_results):
     df["fairness_gain_pct"] = df["fairness_gain"] / df["baseline_fairness_gap"]
 
     return df
+
+
+def _write_mitigation_report(df: "pd.DataFrame", report_file: "Path") -> None:
+    """Write a human-readable markdown summary of mitigation results."""
+    from pathlib import Path
+
+    lines = ["# Mitigation Comparison Report\n"]
+    for dataset in sorted(df["dataset"].unique() if "dataset" in df.columns else []):
+        lines.append(f"## {dataset}\n")
+        sub = df[df["dataset"] == dataset] if "dataset" in df.columns else df
+        # Best by accuracy
+        if "accuracy" in sub.columns and not sub["accuracy"].isna().all():
+            best_acc = sub.loc[sub["accuracy"].idxmax()]
+            lines.append(
+                f"**Best accuracy:** `{best_acc.get('technique', '?')}` — "
+                f"{best_acc['accuracy']:.3f}\n"
+            )
+        # Best fairness (lowest fairness gap if column exists)
+        gap_col = next(
+            (c for c in ("fairness_gap", "demographic_parity_gap") if c in sub.columns), None
+        )
+        if gap_col and not sub[gap_col].isna().all():
+            best_idx = sub[gap_col].abs().idxmin()
+            if pd.notna(best_idx):
+                best_fair = sub.loc[best_idx]
+                lines.append(
+                    f"**Best fairness:** `{best_fair.get('technique', '?')}` — "
+                    f"{gap_col}={best_fair[gap_col]:.3f}\n"
+                )
+        # Summary table: top 5 by accuracy
+        if "accuracy" in sub.columns:
+            top5 = sub.nlargest(5, "accuracy")
+            show_cols = [
+                c for c in ("technique", "accuracy", "recall", gap_col) if c and c in sub.columns
+            ]
+            lines.append(top5[show_cols].round(3).to_markdown(index=False))
+            lines.append("")
+    Path(report_file).write_text("\n".join(lines))
 
 
 def run_analysis(
@@ -471,9 +526,7 @@ def run_analysis(
     if run_id:
         run_dir = get_run_root(base_output, run_id)
         run_dir.mkdir(parents=True, exist_ok=True)
-        output_dir = (
-            Path(output_dir) if output_dir else run_dir / "experiments" / run_mode / "mitigation"
-        )
+        output_dir = Path(output_dir) if output_dir else run_dir / "experiments" / "mitigation"
     else:
         latest_dir = base_output / "latest_run"
         if run_mode == "partial":
@@ -601,9 +654,9 @@ def run_analysis(
         logging.error("No comparison data available")
         return
 
-    # Save results
-    csv_file = output_dir / f"mitigation_comparison_{timestamp}.csv"
-    json_file = output_dir / f"mitigation_comparison_{timestamp}.json"
+    # Save results (no timestamp — run is already scoped by run_id)
+    csv_file = output_dir / "summary.csv"
+    json_file = output_dir / "results.json"
 
     comparison_df.to_csv(csv_file, index=False)
     logging.info(f"[SUCCESS] Saved CSV: {csv_file}")
@@ -611,6 +664,11 @@ def run_analysis(
     with open(json_file, "w") as f:
         json.dump(all_results, f, indent=2, default=str)
     logging.info(f"[SUCCESS] Saved JSON: {json_file}")
+
+    # Generate human-readable markdown report
+    report_file = output_dir / "report.md"
+    _write_mitigation_report(comparison_df, report_file)
+    logging.info(f"[SUCCESS] Saved report: {report_file}")
 
     # Print summary
     logging.info("Results summary: rows=%d", len(comparison_df))
