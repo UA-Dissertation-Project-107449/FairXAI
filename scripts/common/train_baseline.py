@@ -370,6 +370,7 @@ def main():
             )
         baseline_root = project_root / f"output/{pipeline}/runs/{run_id}/baseline"
     experiments_dir = baseline_root / "results"
+    predictions_dir = experiments_dir / "predictions"
     models_dir = baseline_root / "models"
     setup_phase_logging(
         project_root,
@@ -396,6 +397,7 @@ def main():
 
     models_dir.mkdir(parents=True, exist_ok=True)
     experiments_dir.mkdir(parents=True, exist_ok=True)
+    predictions_dir.mkdir(parents=True, exist_ok=True)
 
     # Configuration
     training_cfg = pipeline_cfg.get("training", {})
@@ -431,6 +433,7 @@ def main():
 
     # Train model(s) for each dataset
     results_summary = {}
+    split_info: dict = {}
 
     for train_file in train_files:
         dataset_name = train_file.stem.replace("_train_scaled", "")
@@ -455,6 +458,26 @@ def main():
         # Note: scaled files have both encoded and categorical versions
         # We keep the encoded numerical versions for modeling
         target_col = training_cfg.get("target", "heart_disease")
+
+        # Capture split metadata for split_info.json
+        _split_cfg = pipeline_cfg.get("split", {})
+        split_info[dataset_name] = {
+            "n_train": len(train_df),
+            "n_test": len(test_df),
+            "test_size": _split_cfg.get("test_size", 0.3),
+            "random_state": _split_cfg.get("random_state", 42),
+            "target_column": target_col,
+            "train_target_dist": (
+                train_df[target_col].value_counts(normalize=True).round(4).to_dict()
+                if target_col in train_df.columns
+                else {}
+            ),
+            "test_target_dist": (
+                test_df[target_col].value_counts(normalize=True).round(4).to_dict()
+                if target_col in test_df.columns
+                else {}
+            ),
+        }
         sensitive_candidates = pipeline_cfg.get("fairness", {}).get(
             "sensitive_attributes", ["age_group", "sex"]
         )
@@ -623,8 +646,8 @@ def main():
             model_file = models_dir / f"{dataset_name}_{model_type}.pkl"
             model.save(str(model_file))
 
-            train_pred_file = experiments_dir / f"{dataset_name}_{model_type}_train_predictions.csv"
-            test_pred_file = experiments_dir / f"{dataset_name}_{model_type}_test_predictions.csv"
+            train_pred_file = predictions_dir / f"{dataset_name}_{model_type}_train.csv"
+            test_pred_file = predictions_dir / f"{dataset_name}_{model_type}_test.csv"
 
             train_predictions.to_csv(train_pred_file, index=False)
             test_predictions.to_csv(test_pred_file, index=False)
@@ -637,9 +660,7 @@ def main():
             logging.info(f"  Train: {train_pred_file}")
             logging.info(f"  Test: {test_pred_file}")
 
-            importance_file = (
-                experiments_dir / f"{dataset_name}_{model_type}_feature_importance.csv"
-            )
+            importance_file = predictions_dir / f"{dataset_name}_{model_type}_importance.csv"
             feature_importance.to_csv(importance_file, index=False)
             logging.info(f"  Feature importance: {importance_file}")
 
@@ -762,9 +783,17 @@ def main():
     with open(results_file, "w") as f:
         json.dump(results_summary, f, indent=2, default=str)
 
+    # Save split metadata
+    split_info_file = baseline_root / "split_info.json"
+    with open(split_info_file, "w") as f:
+        json.dump(split_info, f, indent=2, default=str)
+
     logging.info("[PHASE] Baseline training complete")
     n_models_trained = sum(
-        1 for ds_results in results_summary.values() for r in ds_results.values() if r.get("status") == "success"
+        1
+        for ds_results in results_summary.values()
+        for r in ds_results.values()
+        if r.get("status") == "success"
     )
     logging.info(
         "Training summary: datasets=%d models_trained=%d",

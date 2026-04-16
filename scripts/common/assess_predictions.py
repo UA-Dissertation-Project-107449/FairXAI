@@ -20,8 +20,54 @@ import pandas as pd
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root / "src"))
 
-from fairxai.cli.runner_base import load_pipeline_config, setup_phase_logging
+from fairxai.cli.runner_base import setup_phase_logging
 from fairxai.fairness.metrics import FairnessMetrics, summarize_fairness_results
+
+_KNOWN_MODELS = ["logistic_regression", "random_forest", "svm", "xgboost"]
+
+
+def _split_dataset_model(combined: str, known_models: list = _KNOWN_MODELS) -> tuple:
+    """Split 'cleveland_logistic_regression' → ('cleveland', 'logistic_regression')."""
+    for model in sorted(known_models, key=len, reverse=True):
+        if combined.endswith(f"_{model}"):
+            return combined[: -(len(model) + 1)], model
+    return combined, "unknown"
+
+
+def _render_fairness_md(nested_results: dict) -> str:
+    """Render nested {dataset: {model: results}} fairness dict as markdown."""
+    lines = ["# Prediction Fairness Report\n"]
+    for dataset, models in sorted(nested_results.items()):
+        lines.append(f"## {dataset.replace('_', ' ').title()}\n")
+        for model, res in sorted(models.items()):
+            lines.append(f"### {model.replace('_', ' ').title()}\n")
+            for split in ("test_metrics", "train_metrics"):
+                label = "Test" if split == "test_metrics" else "Train"
+                metrics = res.get(split, {})
+                gf = metrics.get("group_fairness", {})
+                if not gf:
+                    continue
+                lines.append(f"**{label} Set — Group Fairness**\n")
+                lines.append("| Attribute | Metric | Max Difference | Fair? |")
+                lines.append("|-----------|--------|---------------|-------|")
+                for attr, attr_metrics in sorted(gf.items()):
+                    for metric_name, md in sorted(attr_metrics.items()):
+                        fair = md.get("is_fair", False)
+                        diff = md.get("max_difference") or md.get("tpr_max_difference", "?")
+                        flag = "✓" if fair else "✗"
+                        if isinstance(diff, float):
+                            diff = f"{diff:.3f}"
+                        lines.append(f"| {attr} | {metric_name} | {diff} | {flag} |")
+                lines.append("")
+                calib = metrics.get("calibration", {})
+                for attr, cd in sorted(calib.items()):
+                    fair = cd.get("is_fair", False)
+                    flag = "✓" if fair else "✗"
+                    ece = cd.get("max_ece_difference", "?")
+                    if isinstance(ece, float):
+                        ece = f"{ece:.4f}"
+                    lines.append(f"**{label} Calibration ({attr}):** max ECE diff = {ece} {flag}\n")
+    return "\n".join(lines)
 
 
 def decode_sensitive_attributes(df: pd.DataFrame) -> pd.DataFrame:
@@ -155,20 +201,7 @@ def assess_dataset_fairness(
     # Compare train vs test
     results["comparison"] = compare_fairness(train_metrics, test_metrics)
 
-    # Save results
-    output_file = output_dir / f"{dataset_name}_fairness_assessment.json"
-    with open(output_file, "w") as f:
-        # Convert numpy types for JSON serialization
-        json.dump(
-            results,
-            f,
-            indent=2,
-            default=lambda o: float(o) if isinstance(o, (np.integer, np.floating)) else str(o),
-        )
-
-    logging.info(f"[SUCCESS] Fairness assessment saved to: {output_file}")
-
-    # Create summary table
+    # Create summary table (renamed: _fairness_summary.csv → _summary.csv)
     summary_train = summarize_fairness_results(train_metrics)
     summary_test = summarize_fairness_results(test_metrics)
 
@@ -176,7 +209,7 @@ def assess_dataset_fairness(
     summary_test["split"] = "test"
     summary = pd.concat([summary_train, summary_test], ignore_index=True)
 
-    summary_file = output_dir / f"{dataset_name}_fairness_summary.csv"
+    summary_file = output_dir / f"{dataset_name}_summary.csv"
     summary.to_csv(summary_file, index=False)
 
     logging.info(f"[SUCCESS] Summary table saved to: {summary_file}")
@@ -299,7 +332,6 @@ def main():
     pipeline = args.pipeline
 
     project_root = Path(__file__).parent.parent.parent
-    pipeline_cfg = load_pipeline_config(project_root, pipeline)
     run_id = os.getenv("RUN_ID")
     if not run_id:
         raise RuntimeError(
@@ -307,8 +339,8 @@ def main():
             "with RUN_ID exported."
         )
     baseline_root = project_root / f"output/{pipeline}/runs/{run_id}/baseline"
-    experiments_dir = baseline_root / "results"
-    results_dir = baseline_root / "fairness"
+    predictions_dir = baseline_root / "results" / "predictions"
+    results_dir = baseline_root / "prediction_fairness"
     # Setup
     setup_phase_logging(
         project_root,
@@ -322,7 +354,7 @@ def main():
         "Run context: pipeline=%s run_id=%s predictions_dir=%s output_dir=%s",
         pipeline,
         run_id,
-        experiments_dir,
+        predictions_dir,
         results_dir,
     )
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -330,8 +362,8 @@ def main():
     # Initialize fairness calculator
     metrics_calculator = FairnessMetrics(sensitive_attributes=["age_group_cat", "sex_cat"])
 
-    # Find all prediction files
-    train_files = sorted(experiments_dir.glob("*_train_predictions.csv"))
+    # Find all prediction files (new path: results/predictions/{ds}_{m}_train.csv)
+    train_files = sorted(predictions_dir.glob("*_train.csv"))
     if args.datasets:
         selected = [d.strip() for d in args.datasets]
         train_files = [
@@ -342,48 +374,58 @@ def main():
         train_files = [
             p
             for p in train_files
-            if any(f"_{model}_train_predictions.csv" in p.name for model in selected_models)
+            if any(f"_{model}_train.csv" in p.name for model in selected_models)
         ]
 
     if not train_files:
-        logging.error(f"No prediction files found in {experiments_dir}")
-        logging.error("Please run baseline training first (Phase 3)")
+        logging.error(f"No prediction files found in {predictions_dir}")
+        logging.error("Please run baseline training first (Phase 5)")
         return
 
     logging.info(f"Found {len(train_files)} prediction pairs to assess")
 
-    # Process each dataset
-    all_results = {}
+    # Process each dataset — build nested {dataset: {model: results}} structure
+    nested_results: dict = {}
 
     for train_file in train_files:
-        dataset_name = train_file.stem.replace("_train_predictions", "")
-        test_file = experiments_dir / f"{dataset_name}_test_predictions.csv"
+        combined_name = train_file.stem.replace("_train", "")
+        test_file = predictions_dir / f"{combined_name}_test.csv"
 
         if not test_file.exists():
-            logging.warning(f"Test file not found for {dataset_name}, skipping")
+            logging.warning(f"Test file not found for {combined_name}, skipping")
             continue
+
+        dataset, model = _split_dataset_model(combined_name)
 
         try:
             results = assess_dataset_fairness(
-                dataset_name, train_file, test_file, results_dir, metrics_calculator
+                combined_name, train_file, test_file, results_dir, metrics_calculator
             )
-            all_results[dataset_name] = results
+            nested_results.setdefault(dataset, {})[model] = results
         except Exception as e:
-            logging.exception(f"Failed to assess {dataset_name}: {e}")
+            logging.exception(f"Failed to assess {combined_name}: {e}")
             continue
 
-    # Save combined results
-    combined_file = results_dir / "post_prediction_fairness_report.json"
+    # Save combined report (renamed + rekeyed)
+    combined_file = results_dir / "fairness_report.json"
     with open(combined_file, "w") as f:
         json.dump(
-            all_results,
+            nested_results,
             f,
             indent=2,
             default=lambda o: float(o) if isinstance(o, (np.integer, np.floating)) else str(o),
         )
 
+    # Save human-readable markdown interpretation
+    md_file = results_dir / "fairness_report.md"
+    md_file.write_text(_render_fairness_md(nested_results))
+
     logging.info("[PHASE] Fairness assessment complete")
-    logging.info("Fairness assessment summary: assessed=%d", len(all_results))
+    logging.info(
+        "Fairness assessment summary: datasets=%d models=%d",
+        len(nested_results),
+        sum(len(v) for v in nested_results.values()),
+    )
     logging.info(f"Results saved to: {results_dir}")
     logging.info(f"Combined report: {combined_file}")
 
