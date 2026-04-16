@@ -100,26 +100,27 @@ def minimal_fairness_metrics_dict():
 def tmp_run_root(tmp_path):
     """Minimal run directory structure mirroring a real pipeline run."""
     run_root = tmp_path / "output" / "cardiac" / "runs" / "run_test"
-    (run_root / "baseline" / "fairness").mkdir(parents=True)
-    (run_root / "experiments" / "full" / "manifests").mkdir(parents=True)
-    (run_root / "experiments" / "full" / "results").mkdir(parents=True)
+    (run_root / "baseline" / "prediction_fairness").mkdir(parents=True)
+    (run_root / "experiments" / "manifests").mkdir(parents=True)
+    (run_root / "experiments" / "results").mkdir(parents=True)
     return run_root
 
 
 @pytest.fixture
 def sample_baseline_fairness_json(tmp_run_root, minimal_fairness_metrics_dict):
-    """Write a realistic stage-6 baseline fairness JSON and return its path."""
+    """Write a realistic stage-6 baseline fairness JSON and return its path.
+
+    Format mirrors the nested {dataset: {model: {train_metrics, test_metrics}}}
+    structure written by assess_predictions.py.
+    """
     payload = {
-        "dataset": "cleveland_logistic_regression",
-        "train_metrics": minimal_fairness_metrics_dict,
-        "test_metrics": minimal_fairness_metrics_dict,
-        "comparison": {},
+        "cleveland": {
+            "logistic_regression": {
+                "train_metrics": minimal_fairness_metrics_dict,
+                "test_metrics": minimal_fairness_metrics_dict,
+            }
+        }
     }
-    json_path = (
-        tmp_run_root
-        / "baseline"
-        / "fairness"
-        / "cleveland_logistic_regression_fairness_assessment.json"
-    )
+    json_path = tmp_run_root / "baseline" / "prediction_fairness" / "fairness_report.json"
     json_path.write_text(json.dumps(payload))
     return json_path

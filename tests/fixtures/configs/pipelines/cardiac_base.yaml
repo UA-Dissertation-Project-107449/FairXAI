@@ -2,7 +2,7 @@ paths:
   processed_dir: data/processed/override_me
   experiments_dir: output/baseline/results
   models_dir: output/baseline/models
-  results_fairness_dir: output/baseline/fairness
+  results_fairness_dir: output/baseline/prediction_fairness
   results_binning_dir: output/binning
 
 runtime:
