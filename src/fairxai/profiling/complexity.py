@@ -568,14 +568,31 @@ def compute_complexity_metrics(
     target: str | None = None,
     max_samples: int | None = None,
     config: ComplexityConfig | None = None,
+    exclude_cols: list[str] | None = None,
 ) -> dict[str, float | None]:
-    """Compute all supported complexity metrics for *df*."""
+    """Compute all supported complexity metrics for *df*.
+
+    Args:
+        df: Input DataFrame.
+        target: Target column name.
+        max_samples: Maximum number of samples to use.
+        config: ComplexityConfig instance.
+        exclude_cols: Extra columns to drop before computing metrics (e.g.
+            redundant aliases such as ``sex_extended``, ``sex_bin``,
+            ``age_raw`` that are present in the raw/standardized file but
+            absent from the model feature set).
+    """
     if config is None:
         config = ComplexityConfig()
 
     target = target or config.default_target
     seed = config.random_seed
     svc_max_iter = config.linear_svc_max_iter
+
+    if exclude_cols:
+        cols_to_drop = [c for c in exclude_cols if c in df.columns and c != target]
+        if cols_to_drop:
+            df = df.drop(columns=cols_to_drop)
 
     X, y_raw = _select_numeric(df, target)
     if X is None or y_raw is None:
