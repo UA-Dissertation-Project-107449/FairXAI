@@ -371,7 +371,9 @@ def run_dataset(
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Grouping & similarity subgroup discovery (standalone study)")
+    p = argparse.ArgumentParser(
+        description="Grouping & similarity subgroup discovery (standalone study)"
+    )
     p.add_argument(
         "--run-id",
         default=None,

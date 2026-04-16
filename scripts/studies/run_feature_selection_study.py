@@ -36,7 +36,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from fairxai.cli.runner_base import get_project_root, setup_study_logging
-from fairxai.cli.runner_utils import resolve_run_id, update_output_study_pointer, update_study_pointer
+from fairxai.cli.runner_utils import (
+    resolve_run_id,
+    update_output_study_pointer,
+    update_study_pointer,
+)
 from fairxai.utils.config import load_yaml_config
 
 logger = logging.getLogger(__name__)
@@ -424,18 +428,15 @@ def main():
                 **run,
                 "sub_key": _build_sub_run_key(run["mode"], run["model"]),
                 "baseline_root": str(
-                    project_root
-                    / f"output/{args.pipeline}/studies/feature_selection/{study_id}"
+                    project_root / f"output/{args.pipeline}/studies/feature_selection/{study_id}"
                     f"/runs/{_build_sub_run_key(run['mode'], run['model'])}/baseline"
                 ),
                 "results_dir": str(
-                    project_root
-                    / f"output/{args.pipeline}/studies/feature_selection/{study_id}"
+                    project_root / f"output/{args.pipeline}/studies/feature_selection/{study_id}"
                     f"/runs/{_build_sub_run_key(run['mode'], run['model'])}/baseline/results"
                 ),
                 "models_dir": str(
-                    project_root
-                    / f"output/{args.pipeline}/studies/feature_selection/{study_id}"
+                    project_root / f"output/{args.pipeline}/studies/feature_selection/{study_id}"
                     f"/runs/{_build_sub_run_key(run['mode'], run['model'])}/baseline/models"
                 ),
             }

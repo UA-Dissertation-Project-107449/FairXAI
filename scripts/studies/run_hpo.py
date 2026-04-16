@@ -28,7 +28,11 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from fairxai.cli.runner_base import get_project_root, setup_study_logging
-from fairxai.cli.runner_utils import resolve_run_id, update_output_study_pointer, update_study_pointer
+from fairxai.cli.runner_utils import (
+    resolve_run_id,
+    update_output_study_pointer,
+    update_study_pointer,
+)
 from fairxai.experiments.data_io import (
     default_exclude_columns,
 )

@@ -43,7 +43,6 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_ROOT / "src"))
 
 from fairxai.cli.runner_base import setup_study_logging
-
 from fairxai.viz.experiment_plots import (
     save_cross_model_radar,
     save_intersectional_heatmap,

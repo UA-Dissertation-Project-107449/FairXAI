@@ -259,9 +259,7 @@ class CVTrainer:
             # Sequential fold loop (required for XAI or when outer parallel is active)
             fold_results = []
             for fold_idx, (train_idx, val_idx) in enumerate(folds):
-                self.logger.info(
-                    f"[FOLD {fold_idx + 1}/{self._last_effective_folds}] training"
-                )
+                self.logger.info(f"[FOLD {fold_idx + 1}/{self._last_effective_folds}] training")
 
                 X_train = X.iloc[train_idx]
                 y_train = y.iloc[train_idx]
@@ -444,9 +442,7 @@ class CVTrainer:
                         class_names=["no_disease", "disease"],
                     )
                 except Exception as exc:
-                    self.logger.warning(
-                        f"  Fold {fold_idx}: LIME explainer build failed - {exc}"
-                    )
+                    self.logger.warning(f"  Fold {fold_idx}: LIME explainer build failed - {exc}")
 
             for idx in targets_in_fold:
                 try:

@@ -497,9 +497,7 @@ class MitigationEngine:
         if not isinstance(y_train, pd.Series):
             raise TypeError(f"y_train must be pd.Series, got: {type(y_train)}")
 
-        logger.info(
-            f"[MITIGATION] Applying technique={technique_name} stage={stage}"
-        )
+        logger.info(f"[MITIGATION] Applying technique={technique_name} stage={stage}")
 
         if stage == "pre-processing":
             return self._apply_preprocessing(
@@ -655,9 +653,7 @@ class MitigationEngine:
         """
         self._validate_combo_chain(techniques)
 
-        logger.info(
-            f"[MITIGATION_COMBO] Applying chain: {', '.join(techniques)}"
-        )
+        logger.info(f"[MITIGATION_COMBO] Applying chain: {', '.join(techniques)}")
 
         _PRE = set(self.VALID_PREPROCESSING)
         _IN = set(self.VALID_INPROCESSING)
@@ -689,9 +685,7 @@ class MitigationEngine:
                 sensitive_curr = self._extend_sensitive_for_resampled(
                     sensitive_curr, len(X_curr), self.random_state
                 )
-                logger.info(
-                    f"  [{technique}] training samples from {n_before} to {len(X_curr)}"
-                )
+                logger.info(f"  [{technique}] training samples from {n_before} to {len(X_curr)}")
             elif technique == "adasyn":
                 X_curr, y_curr = self.preprocessing.apply_adasyn(
                     X_curr, y_curr, random_state=self.random_state
@@ -699,9 +693,7 @@ class MitigationEngine:
                 sensitive_curr = self._extend_sensitive_for_resampled(
                     sensitive_curr, len(X_curr), self.random_state
                 )
-                logger.info(
-                    f"  [{technique}] training samples from {n_before} to {len(X_curr)}"
-                )
+                logger.info(f"  [{technique}] training samples from {n_before} to {len(X_curr)}")
             else:
                 raise ValueError(
                     f"Pre-processing technique '{technique}' not supported in combos. "
