@@ -16,12 +16,16 @@ split:
 training:
   model: logistic_regression   # default model for single-model runs
   model_types: [logistic_regression, random_forest, svm, xgboost]
+  training_methods: [single_split, kfold_cv]
   # Base hyperparameters for each model type live in configs/models/<type>.yaml.
   thresholds: [0.3, 0.4, 0.5, 0.6, 0.7]
   # Feature selection mode (see src/fairxai/data/feature_selection.py).
   # exclude_sensitive = model-blind privacy baseline (standard deployment).
   # Override with --feature-selection-mode CLI flag for ablation studies.
   feature_selection_mode: exclude_sensitive
+  rfe_top_k: 10
+  use_hpo: false
+  cv_n_jobs: 1
 
 fairness:
   sensitive_attributes: [age_group, sex, ethnicity, group_cluster]

@@ -42,6 +42,8 @@ from fairxai.models.baseline import generate_predictions_with_metadata
 from fairxai.models.cv_trainer import CVTrainer
 from fairxai.utils.config import load_yaml_config
 
+ALLOWED_TRAINING_METHODS = {"single_split", "kfold_cv"}
+
 
 def save_xai_outputs(
     model: Any,
@@ -197,6 +199,66 @@ def _resolve_model_types(args_model_types: Optional[list[str]], training_cfg: di
     return [str(legacy).strip().lower()]
 
 
+def _resolve_training_methods(
+    args_training_methods: Optional[list[str]], training_cfg: dict
+) -> list[str]:
+    """Resolve training methods from CLI args, config, then code defaults.
+
+    Precedence is strictly:
+      1) CLI flags
+      2) pipeline YAML config
+      3) code defaults
+    """
+    cfg_methods = training_cfg.get("training_methods")
+    raw_methods = (
+        args_training_methods
+        if args_training_methods
+        else cfg_methods if cfg_methods else ["single_split", "kfold_cv"]
+    )
+
+    resolved: list[str] = []
+    for raw in raw_methods:
+        method = str(raw).strip().lower()
+        if method not in ALLOWED_TRAINING_METHODS:
+            allowed = ", ".join(sorted(ALLOWED_TRAINING_METHODS))
+            raise ValueError(f"Unsupported training method '{raw}'. Allowed: {allowed}")
+        if method not in resolved:
+            resolved.append(method)
+    return resolved
+
+
+def _resolve_feature_selection_mode(args_mode: Optional[str], training_cfg: dict) -> str:
+    """Resolve feature selection mode with CLI > config > code default precedence."""
+    if args_mode:
+        return str(args_mode).strip()
+    cfg_mode = training_cfg.get("feature_selection_mode")
+    if cfg_mode:
+        return str(cfg_mode).strip()
+    return "exclude_sensitive"
+
+
+def _resolve_bool_setting(
+    cli_value: Optional[bool], cfg: dict, key: str, default_value: bool
+) -> bool:
+    """Resolve bool setting with CLI > config > code default precedence."""
+    if cli_value is not None:
+        return bool(cli_value)
+    cfg_value = cfg.get(key)
+    if cfg_value is not None:
+        return bool(cfg_value)
+    return default_value
+
+
+def _resolve_int_setting(cli_value: Optional[int], cfg: dict, key: str, default_value: int) -> int:
+    """Resolve int setting with CLI > config > code default precedence."""
+    if cli_value is not None:
+        return int(cli_value)
+    cfg_value = cfg.get(key)
+    if cfg_value is not None:
+        return int(cfg_value)
+    return int(default_value)
+
+
 def _is_selected_dataset(dataset_name: str, selected_datasets: Optional[set[str]]) -> bool:
     if not selected_datasets:
         return True
@@ -308,8 +370,9 @@ def main():
     )
     parser.add_argument(
         "--use-hpo",
+        dest="use_hpo",
         action="store_true",
-        default=False,
+        default=None,
         help=(
             "Load best hyperparameters from a previous HPO run "
             "(output/cardiac/studies/hpo/best_params_<dataset>_<model>.json). "
@@ -317,8 +380,20 @@ def main():
         ),
     )
     parser.add_argument(
+        "--no-use-hpo",
+        dest="use_hpo",
+        action="store_false",
+        help="Disable HPO parameters even if config enables them.",
+    )
+    parser.add_argument(
+        "--training-methods",
+        nargs="+",
+        default=None,
+        help=("Training methods to run (CLI override). " "Supported: single_split kfold_cv"),
+    )
+    parser.add_argument(
         "--feature-selection-mode",
-        default="exclude_sensitive",
+        default=None,
         help=(
             "Feature selection strategy: "
             "exclude_sensitive (default), include_all_sensitive, "
@@ -328,8 +403,11 @@ def main():
     parser.add_argument(
         "--rfe-top-k",
         type=int,
-        default=10,
-        help="Number of features to keep when --feature-selection-mode=rfe_top_k (default: 10)",
+        default=None,
+        help=(
+            "Number of features to keep when --feature-selection-mode=rfe_top_k "
+            "(CLI override; default from config/code)."
+        ),
     )
     parser.add_argument(
         "--model-n-jobs",
@@ -340,8 +418,8 @@ def main():
     parser.add_argument(
         "--cv-n-jobs",
         type=int,
-        default=1,
-        help="Parallel workers for CV folds when XAI is disabled (default: 1)",
+        default=None,
+        help="Parallel workers for CV folds when XAI is disabled (CLI override).",
     )
     parser.add_argument(
         "-v", "--verbose", action="count", default=0, help="Verbosity: -v=info, -vv=debug"
@@ -404,13 +482,24 @@ def main():
     random_state = training_cfg.get("random_state", 42)
     thresholds_to_test = training_cfg.get("thresholds", [0.3, 0.4, 0.5, 0.6, 0.7])
     model_types = _resolve_model_types(args.model_types, training_cfg)
+    training_methods = _resolve_training_methods(args.training_methods, training_cfg)
+    feature_selection_mode = _resolve_feature_selection_mode(
+        args.feature_selection_mode, training_cfg
+    )
+    rfe_top_k = _resolve_int_setting(args.rfe_top_k, training_cfg, "rfe_top_k", 10)
+    use_hpo = _resolve_bool_setting(args.use_hpo, training_cfg, "use_hpo", False)
+    cv_n_jobs = _resolve_int_setting(args.cv_n_jobs, training_cfg, "cv_n_jobs", 1)
 
     logging.info("Configuration:")
     logging.info(f"  Models: {model_types}")
+    logging.info(f"  Training methods: {training_methods}")
     logging.info(f"  Random state: {random_state}")
     logging.info(f"  Decision thresholds: {thresholds_to_test}")
+    logging.info(f"  Feature-selection mode: {feature_selection_mode}")
+    logging.info(f"  RFE top-k: {rfe_top_k}")
+    logging.info(f"  Use HPO params: {use_hpo}")
     logging.info(f"  Model n_jobs override: {args.model_n_jobs}")
-    logging.info(f"  CV n_jobs: {args.cv_n_jobs}")
+    logging.info(f"  CV n_jobs: {cv_n_jobs}")
 
     # Find processed datasets
     train_files = list(data_processed.glob("*_train_scaled.csv"))
@@ -452,7 +541,7 @@ def main():
         logging.info("Loaded data:")
         logging.info(f"  Train: {len(train_df)} samples")
         logging.info(f"  Test: {len(test_df)} samples")
-        logging.info(f"  Feature-selection mode: {args.feature_selection_mode}")
+        logging.info(f"  Feature-selection mode: {feature_selection_mode}")
 
         # Separate features, target, and sensitive attributes
         # Note: scaled files have both encoded and categorical versions
@@ -500,13 +589,13 @@ def main():
         X_train_full = train_df[candidate_cols].select_dtypes(include=[np.number])
         X_test_full = test_df[candidate_cols].select_dtypes(include=[np.number])
 
-        fs_mode = args.feature_selection_mode
+        fs_mode = feature_selection_mode
         if fs_mode != "rfe_top_k":
             X_train, feature_cols = build_feature_set(
                 X_train_full,
                 sensitive_attrs=sensitive_cols,
                 mode=fs_mode,
-                top_k=args.rfe_top_k,
+                top_k=rfe_top_k,
                 trained_model=None,
             )
             X_test = X_test_full[feature_cols]
@@ -532,7 +621,7 @@ def main():
 
             try:
                 model_class = get_model_class(model_type)
-                hpo_dir = project_root / f"output/{pipeline}/studies/hpo" if args.use_hpo else None
+                hpo_dir = project_root / f"output/{pipeline}/studies/hpo" if use_hpo else None
                 model_params = _build_model_params(
                     model_type,
                     training_cfg,
@@ -564,7 +653,7 @@ def main():
                     X_train_full,
                     sensitive_attrs=sensitive_cols,
                     mode="rfe_top_k",
-                    top_k=args.rfe_top_k,
+                    top_k=rfe_top_k,
                     trained_model=first_pass,
                 )
                 X_test = X_test_full[feature_cols]
@@ -577,206 +666,314 @@ def main():
                     preview_suffix,
                 )
 
-            train_metrics = model.train(X_train, y_train)
-
-            logging.info("Evaluation:")
-            test_metrics_default = model.evaluate(X_test, y_test, threshold=0.5)
-
-            logging.info("Test Set Performance (threshold=0.5):")
-            logging.info(f"  Accuracy:  {test_metrics_default['accuracy']:.4f}")
-            logging.info(f"  Precision: {test_metrics_default['precision']:.4f}")
-            logging.info(f"  Recall:    {test_metrics_default['recall']:.4f}")
-            logging.info(f"  F1 Score:  {test_metrics_default['f1_score']:.4f}")
-            logging.info(f"  AUC-ROC:   {test_metrics_default['auc_roc']:.4f}")
-
-            cm = test_metrics_default["confusion_matrix"]
-            logging.info("  Confusion Matrix:")
-            logging.info(f"    TN: {cm['tn']:3d}  FP: {cm['fp']:3d}")
-            logging.info(f"    FN: {cm['fn']:3d}  TP: {cm['tp']:3d}")
-
-            logging.info("Threshold analysis:")
-            threshold_results = []
-
-            for threshold in thresholds_to_test:
-                metrics = model.evaluate(X_test, y_test, threshold=threshold)
-                threshold_results.append(metrics)
-                logging.info(
-                    f"  Threshold {threshold:.1f}: "
-                    f"Acc={metrics['accuracy']:.3f} "
-                    f"Prec={metrics['precision']:.3f} "
-                    f"Rec={metrics['recall']:.3f} "
-                    f"F1={metrics['f1_score']:.3f}"
-                )
-
-            logging.info("Feature importance (top 10):")
-            feature_importance = model.get_feature_importance()
-            display_metric = (
-                "coefficient"
-                if "coefficient" in feature_importance.columns
-                else "importance" if "importance" in feature_importance.columns else None
-            )
-            if display_metric is not None:
-                for _, row in feature_importance.head(10).iterrows():
-                    val = row.get(display_metric)
-                    if pd.notna(val):
-                        logging.info(f"  {row['feature']:20s}: {float(val):+.4f}")
-
-            logging.info("Generating predictions:")
-            train_predictions = generate_predictions_with_metadata(
-                model, X_train, y_train, sensitive_train, threshold=0.5
-            )
-            test_predictions = generate_predictions_with_metadata(
-                model, X_test, y_test, sensitive_test, threshold=0.5
-            )
-
-            n_near_threshold_train = train_predictions["near_threshold"].sum()
-            n_near_threshold_test = test_predictions["near_threshold"].sum()
-
-            logging.info(f"  Train predictions: {len(train_predictions)}")
-            logging.info(
-                f"    Near threshold (+/-0.1): {n_near_threshold_train} "
-                f"({n_near_threshold_train/len(train_predictions):.1%})"
-            )
-            logging.info(f"  Test predictions: {len(test_predictions)}")
-            logging.info(
-                f"    Near threshold (+/-0.1): {n_near_threshold_test} "
-                f"({n_near_threshold_test/len(test_predictions):.1%})"
-            )
-
-            model_file = models_dir / f"{dataset_name}_{model_type}.pkl"
-            model.save(str(model_file))
-
-            train_pred_file = predictions_dir / f"{dataset_name}_{model_type}_train.csv"
-            test_pred_file = predictions_dir / f"{dataset_name}_{model_type}_test.csv"
-
-            train_predictions.to_csv(train_pred_file, index=False)
-            test_predictions.to_csv(test_pred_file, index=False)
-
-            logging.info(
-                "[SUCCESS] Predictions saved for dataset=%s model=%s",
-                dataset_name,
-                model_type,
-            )
-            logging.info(f"  Train: {train_pred_file}")
-            logging.info(f"  Test: {test_pred_file}")
-
-            importance_file = predictions_dir / f"{dataset_name}_{model_type}_importance.csv"
-            feature_importance.to_csv(importance_file, index=False)
-            logging.info(f"  Feature importance: {importance_file}")
+            model_result: dict[str, Any] = {
+                "status": "success",
+                "model_params": model_params,
+                "n_features": len(feature_cols),
+                "n_train": len(train_df),
+                "n_test": len(test_df),
+                "training_methods_requested": list(training_methods),
+                "training_methods": {},
+            }
 
             xai_cfg = pipeline_cfg.get("xai", {})
             xai_dir = experiments_dir / "xai"
             xai_dataset_key = f"{dataset_name}__{model_type}"
-            save_xai_outputs(
-                model,
-                model_type,
-                X_train,
-                X_test,
-                xai_dir,
-                xai_dataset_key,
-                X_global=X_train,
-                xai_cfg=xai_cfg,
-            )
+            X_full = pd.concat([X_train, X_test], ignore_index=True)
+            y_full = pd.concat([y_train, y_test], ignore_index=True)
+            sensitive_full = pd.concat([sensitive_train, sensitive_test], ignore_index=True)
 
-            if xai_cfg.get("cv_enabled", True) and xai_cfg.get("enabled", True):
-                logging.info("Cross-validated XAI:")
-                try:
-                    cv_lime_n = int(xai_cfg.get("cv_lime_instances", 3))
-                    cv_shap_max = int(xai_cfg.get("global_max_samples", 1000))
-                    allow_svm_shap = bool(xai_cfg.get("allow_svm_shap", False))
+            if "single_split" in training_methods:
+                model = model_class(**model_params)
+                train_metrics = model.train(X_train, y_train)
 
-                    X_full = pd.concat([X_train, X_test], ignore_index=True)
-                    y_full = pd.concat([y_train, y_test], ignore_index=True)
-                    sensitive_full = pd.concat([sensitive_train, sensitive_test], ignore_index=True)
+                logging.info("Evaluation:")
+                test_metrics_default = model.evaluate(X_test, y_test, threshold=0.5)
 
-                    full_predictions = generate_predictions_with_metadata(
-                        model, X_full, y_full, sensitive_full, threshold=0.5
-                    )
-                    near_mask = full_predictions["near_threshold"]
-                    if near_mask.sum() > 0:
-                        tracked = (
-                            full_predictions[near_mask]
-                            .sample(n=min(cv_lime_n, int(near_mask.sum())), random_state=42)
-                            .index.tolist()
-                        )
-                    else:
-                        tracked = full_predictions.sample(
-                            n=min(cv_lime_n, len(full_predictions)), random_state=42
-                        ).index.tolist()
-                    logging.info(f"  Tracked LIME instances: {tracked}")
+                logging.info("Test Set Performance (threshold=0.5):")
+                logging.info(f"  Accuracy:  {test_metrics_default['accuracy']:.4f}")
+                logging.info(f"  Precision: {test_metrics_default['precision']:.4f}")
+                logging.info(f"  Recall:    {test_metrics_default['recall']:.4f}")
+                logging.info(f"  F1 Score:  {test_metrics_default['f1_score']:.4f}")
+                logging.info(f"  AUC-ROC:   {test_metrics_default['auc_roc']:.4f}")
 
-                    cv_trainer = CVTrainer(
-                        n_folds=training_cfg.get("cv_folds", 5),
-                        random_state=random_state,
-                    )
-                    shap_enabled = _is_shap_enabled_for_model(model_type, xai_cfg)
-                    if not shap_enabled:
-                        logging.info(
-                            f"  CV SHAP skipped for model_type={model_type}; LIME remains enabled"
-                        )
-                    cv_xai_results = cv_trainer.run_cv_experiment(
-                        model_class=model_class,
-                        X=X_full,
-                        y=y_full,
-                        sensitive_attrs=sensitive_full,
-                        model_params=model_params,
-                        xai_enabled=True,
-                        shap_enabled=shap_enabled,
-                        allow_svm_shap=allow_svm_shap,
-                        tracked_indices=tracked,
-                        feature_names=list(X_full.columns),
-                        shap_max_samples=cv_shap_max,
-                        cv_n_jobs=args.cv_n_jobs,
-                    )
+                cm = test_metrics_default["confusion_matrix"]
+                logging.info("  Confusion Matrix:")
+                logging.info(f"    TN: {cm['tn']:3d}  FP: {cm['fp']:3d}")
+                logging.info(f"    FN: {cm['fn']:3d}  TP: {cm['tp']:3d}")
 
-                    cv_shap_dir = xai_dir / xai_dataset_key / "cv" / "shap"
-                    cv_lime_dir = xai_dir / xai_dataset_key / "cv" / "lime"
-                    cv_shap_dir.mkdir(parents=True, exist_ok=True)
-                    cv_lime_dir.mkdir(parents=True, exist_ok=True)
+                logging.info("Threshold analysis:")
+                threshold_results = []
 
-                    cv_shap_global = CVTrainer.aggregate_cv_shap(
-                        cv_xai_results["fold_results"], scope="global"
-                    )
-                    if cv_shap_global is not None:
-                        cv_shap_file = cv_shap_dir / "global_summary.csv"
-                        cv_shap_global.to_csv(cv_shap_file, index=False)
-                        logging.info(f"[SUCCESS] CV SHAP global summary saved: {cv_shap_file}")
-
-                    cv_shap_local = CVTrainer.aggregate_cv_shap(
-                        cv_xai_results["fold_results"], scope="local"
-                    )
-                    if cv_shap_local is not None:
-                        cv_shap_file = cv_shap_dir / "local_summary.csv"
-                        cv_shap_local.to_csv(cv_shap_file, index=False)
-                        logging.info(f"[SUCCESS] CV SHAP local summary saved: {cv_shap_file}")
-
-                    cv_lime_df = CVTrainer.aggregate_cv_lime(cv_xai_results["fold_results"])
-                    if cv_lime_df is not None:
-                        cv_lime_file = cv_lime_dir / "tracked.csv"
-                        cv_lime_df.to_csv(cv_lime_file, index=False)
-                        logging.info(f"[SUCCESS] CV LIME tracked saved: {cv_lime_file}")
-
-                    agg = cv_xai_results["aggregated_metrics"]
+                for threshold in thresholds_to_test:
+                    metrics = model.evaluate(X_test, y_test, threshold=threshold)
+                    threshold_results.append(metrics)
                     logging.info(
-                        f"  CV performance: "
-                        f"F1={agg['f1_score']['mean']:.3f}±{agg['f1_score']['std']:.3f}, "
-                        f"AUC={agg['auc_roc']['mean']:.3f}±{agg['auc_roc']['std']:.3f}"
+                        f"  Threshold {threshold:.1f}: "
+                        f"Acc={metrics['accuracy']:.3f} "
+                        f"Prec={metrics['precision']:.3f} "
+                        f"Rec={metrics['recall']:.3f} "
+                        f"F1={metrics['f1_score']:.3f}"
                     )
-                except Exception as exc:
-                    logging.warning(f"CV XAI failed for {dataset_name}/{model_type}: {exc}")
-                    logging.debug("CV XAI traceback:", exc_info=True)
 
-            results_summary[dataset_name][model_type] = {
-                "status": "success",
-                "model_params": model_params,
-                "train_metrics": train_metrics,
-                "test_metrics": test_metrics_default,
-                "threshold_analysis": threshold_results,
-                "n_features": len(feature_cols),
-                "n_train": len(train_df),
-                "n_test": len(test_df),
-                "near_threshold_pct_test": float(n_near_threshold_test / len(test_predictions)),
-            }
+                logging.info("Feature importance (top 10):")
+                feature_importance = model.get_feature_importance()
+                display_metric = (
+                    "coefficient"
+                    if "coefficient" in feature_importance.columns
+                    else "importance" if "importance" in feature_importance.columns else None
+                )
+                if display_metric is not None:
+                    for _, row in feature_importance.head(10).iterrows():
+                        val = row.get(display_metric)
+                        if pd.notna(val):
+                            logging.info(f"  {row['feature']:20s}: {float(val):+.4f}")
+
+                logging.info("Generating predictions:")
+                train_predictions = generate_predictions_with_metadata(
+                    model, X_train, y_train, sensitive_train, threshold=0.5
+                )
+                test_predictions = generate_predictions_with_metadata(
+                    model, X_test, y_test, sensitive_test, threshold=0.5
+                )
+
+                n_near_threshold_train = train_predictions["near_threshold"].sum()
+                n_near_threshold_test = test_predictions["near_threshold"].sum()
+
+                logging.info(f"  Train predictions: {len(train_predictions)}")
+                logging.info(
+                    f"    Near threshold (+/-0.1): {n_near_threshold_train} "
+                    f"({n_near_threshold_train/len(train_predictions):.1%})"
+                )
+                logging.info(f"  Test predictions: {len(test_predictions)}")
+                logging.info(
+                    f"    Near threshold (+/-0.1): {n_near_threshold_test} "
+                    f"({n_near_threshold_test/len(test_predictions):.1%})"
+                )
+
+                model_file = models_dir / f"{dataset_name}_{model_type}.pkl"
+                model.save(str(model_file))
+
+                train_pred_file = predictions_dir / f"{dataset_name}_{model_type}_train.csv"
+                test_pred_file = predictions_dir / f"{dataset_name}_{model_type}_test.csv"
+
+                train_predictions.to_csv(train_pred_file, index=False)
+                test_predictions.to_csv(test_pred_file, index=False)
+
+                logging.info(
+                    "[SUCCESS] Predictions saved for dataset=%s model=%s",
+                    dataset_name,
+                    model_type,
+                )
+                logging.info(f"  Train: {train_pred_file}")
+                logging.info(f"  Test: {test_pred_file}")
+
+                importance_file = predictions_dir / f"{dataset_name}_{model_type}_importance.csv"
+                feature_importance.to_csv(importance_file, index=False)
+                logging.info(f"  Feature importance: {importance_file}")
+
+                save_xai_outputs(
+                    model,
+                    model_type,
+                    X_train,
+                    X_test,
+                    xai_dir,
+                    xai_dataset_key,
+                    X_global=X_train,
+                    xai_cfg=xai_cfg,
+                )
+
+                if xai_cfg.get("cv_enabled", True) and xai_cfg.get("enabled", True):
+                    logging.info("Cross-validated XAI:")
+                    try:
+                        cv_lime_n = int(xai_cfg.get("cv_lime_instances", 3))
+                        cv_shap_max = int(xai_cfg.get("global_max_samples", 1000))
+                        allow_svm_shap = bool(xai_cfg.get("allow_svm_shap", False))
+
+                        full_predictions = generate_predictions_with_metadata(
+                            model, X_full, y_full, sensitive_full, threshold=0.5
+                        )
+                        near_mask = full_predictions["near_threshold"]
+                        if near_mask.sum() > 0:
+                            tracked = (
+                                full_predictions[near_mask]
+                                .sample(n=min(cv_lime_n, int(near_mask.sum())), random_state=42)
+                                .index.tolist()
+                            )
+                        else:
+                            tracked = full_predictions.sample(
+                                n=min(cv_lime_n, len(full_predictions)), random_state=42
+                            ).index.tolist()
+                        logging.info(f"  Tracked LIME instances: {tracked}")
+
+                        cv_trainer = CVTrainer(
+                            n_folds=training_cfg.get("cv_folds", 5),
+                            random_state=random_state,
+                        )
+                        shap_enabled = _is_shap_enabled_for_model(model_type, xai_cfg)
+                        if not shap_enabled:
+                            logging.info(
+                                f"  CV SHAP skipped for model_type={model_type}; LIME remains enabled"
+                            )
+                        cv_xai_results = cv_trainer.run_cv_experiment(
+                            model_class=model_class,
+                            X=X_full,
+                            y=y_full,
+                            sensitive_attrs=sensitive_full,
+                            model_params=model_params,
+                            xai_enabled=True,
+                            shap_enabled=shap_enabled,
+                            allow_svm_shap=allow_svm_shap,
+                            tracked_indices=tracked,
+                            feature_names=list(X_full.columns),
+                            shap_max_samples=cv_shap_max,
+                            cv_n_jobs=cv_n_jobs,
+                        )
+
+                        cv_shap_dir = xai_dir / xai_dataset_key / "cv" / "shap"
+                        cv_lime_dir = xai_dir / xai_dataset_key / "cv" / "lime"
+                        cv_shap_dir.mkdir(parents=True, exist_ok=True)
+                        cv_lime_dir.mkdir(parents=True, exist_ok=True)
+
+                        cv_shap_global = CVTrainer.aggregate_cv_shap(
+                            cv_xai_results["fold_results"], scope="global"
+                        )
+                        if cv_shap_global is not None:
+                            cv_shap_file = cv_shap_dir / "global_summary.csv"
+                            cv_shap_global.to_csv(cv_shap_file, index=False)
+                            logging.info(f"[SUCCESS] CV SHAP global summary saved: {cv_shap_file}")
+
+                        cv_shap_local = CVTrainer.aggregate_cv_shap(
+                            cv_xai_results["fold_results"], scope="local"
+                        )
+                        if cv_shap_local is not None:
+                            cv_shap_file = cv_shap_dir / "local_summary.csv"
+                            cv_shap_local.to_csv(cv_shap_file, index=False)
+                            logging.info(f"[SUCCESS] CV SHAP local summary saved: {cv_shap_file}")
+
+                        cv_lime_df = CVTrainer.aggregate_cv_lime(cv_xai_results["fold_results"])
+                        if cv_lime_df is not None:
+                            cv_lime_file = cv_lime_dir / "tracked.csv"
+                            cv_lime_df.to_csv(cv_lime_file, index=False)
+                            logging.info(f"[SUCCESS] CV LIME tracked saved: {cv_lime_file}")
+
+                        agg = cv_xai_results["aggregated_metrics"]
+                        logging.info(
+                            f"  CV performance: "
+                            f"F1={agg['f1_score']['mean']:.3f}±{agg['f1_score']['std']:.3f}, "
+                            f"AUC={agg['auc_roc']['mean']:.3f}±{agg['auc_roc']['std']:.3f}"
+                        )
+                    except Exception as exc:
+                        logging.warning(f"CV XAI failed for {dataset_name}/{model_type}: {exc}")
+                        logging.debug("CV XAI traceback:", exc_info=True)
+
+                model_result.update(
+                    {
+                        "train_metrics": train_metrics,
+                        "test_metrics": test_metrics_default,
+                        "threshold_analysis": threshold_results,
+                        "near_threshold_pct_test": float(
+                            n_near_threshold_test / len(test_predictions)
+                        ),
+                    }
+                )
+                model_result["training_methods"]["single_split"] = {
+                    "train_metrics": train_metrics,
+                    "test_metrics": test_metrics_default,
+                    "threshold_analysis": threshold_results,
+                    "near_threshold_pct_test": float(n_near_threshold_test / len(test_predictions)),
+                }
+            else:
+                logging.info("Single-split training skipped by configuration")
+
+            if "kfold_cv" in training_methods:
+                logging.info("Cross-validation baseline metrics:")
+                cv_trainer = CVTrainer(
+                    n_folds=training_cfg.get("cv_folds", 5),
+                    random_state=random_state,
+                )
+                cv_results = cv_trainer.run_cv_experiment(
+                    model_class=model_class,
+                    X=X_full,
+                    y=y_full,
+                    sensitive_attrs=sensitive_full,
+                    model_params=model_params,
+                    xai_enabled=False,
+                    cv_n_jobs=cv_n_jobs,
+                )
+
+                cv_metrics = {}
+                for metric_name, stats in cv_results["aggregated_metrics"].items():
+                    cv_metrics[metric_name] = {
+                        "mean": float(stats["mean"]),
+                        "std": float(stats["std"]),
+                        "min": float(stats["min"]),
+                        "max": float(stats["max"]),
+                        "folds": [float(v) for v in stats.get("folds", [])],
+                    }
+
+                cv_rows = []
+                for fold in cv_results["fold_results"]:
+                    vm = fold["val_metrics"]
+                    cv_rows.append(
+                        {
+                            "fold": int(fold["fold_idx"]),
+                            "accuracy": float(vm["accuracy"]),
+                            "precision": float(vm["precision"]),
+                            "recall": float(vm["recall"]),
+                            "f1_score": float(vm["f1_score"]),
+                            "auc_roc": float(vm["auc_roc"]),
+                        }
+                    )
+
+                cv_dir = experiments_dir / "cv"
+                cv_dir.mkdir(parents=True, exist_ok=True)
+                cv_fold_metrics_file = cv_dir / f"{dataset_name}_{model_type}_fold_metrics.csv"
+                pd.DataFrame(cv_rows).to_csv(cv_fold_metrics_file, index=False)
+
+                cv_pred_model = model_class(**model_params)
+                cv_predictions = cv_trainer.get_fold_predictions(
+                    cv_pred_model,
+                    X_full,
+                    y_full,
+                    sensitive_full,
+                )
+                features_with_index = X_full.reset_index(drop=True).copy()
+                features_with_index["sample_idx"] = features_with_index.index
+                cv_predictions = cv_predictions.merge(
+                    features_with_index, on="sample_idx", how="left"
+                )
+                cv_predictions["threshold"] = 0.5
+                cv_predictions["confidence"] = np.abs(cv_predictions["y_proba"] - 0.5)
+                cv_predictions["near_threshold"] = np.abs(cv_predictions["y_proba"] - 0.5) < 0.1
+
+                cv_pred_file = predictions_dir / f"{dataset_name}_{model_type}_cv.csv"
+                cv_predictions.to_csv(cv_pred_file, index=False)
+
+                logging.info(
+                    "[SUCCESS] CV outputs saved for dataset=%s model=%s",
+                    dataset_name,
+                    model_type,
+                )
+                logging.info(f"  Fold metrics: {cv_fold_metrics_file}")
+                logging.info(f"  CV predictions: {cv_pred_file}")
+
+                model_result["cv_results"] = {
+                    "metrics": cv_metrics,
+                    "n_folds": int(cv_results["n_folds"]),
+                    "fold_metrics_file": str(cv_fold_metrics_file),
+                    "predictions_file": str(cv_pred_file),
+                    "near_threshold_pct": float(cv_predictions["near_threshold"].mean()),
+                }
+                model_result["training_methods"]["kfold_cv"] = {
+                    "metrics": cv_metrics,
+                    "n_folds": int(cv_results["n_folds"]),
+                    "near_threshold_pct": float(cv_predictions["near_threshold"].mean()),
+                }
+            else:
+                logging.info("K-fold CV training skipped by configuration")
+
+            results_summary[dataset_name][model_type] = model_result
 
     # Save overall results
     results_file = experiments_dir / "training_results.json"
