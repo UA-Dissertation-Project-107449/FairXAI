@@ -2,6 +2,7 @@
 
 import argparse
 import copy
+import json
 import logging
 import os
 import sys
@@ -76,6 +77,41 @@ SCORE_WEIGHTS = {
     "accuracy": 0.20,
     "auc": 0.10,
 }
+
+
+def _normalise_model_types(raw_values: Optional[list[Any]]) -> list[str]:
+    if not raw_values:
+        return []
+    normalized: list[str] = []
+    for raw in raw_values:
+        value = str(raw).strip().lower()
+        if value and value not in normalized:
+            normalized.append(value)
+    return normalized
+
+
+def _load_selector_recommendations(selector_contract_path: Optional[str]) -> dict[str, Any]:
+    if not selector_contract_path:
+        return {}
+
+    contract_path = Path(selector_contract_path)
+    if not contract_path.exists():
+        logger.warning("Selector contract not found at %s; ignoring.", contract_path)
+        return {}
+
+    try:
+        with open(contract_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception as exc:
+        logger.warning("Could not read selector contract %s: %s", contract_path, exc)
+        return {}
+
+    recommendations = payload.get("recommendations")
+    if isinstance(recommendations, dict):
+        return recommendations
+
+    logger.warning("Selector contract %s has no recommendations block; ignoring.", contract_path)
+    return {}
 
 
 def _extract_fairness_gap(fairness_metrics: Dict[str, Any]) -> Optional[float]:
@@ -1328,6 +1364,7 @@ def run_combinatorial_analysis(
     output_root: Optional[str] = None,
     datasets: Optional[list[str]] = None,
     model_types_override: Optional[list[str]] = None,
+    selector_contract_path: Optional[str] = None,
 ):
     """Main orchestration for combinatorial experiments."""
     project_root = get_project_root(Path(__file__))
@@ -1363,16 +1400,31 @@ def run_combinatorial_analysis(
         logger.error("No datasets selected. Provide --datasets or define datasets in config.")
         sys.exit(1)
 
-    selected_model_types = [
-        str(m).strip().lower()
-        for m in (model_types_override or config.get("model_types", ["logistic_regression"]))
-        if str(m).strip()
-    ]
+    selector_recommendations = _load_selector_recommendations(selector_contract_path)
+    selector_model_types = selector_recommendations.get("model_types")
+
+    selected_model_types = _normalise_model_types(model_types_override)
+    if selected_model_types:
+        model_source = "cli"
+    else:
+        selected_model_types = _normalise_model_types(selector_model_types)
+        if selected_model_types:
+            model_source = "selector_contract"
+        else:
+            selected_model_types = _normalise_model_types(
+                config.get("model_types", ["logistic_regression"])
+            )
+            model_source = "config"
+
     if not selected_model_types:
         logger.error(
             "No model types selected. Provide --model-types or define model_types in config."
         )
         sys.exit(1)
+
+    logger.info("Model type source: %s", model_source)
+    if selector_contract_path:
+        logger.info("Selector contract path: %s", selector_contract_path)
 
     # Load gate thresholds: experiment config overrides with thresholds.yaml fallback.
     # Must happen before any experiment result is annotated or ranked.
@@ -1726,6 +1778,15 @@ def main():
         default=None,
         help="Optional model types override (CLI > config > defaults).",
     )
+    parser.add_argument(
+        "--selector-contract",
+        type=str,
+        default=None,
+        help=(
+            "Optional selector contract JSON generated from studies. "
+            "Used when --model-types is not provided."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -1739,6 +1800,7 @@ def main():
         output_root=args.output_root,
         datasets=args.datasets,
         model_types_override=args.model_types,
+        selector_contract_path=args.selector_contract,
     )
 
 

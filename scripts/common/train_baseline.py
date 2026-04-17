@@ -186,17 +186,65 @@ def save_xai_outputs(
         logging.warning(f"LIME failed for {dataset_name}: {exc}")
 
 
-def _resolve_model_types(args_model_types: Optional[list[str]], training_cfg: dict) -> list[str]:
-    """Resolve model types from CLI args or pipeline config."""
-    if args_model_types:
-        return [m.strip().lower() for m in args_model_types]
+def _normalise_model_types(raw_values: Optional[list[Any]]) -> list[str]:
+    if not raw_values:
+        return []
+    normalized: list[str] = []
+    for raw in raw_values:
+        value = str(raw).strip().lower()
+        if value and value not in normalized:
+            normalized.append(value)
+    return normalized
+
+
+def _load_selector_recommendations(selector_contract_path: Optional[str]) -> dict[str, Any]:
+    if not selector_contract_path:
+        return {}
+
+    contract_path = Path(selector_contract_path)
+    if not contract_path.exists():
+        logging.warning("Selector contract not found at %s; ignoring.", contract_path)
+        return {}
+
+    try:
+        with open(contract_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception as exc:
+        logging.warning("Could not read selector contract %s: %s", contract_path, exc)
+        return {}
+
+    recommendations = payload.get("recommendations")
+    if isinstance(recommendations, dict):
+        return recommendations
+
+    logging.warning(
+        "Selector contract %s has no recommendations block; ignoring.",
+        contract_path,
+    )
+    return {}
+
+
+def _resolve_model_types(
+    args_model_types: Optional[list[str]],
+    training_cfg: dict,
+    selector_model_types: Optional[list[Any]] = None,
+) -> list[str]:
+    """Resolve model types with CLI > selector > config > legacy precedence."""
+    cli_types = _normalise_model_types(args_model_types)
+    if cli_types:
+        return cli_types
+
+    selector_types = _normalise_model_types(selector_model_types)
+    if selector_types:
+        return selector_types
 
     cfg_types = training_cfg.get("model_types")
-    if cfg_types:
-        return [str(m).strip().lower() for m in cfg_types]
+    resolved_cfg = _normalise_model_types(cfg_types)
+    if resolved_cfg:
+        return resolved_cfg
 
     legacy = training_cfg.get("model", "logistic_regression")
-    return [str(legacy).strip().lower()]
+    return _normalise_model_types([legacy])
 
 
 def _resolve_training_methods(
@@ -227,35 +275,71 @@ def _resolve_training_methods(
     return resolved
 
 
-def _resolve_feature_selection_mode(args_mode: Optional[str], training_cfg: dict) -> str:
-    """Resolve feature selection mode with CLI > config > code default precedence."""
+def _resolve_feature_selection_mode(
+    args_mode: Optional[str],
+    training_cfg: dict,
+    selector_mode: Optional[str] = None,
+) -> str:
+    """Resolve feature-selection mode with CLI > selector > config > default precedence."""
     if args_mode:
         return str(args_mode).strip()
+
+    if selector_mode:
+        return str(selector_mode).strip()
+
     cfg_mode = training_cfg.get("feature_selection_mode")
     if cfg_mode:
         return str(cfg_mode).strip()
+
     return "exclude_sensitive"
 
 
 def _resolve_bool_setting(
-    cli_value: Optional[bool], cfg: dict, key: str, default_value: bool
+    cli_value: Optional[bool],
+    cfg: dict,
+    key: str,
+    default_value: bool,
+    selector_value: Optional[Any] = None,
 ) -> bool:
-    """Resolve bool setting with CLI > config > code default precedence."""
+    """Resolve bool setting with CLI > selector > config > default precedence."""
     if cli_value is not None:
         return bool(cli_value)
+
+    if selector_value is not None:
+        return bool(selector_value)
+
     cfg_value = cfg.get(key)
     if cfg_value is not None:
         return bool(cfg_value)
+
     return default_value
 
 
-def _resolve_int_setting(cli_value: Optional[int], cfg: dict, key: str, default_value: int) -> int:
-    """Resolve int setting with CLI > config > code default precedence."""
+def _resolve_int_setting(
+    cli_value: Optional[int],
+    cfg: dict,
+    key: str,
+    default_value: int,
+    selector_value: Optional[Any] = None,
+) -> int:
+    """Resolve int setting with CLI > selector > config > default precedence."""
     if cli_value is not None:
         return int(cli_value)
+
+    if selector_value is not None:
+        try:
+            return int(selector_value)
+        except (TypeError, ValueError):
+            logging.warning(
+                "Invalid selector int override for key '%s': %r. Falling back.",
+                key,
+                selector_value,
+            )
+
     cfg_value = cfg.get(key)
     if cfg_value is not None:
         return int(cfg_value)
+
     return int(default_value)
 
 
@@ -369,6 +453,15 @@ def main():
         ),
     )
     parser.add_argument(
+        "--selector-contract",
+        type=str,
+        default=None,
+        help=(
+            "Optional selector contract JSON generated from studies. "
+            "Used as precedence layer between CLI flags and pipeline YAML."
+        ),
+    )
+    parser.add_argument(
         "--use-hpo",
         dest="use_hpo",
         action="store_true",
@@ -479,15 +572,35 @@ def main():
 
     # Configuration
     training_cfg = pipeline_cfg.get("training", {})
+    selector_recommendations = _load_selector_recommendations(args.selector_contract)
+    selector_model_types = selector_recommendations.get("model_types")
+    selector_feature_mode = selector_recommendations.get("feature_selection_mode")
+    selector_rfe_top_k = selector_recommendations.get("rfe_top_k")
+    selector_use_hpo = selector_recommendations.get("use_hpo")
+
     random_state = training_cfg.get("random_state", 42)
     thresholds_to_test = training_cfg.get("thresholds", [0.3, 0.4, 0.5, 0.6, 0.7])
-    model_types = _resolve_model_types(args.model_types, training_cfg)
+    model_types = _resolve_model_types(args.model_types, training_cfg, selector_model_types)
     training_methods = _resolve_training_methods(args.training_methods, training_cfg)
     feature_selection_mode = _resolve_feature_selection_mode(
-        args.feature_selection_mode, training_cfg
+        args.feature_selection_mode,
+        training_cfg,
+        selector_feature_mode,
     )
-    rfe_top_k = _resolve_int_setting(args.rfe_top_k, training_cfg, "rfe_top_k", 10)
-    use_hpo = _resolve_bool_setting(args.use_hpo, training_cfg, "use_hpo", False)
+    rfe_top_k = _resolve_int_setting(
+        args.rfe_top_k,
+        training_cfg,
+        "rfe_top_k",
+        10,
+        selector_rfe_top_k,
+    )
+    use_hpo = _resolve_bool_setting(
+        args.use_hpo,
+        training_cfg,
+        "use_hpo",
+        False,
+        selector_use_hpo,
+    )
     cv_n_jobs = _resolve_int_setting(args.cv_n_jobs, training_cfg, "cv_n_jobs", 1)
 
     logging.info("Configuration:")
@@ -498,6 +611,8 @@ def main():
     logging.info(f"  Feature-selection mode: {feature_selection_mode}")
     logging.info(f"  RFE top-k: {rfe_top_k}")
     logging.info(f"  Use HPO params: {use_hpo}")
+    if args.selector_contract:
+        logging.info(f"  Selector contract: {args.selector_contract}")
     logging.info(f"  Model n_jobs override: {args.model_n_jobs}")
     logging.info(f"  CV n_jobs: {cv_n_jobs}")
 
