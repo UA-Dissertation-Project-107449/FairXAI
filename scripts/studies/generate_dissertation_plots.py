@@ -103,6 +103,20 @@ def _safe_read_csv(path: Path) -> pd.DataFrame | None:
     return pd.read_csv(path)
 
 
+def _resolve_comparisons_dir(run_dir: Path) -> Path:
+    """Resolve the comparisons data directory for both old and current layouts."""
+    candidates = [
+        run_dir / "experiments" / "comparisons" / "data",
+        run_dir / "experiments" / "comparisons",
+        run_dir / "experiments" / "full" / "comparisons",
+    ]
+    for candidate in candidates:
+        if (candidate / "full_comparison.csv").exists():
+            return candidate
+    # Default to latest layout when files are not present yet.
+    return candidates[0]
+
+
 def _report(label: str, result) -> None:
     if result is not None:
         logger.info("[SUCCESS] %s", label)
@@ -270,8 +284,8 @@ def _generate_transformation_plots(
         logger.warning("[WARNING] transformation_impact: full_comparison.csv missing")
 
     # 5. Before/after distributions - look for train prediction CSVs (pre- and post-SMOTE split)
-    results_dir = run_dir / "baseline" / "results"
-    pred_csvs = sorted(results_dir.glob("cleveland_logistic_regression_train_predictions.csv"))
+    results_dir = run_dir / "baseline" / "results" / "predictions"
+    pred_csvs = sorted(results_dir.glob("*_logistic_regression_train.csv"))
     if pred_csvs:
         pred_df = pd.read_csv(pred_csvs[0])
         feature_cols = [c for c in _FEATURE_COLS if c in pred_df.columns]
@@ -333,7 +347,7 @@ def _generate_cross_model_plots(
         _report("intersectional_heatmap_dp", result)
     else:
         logger.warning(
-            "[WARNING] intersectional_heatmap: per_group_comparison.csv missing (run full pipeline first)"
+            "[WARNING] intersectional_heatmap: per_group.csv missing (run full pipeline first)"
         )
 
     # 8. Cross-model radar
@@ -390,8 +404,10 @@ def main() -> None:
     )
 
     run_dir = _resolve_run_dir(args.run_id)
-    comparisons_dir = run_dir / "experiments" / "full" / "comparisons"
-    fairness_dir = run_dir / "baseline" / "fairness"
+    comparisons_dir = _resolve_comparisons_dir(run_dir)
+    fairness_dir = run_dir / "baseline" / "prediction_fairness"
+    if not fairness_dir.exists():
+        fairness_dir = run_dir / "baseline" / "fairness"
     out_base = _OUT_BASE / run_dir.name
     logger.info("[PHASE] Dissertation plot generation started")
     logger.info(
@@ -402,7 +418,9 @@ def main() -> None:
     )
 
     full_df = _safe_read_csv(comparisons_dir / "full_comparison.csv")
-    per_group_df = _safe_read_csv(comparisons_dir / "per_group_comparison.csv")
+    per_group_df = _safe_read_csv(comparisons_dir / "per_group.csv")
+    if per_group_df is None:
+        per_group_df = _safe_read_csv(comparisons_dir / "per_group_comparison.csv")
     summary_df = _safe_read_csv(comparisons_dir / "cross_model_summary.csv")
 
     _generate_fairness_plots(full_df, per_group_df, fairness_dir, run_dir, out_base / "fairness")

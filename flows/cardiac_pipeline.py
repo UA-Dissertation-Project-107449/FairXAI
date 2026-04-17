@@ -220,11 +220,15 @@ def run_combinatorial_experiments(
 def compare_experiments(run_id: str, verbose: int = 0):
     """Compares experiments."""
     logger = get_run_logger()
-    logger.info("[PHASE 10/10] Experiment comparison")
+    logger.info("[PHASE 10/10] Experiment comparison and dissertation plots")
     script = ROOT_DIR / "scripts" / "cardiac" / "compare.py"
     args = ["--pipeline", "cardiac", "--run-id", run_id]
     args.extend(_verbose_flags(verbose))
     _run_script(script, args, os.environ.copy())
+
+    plots_script = ROOT_DIR / "scripts" / "studies" / "generate_dissertation_plots.py"
+    plots_args = ["--run-id", run_id]
+    _run_script(plots_script, plots_args, os.environ.copy())
 
 
 @flow(name="Cardiac Fairness Pipeline")

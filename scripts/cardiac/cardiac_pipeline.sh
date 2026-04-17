@@ -385,8 +385,9 @@ fi
 # Stage 10 — Compare (optional)
 if should_run 10; then
     if [[ "$RUN_COMPARISON" == "true" ]]; then
-        echo "[PHASE 10/10] Experiment comparison"
+        echo "[PHASE 10/10] Experiment comparison and dissertation plots"
         python3 "$ROOT_DIR/scripts/cardiac/compare.py" --run-id "$RUN_ID" $VERBOSE_FLAG
+        python3 "$ROOT_DIR/scripts/studies/generate_dissertation_plots.py" --run-id "$RUN_ID"
         mark_done 10 "compare"
         echo ""
     else
