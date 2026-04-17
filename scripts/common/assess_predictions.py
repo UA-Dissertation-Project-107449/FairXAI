@@ -35,38 +35,90 @@ def _split_dataset_model(combined: str, known_models: list = _KNOWN_MODELS) -> t
 
 
 def _render_fairness_md(nested_results: dict) -> str:
-    """Render nested {dataset: {model: results}} fairness dict as markdown."""
+    """Render nested {dataset: {model: {method: results}}} fairness dict as markdown."""
+
+    def _iter_methods(model_results: dict) -> list[tuple[str, dict]]:
+        if not isinstance(model_results, dict):
+            return []
+        if any(key in model_results for key in ("train_metrics", "test_metrics", "cv_metrics")):
+            # Backward compatibility with legacy shape {model: direct_results}
+            return [("single_split", model_results)]
+        rows: list[tuple[str, dict]] = []
+        for method in ("single_split", "kfold_cv"):
+            value = model_results.get(method)
+            if isinstance(value, dict):
+                rows.append((method, value))
+        return rows
+
     lines = ["# Prediction Fairness Report\n"]
     for dataset, models in sorted(nested_results.items()):
         lines.append(f"## {dataset.replace('_', ' ').title()}\n")
         for model, res in sorted(models.items()):
             lines.append(f"### {model.replace('_', ' ').title()}\n")
-            for split in ("test_metrics", "train_metrics"):
-                label = "Test" if split == "test_metrics" else "Train"
-                metrics = res.get(split, {})
-                gf = metrics.get("group_fairness", {})
-                if not gf:
-                    continue
-                lines.append(f"**{label} Set — Group Fairness**\n")
-                lines.append("| Attribute | Metric | Max Difference | Fair? |")
-                lines.append("|-----------|--------|---------------|-------|")
-                for attr, attr_metrics in sorted(gf.items()):
-                    for metric_name, md in sorted(attr_metrics.items()):
-                        fair = md.get("is_fair", False)
-                        diff = md.get("max_difference") or md.get("tpr_max_difference", "?")
+            method_rows = _iter_methods(res)
+            if not method_rows:
+                continue
+
+            for method_name, method_results in method_rows:
+                method_label = "Single Split" if method_name == "single_split" else "K-Fold CV"
+                lines.append(f"#### {method_label}\n")
+
+                if "cv_metrics" in method_results:
+                    cv_metrics = method_results.get("cv_metrics", {})
+                    gf = cv_metrics.get("group_fairness", {})
+                    if gf:
+                        lines.append("**CV Fairness - Group Fairness**\n")
+                        lines.append("| Attribute | Metric | Max Difference | Fair? |")
+                        lines.append("|-----------|--------|---------------|-------|")
+                        for attr, attr_metrics in sorted(gf.items()):
+                            for metric_name, md in sorted(attr_metrics.items()):
+                                fair = md.get("is_fair", False)
+                                diff = md.get("max_difference") or md.get("tpr_max_difference", "?")
+                                flag = "✓" if fair else "✗"
+                                if isinstance(diff, float):
+                                    diff = f"{diff:.3f}"
+                                lines.append(f"| {attr} | {metric_name} | {diff} | {flag} |")
+                        lines.append("")
+
+                    calib = cv_metrics.get("calibration", {})
+                    for attr, cd in sorted(calib.items()):
+                        fair = cd.get("is_fair", False)
                         flag = "✓" if fair else "✗"
-                        if isinstance(diff, float):
-                            diff = f"{diff:.3f}"
-                        lines.append(f"| {attr} | {metric_name} | {diff} | {flag} |")
-                lines.append("")
-                calib = metrics.get("calibration", {})
-                for attr, cd in sorted(calib.items()):
-                    fair = cd.get("is_fair", False)
-                    flag = "✓" if fair else "✗"
-                    ece = cd.get("max_ece_difference", "?")
-                    if isinstance(ece, float):
-                        ece = f"{ece:.4f}"
-                    lines.append(f"**{label} Calibration ({attr}):** max ECE diff = {ece} {flag}\n")
+                        ece = cd.get("max_ece_difference", "?")
+                        if isinstance(ece, float):
+                            ece = f"{ece:.4f}"
+                        lines.append(f"**CV Calibration ({attr}):** max ECE diff = {ece} {flag}\n")
+                    continue
+
+                for split in ("test_metrics", "train_metrics"):
+                    label = "Test" if split == "test_metrics" else "Train"
+                    metrics = method_results.get(split, {})
+                    gf = metrics.get("group_fairness", {})
+                    if not gf:
+                        continue
+                    lines.append(f"**{label} Set - Group Fairness**\n")
+                    lines.append("| Attribute | Metric | Max Difference | Fair? |")
+                    lines.append("|-----------|--------|---------------|-------|")
+                    for attr, attr_metrics in sorted(gf.items()):
+                        for metric_name, md in sorted(attr_metrics.items()):
+                            fair = md.get("is_fair", False)
+                            diff = md.get("max_difference") or md.get("tpr_max_difference", "?")
+                            flag = "✓" if fair else "✗"
+                            if isinstance(diff, float):
+                                diff = f"{diff:.3f}"
+                            lines.append(f"| {attr} | {metric_name} | {diff} | {flag} |")
+                    lines.append("")
+
+                    calib = metrics.get("calibration", {})
+                    for attr, cd in sorted(calib.items()):
+                        fair = cd.get("is_fair", False)
+                        flag = "✓" if fair else "✗"
+                        ece = cd.get("max_ece_difference", "?")
+                        if isinstance(ece, float):
+                            ece = f"{ece:.4f}"
+                        lines.append(
+                            f"**{label} Calibration ({attr}):** max ECE diff = {ece} {flag}\n"
+                        )
     return "\n".join(lines)
 
 
@@ -215,6 +267,60 @@ def assess_dataset_fairness(
     logging.info(f"[SUCCESS] Summary table saved to: {summary_file}")
 
     return results
+
+
+def assess_cv_fairness(
+    dataset_name: str,
+    cv_file: Path,
+    output_dir: Path,
+    metrics_calculator: FairnessMetrics,
+) -> Dict:
+    """Assess fairness for CV out-of-fold predictions."""
+    logging.info("[DATASET] Assessing CV fairness dataset_model=%s", dataset_name)
+
+    cv_df = pd.read_csv(cv_file)
+    logging.info("Loaded CV predictions: %d samples", len(cv_df))
+
+    cv_df = decode_sensitive_attributes(cv_df)
+    if "age_group_cat" in cv_df.columns and "sex_cat" in cv_df.columns:
+        metrics_calculator.sensitive_attributes = ["age_group_cat", "sex_cat"]
+
+    exclude_cols = [
+        "fold",
+        "sample_idx",
+        "y_true",
+        "y_pred",
+        "y_proba",
+        "threshold",
+        "age_group",
+        "sex",
+        "ethnicity",
+        "group_cluster",
+        "confidence",
+        "near_threshold",
+        "age_group_cat",
+        "sex_cat",
+    ]
+    feature_cols = [col for col in cv_df.columns if col not in exclude_cols]
+    if not feature_cols:
+        feature_cols = None
+
+    cv_metrics = metrics_calculator.calculate_all_metrics(cv_df, feature_cols)
+    log_fairness_metrics(cv_metrics, "CV")
+
+    summary = summarize_fairness_results(cv_metrics)
+    summary["split"] = "cv"
+    summary_file = output_dir / f"{dataset_name}_cv_summary.csv"
+    summary.to_csv(summary_file, index=False)
+    logging.info(f"[SUCCESS] CV summary table saved to: {summary_file}")
+
+    n_folds = int(cv_df["fold"].nunique()) if "fold" in cv_df.columns else None
+    return {
+        "dataset": dataset_name,
+        "cv_metrics": cv_metrics,
+        "n_samples": len(cv_df),
+        "n_folds": n_folds,
+    }
 
 
 def log_fairness_metrics(metrics: Dict, split_name: str):
@@ -384,7 +490,7 @@ def main():
 
     logging.info(f"Found {len(train_files)} prediction pairs to assess")
 
-    # Process each dataset — build nested {dataset: {model: results}} structure
+    # Process each dataset — build nested {dataset: {model: {method: results}}} structure
     nested_results: dict = {}
 
     for train_file in train_files:
@@ -401,12 +507,35 @@ def main():
             results = assess_dataset_fairness(
                 combined_name, train_file, test_file, results_dir, metrics_calculator
             )
-            nested_results.setdefault(dataset, {})[model] = results
+            nested_results.setdefault(dataset, {}).setdefault(model, {})["single_split"] = results
         except Exception as e:
             logging.exception(f"Failed to assess {combined_name}: {e}")
             continue
 
-    # Save combined report (renamed + rekeyed)
+    # Process CV prediction files: results/predictions/{ds}_{model}_cv.csv
+    cv_files = sorted(predictions_dir.glob("*_cv.csv"))
+    if args.datasets:
+        selected = [d.strip() for d in args.datasets]
+        cv_files = [
+            p for p in cv_files if any(p.name.startswith(f"{dataset}_") for dataset in selected)
+        ]
+    if args.model_types:
+        selected_models = [m.strip().lower() for m in args.model_types]
+        cv_files = [
+            p for p in cv_files if any(f"_{model}_cv.csv" in p.name for model in selected_models)
+        ]
+
+    for cv_file in cv_files:
+        combined_name = cv_file.stem.replace("_cv", "")
+        dataset, model = _split_dataset_model(combined_name)
+        try:
+            cv_results = assess_cv_fairness(combined_name, cv_file, results_dir, metrics_calculator)
+            nested_results.setdefault(dataset, {}).setdefault(model, {})["kfold_cv"] = cv_results
+        except Exception as e:
+            logging.exception(f"Failed to assess CV file {combined_name}: {e}")
+            continue
+
+    # Save combined report
     combined_file = results_dir / "fairness_report.json"
     with open(combined_file, "w") as f:
         json.dump(
