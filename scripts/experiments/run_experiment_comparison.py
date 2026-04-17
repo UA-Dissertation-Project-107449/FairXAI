@@ -519,6 +519,9 @@ def _load_baseline_per_group(run_root: Path, dataset: str, model_type: str) -> l
             data = json.load(f)
         # Navigate nested structure: data[dataset][model_type]
         model_data = data.get(dataset, {}).get(model_type, {})
+        # New shape: {dataset: {model: {single_split: {...}, kfold_cv: {...}}}}
+        if "test_metrics" not in model_data and "single_split" in model_data:
+            model_data = model_data.get("single_split", {})
         if not model_data:
             logging.debug(f"No fairness data for {dataset}/{model_type} in {json_path}")
             return []
@@ -975,7 +978,7 @@ def run_comparison_analysis(
         )
 
     summary_df = pd.DataFrame(summary_rows)
-    summary_csv = data_dir / "top_configs.csv"
+    summary_csv = data_dir / "dataset_summary.csv"
     summary_df.to_csv(summary_csv, index=False)
     logging.info(f"[SUCCESS] Saved summary: {summary_csv}")
 
