@@ -49,10 +49,15 @@ def _verbose_flags(level: int) -> list[str]:
     return []
 
 
+def _study_verbose_flags(level: int) -> list[str]:
+    """Convert verbosity for study scripts (only supports -v)."""
+    return ["-v"] if level >= 1 else []
+
+
 @task
 def load_data(run_id: str, datasets: Optional[list[str]] = None, verbose: int = 0):
     logger = get_run_logger()
-    logger.info("[PHASE 1/10] Loading cardiac datasets (standardization)")
+    logger.info("[PHASE 1/12] Loading cardiac datasets (standardization)")
     script = ROOT_DIR / "scripts" / "cardiac" / "load_data.py"
     args = []
     if datasets:
@@ -66,7 +71,7 @@ def load_data(run_id: str, datasets: Optional[list[str]] = None, verbose: int = 
 @task
 def profile_data(run_id: str, datasets: Optional[list[str]] = None, verbose: int = 0):
     logger = get_run_logger()
-    logger.info("[PHASE 2/10] Profiling datasets (complexity + fairness)")
+    logger.info("[PHASE 2/12] Profiling datasets (complexity + fairness)")
     script = ROOT_DIR / "scripts" / "cardiac" / "profile_data.py"
     args = []
     if datasets:
@@ -81,7 +86,7 @@ def profile_data(run_id: str, datasets: Optional[list[str]] = None, verbose: int
 def generate_recommendations(run_id: str, verbose: int = 0):
     """Generate fairness triage recommendations (Phase 3)."""
     logger = get_run_logger()
-    logger.info("[PHASE 3/10] Generating fairness triage recommendations")
+    logger.info("[PHASE 3/12] Generating fairness triage recommendations")
     script = ROOT_DIR / "scripts" / "cardiac" / "generate_recommendations.py"
     args = ["--run-id", run_id] + _verbose_flags(verbose)
     env = os.environ.copy()
@@ -97,7 +102,7 @@ def preprocess_data(
     verbose: int = 0,
 ):
     logger = get_run_logger()
-    logger.info("[PHASE 4/10] Preprocessing datasets (split + scale + fairness profiles)")
+    logger.info("[PHASE 4/12] Preprocessing datasets (split + scale + fairness profiles)")
     script = ROOT_DIR / "scripts" / "cardiac" / "preprocess.py"
     args = []
     if all_binnings:
@@ -111,20 +116,98 @@ def preprocess_data(
 
 
 @task
-def train_baseline_model(
-    run_id: str,
+def run_hpo_study(
     datasets: Optional[list[str]] = None,
     model_types: Optional[list[str]] = None,
     verbose: int = 0,
 ):
+    """Runs HPO study before baseline/experiments."""
     logger = get_run_logger()
-    logger.info("[PHASE 5/10] Training baseline model(s)")
+    logger.info("[PHASE 5/12] Hyperparameter optimisation study")
+    script = ROOT_DIR / "scripts" / "studies" / "run_hpo.py"
+    args = ["--pipeline", "cardiac", "--config", "configs/experiments/hpo.yaml"]
+    if datasets:
+        args.extend(["--datasets", *datasets])
+    if model_types:
+        args.extend(["--model-types", *model_types])
+    args.extend(_study_verbose_flags(verbose))
+    _run_script(script, args, os.environ.copy())
+
+
+@task
+def run_feature_selection_study(
+    datasets: Optional[list[str]] = None,
+    model_types: Optional[list[str]] = None,
+    verbose: int = 0,
+):
+    """Runs feature-selection study before baseline/experiments."""
+    logger = get_run_logger()
+    logger.info("[PHASE 6/12] Feature-selection ablation study")
+    script = ROOT_DIR / "scripts" / "studies" / "run_feature_selection_study.py"
+    args = [
+        "--pipeline",
+        "cardiac",
+        "--config",
+        "configs/experiments/feature_selection_study.yaml",
+    ]
+    if datasets:
+        args.extend(["--datasets", *datasets])
+    if model_types:
+        args.extend(["--model-types", *model_types])
+    args.extend(_study_verbose_flags(verbose))
+    _run_script(script, args, os.environ.copy())
+
+
+@task
+def build_selector_contract(
+    run_id: str,
+    datasets: Optional[list[str]] = None,
+    model_types: Optional[list[str]] = None,
+    verbose: int = 0,
+) -> str:
+    logger = get_run_logger()
+    logger.info("[WIRING] Building selector contract from study artifacts")
+    script = ROOT_DIR / "scripts" / "studies" / "build_selector_contract.py"
+    args = ["--pipeline", "cardiac", "--run-id", run_id]
+    if datasets:
+        args.extend(["--datasets", *datasets])
+    if model_types:
+        args.extend(["--model-types", *model_types])
+    args.extend(_study_verbose_flags(verbose))
+    _run_script(script, args, os.environ.copy())
+
+    contract_path = (
+        ROOT_DIR
+        / "output"
+        / "cardiac"
+        / "runs"
+        / run_id
+        / "recommendations"
+        / "selector_contract.json"
+    )
+    if not contract_path.exists():
+        logger.warning("Selector contract was not created at expected path: %s", contract_path)
+    return str(contract_path)
+
+
+@task
+def train_baseline_model(
+    run_id: str,
+    datasets: Optional[list[str]] = None,
+    model_types: Optional[list[str]] = None,
+    selector_contract_path: Optional[str] = None,
+    verbose: int = 0,
+):
+    logger = get_run_logger()
+    logger.info("[PHASE 7/12] Training baseline model(s)")
     script = ROOT_DIR / "scripts" / "cardiac" / "train_baseline.py"
     args = []
     if datasets:
         args.extend(["--datasets", *datasets])
     if model_types:
         args.extend(["--model-types", *model_types])
+    if selector_contract_path:
+        args.extend(["--selector-contract", selector_contract_path])
     args.extend(_verbose_flags(verbose))
     env = os.environ.copy()
     env["RUN_ID"] = run_id
@@ -139,7 +222,7 @@ def assess_predictions(
     verbose: int = 0,
 ):
     logger = get_run_logger()
-    logger.info("[PHASE 6/10] Assessing post-prediction fairness")
+    logger.info("[PHASE 8/12] Assessing post-prediction fairness")
     script = ROOT_DIR / "scripts" / "cardiac" / "assess_predictions.py"
     args = []
     if datasets:
@@ -156,7 +239,7 @@ def assess_predictions(
 def analyze_attribute_binning(run_id: str, datasets: Optional[list[str]] = None, verbose: int = 0):
     """Analyzes attribute binning strategies."""
     logger = get_run_logger()
-    logger.info("[PHASE 7/10] Attribute binning strategies analysis")
+    logger.info("[PHASE 9/12] Attribute binning strategies analysis")
     script = ROOT_DIR / "scripts" / "experiments" / "run_attribute_binning_analysis.py"
     args = [
         "--config",
@@ -180,7 +263,7 @@ def compare_mitigation_techniques(
 ):
     """Compares mitigation techniques."""
     logger = get_run_logger()
-    logger.info("[PHASE 8/10] Mitigation techniques comparison")
+    logger.info("[PHASE 10/12] Mitigation techniques comparison")
     script = ROOT_DIR / "scripts" / "cardiac" / "mitigation.py"
     args = [
         "--config",
@@ -201,17 +284,20 @@ def run_combinatorial_experiments(
     run_id: str,
     datasets: Optional[list[str]] = None,
     model_types: Optional[list[str]] = None,
+    selector_contract_path: Optional[str] = None,
     verbose: int = 0,
 ):
     """Runs combinatorial experiments."""
     logger = get_run_logger()
-    logger.info("[PHASE 9/10] Combinatorial experiments")
+    logger.info("[PHASE 11/12] Combinatorial experiments")
     script = ROOT_DIR / "scripts" / "cardiac" / "combinatorial.py"
     args = ["--config", "configs/experiments/combinatorial.yaml", "--run-id", run_id]
     if datasets:
         args.extend(["--datasets", *datasets])
     if model_types:
         args.extend(["--model-types", *model_types])
+    if selector_contract_path:
+        args.extend(["--selector-contract", selector_contract_path])
     args.extend(_verbose_flags(verbose))
     _run_script(script, args, os.environ.copy())
 
@@ -220,7 +306,7 @@ def run_combinatorial_experiments(
 def compare_experiments(run_id: str, verbose: int = 0):
     """Compares experiments."""
     logger = get_run_logger()
-    logger.info("[PHASE 10/10] Experiment comparison and dissertation plots")
+    logger.info("[PHASE 12/12] Experiment comparison and dissertation plots")
     script = ROOT_DIR / "scripts" / "cardiac" / "compare.py"
     args = ["--pipeline", "cardiac", "--run-id", run_id]
     args.extend(_verbose_flags(verbose))
@@ -233,6 +319,8 @@ def compare_experiments(run_id: str, verbose: int = 0):
 
 @flow(name="Cardiac Fairness Pipeline")
 def cardiac_pipeline(
+    run_hpo_study_enabled: bool = True,
+    run_feature_selection_study_enabled: bool = True,
     run_attribute_binning: bool = True,
     run_mitigation: bool = True,
     run_combinatorial: bool = True,
@@ -303,6 +391,8 @@ def cardiac_pipeline(
     logger.info("[PHASE] Cardiac fairness pipeline started")
     logger.info(f"Run ID: {run_id}")
     logger.info(f"Stage window: {first.number}..{last.number} ({first.name} to {last.name})")
+    logger.info(f"HPO study enabled: {run_hpo_study_enabled}")
+    logger.info(f"Feature-selection study enabled: {run_feature_selection_study_enabled}")
     logger.info(f"Attribute binning enabled: {run_attribute_binning}")
     logger.info(f"Mitigation enabled: {run_mitigation}")
     logger.info(f"Combinatorial enabled: {run_combinatorial}")
@@ -316,11 +406,20 @@ def cardiac_pipeline(
         future.result()  # raises on failure
         mark_stage_complete(run_root, STAGES[stage_num - 1])
 
+    def _mark_skipped(stage_num: int, reason: str) -> None:
+        """Write a checkpoint marker for an intentionally skipped stage."""
+        stage = STAGES[stage_num - 1]
+        logger.info(f"[{stage_num}/12] {stage.name} - checkpointed as skipped ({reason})")
+        mark_stage_complete(run_root, stage)
+
     # --- Submit tasks, gated by active range --------------------------------
     load_data_task = None
     profile_task = None
     recommendations_task = None
     preprocess_data_task = None
+    hpo_study_task = None
+    feature_selection_study_task = None
+    selector_contract_task = None
     train_baseline_model_task = None
     assess_predictions_task = None
     age_task = None
@@ -332,21 +431,21 @@ def cardiac_pipeline(
     if _should_run(1):
         load_data_task = load_data.submit(run_id, datasets, verbose)
     else:
-        logger.info("[1/10] load - skipped (outside active range)")
+        logger.info("[1/12] load - skipped (outside active range)")
 
     # Stage 2 - Profile
     if _should_run(2):
         wait = [load_data_task] if load_data_task else []
         profile_task = profile_data.submit(run_id, datasets, verbose, wait_for=wait)
     else:
-        logger.info("[2/10] profile - skipped (outside active range)")
+        logger.info("[2/12] profile - skipped (outside active range)")
 
     # Stage 3 - Recommendations
     if _should_run(3):
         wait = [profile_task] if profile_task else []
         recommendations_task = generate_recommendations.submit(run_id, verbose, wait_for=wait)
     else:
-        logger.info("[3/10] recommend - skipped (outside active range)")
+        logger.info("[3/12] recommend - skipped (outside active range)")
 
     # Stage 4 - Preprocess
     if _should_run(4):
@@ -355,65 +454,149 @@ def cardiac_pipeline(
             run_id, run_combinatorial, datasets, verbose, wait_for=wait
         )
     else:
-        logger.info("[4/10] preprocess - skipped (outside active range)")
+        logger.info("[4/12] preprocess - skipped (outside active range)")
 
-    # Stage 5 - Train baseline
+    # Stage 5 - HPO study (optional + gated)
     if _should_run(5):
-        wait = [preprocess_data_task] if preprocess_data_task else []
-        train_baseline_model_task = train_baseline_model.submit(
-            run_id, datasets, model_types, verbose, wait_for=wait
+        if run_hpo_study_enabled:
+            wait = [preprocess_data_task] if preprocess_data_task else []
+            hpo_study_task = run_hpo_study.submit(datasets, model_types, verbose, wait_for=wait)
+        else:
+            logger.info("[5/12] hpo_study - skipped (disabled)")
+            _mark_skipped(5, "disabled")
+    else:
+        logger.info("[5/12] hpo_study - skipped (outside active range)")
+
+    # Stage 6 - Feature-selection study (optional + gated)
+    if _should_run(6):
+        if run_feature_selection_study_enabled:
+            if hpo_study_task:
+                wait = [hpo_study_task]
+            elif preprocess_data_task:
+                wait = [preprocess_data_task]
+            else:
+                wait = []
+            feature_selection_study_task = run_feature_selection_study.submit(
+                datasets,
+                model_types,
+                verbose,
+                wait_for=wait,
+            )
+        else:
+            logger.info("[6/12] feature_selection_study - skipped (disabled)")
+            _mark_skipped(6, "disabled")
+    else:
+        logger.info("[6/12] feature_selection_study - skipped (outside active range)")
+
+    # Wiring - Selector contract (internal helper for stages 7/11)
+    if _should_run(7) or (_should_run(11) and run_combinatorial):
+        if feature_selection_study_task:
+            wait = [feature_selection_study_task]
+        elif hpo_study_task:
+            wait = [hpo_study_task]
+        elif preprocess_data_task:
+            wait = [preprocess_data_task]
+        else:
+            wait = []
+
+        selector_contract_task = build_selector_contract.submit(
+            run_id,
+            datasets,
+            model_types,
+            verbose,
+            wait_for=wait,
         )
     else:
-        logger.info("[5/10] train - skipped (outside active range)")
+        logger.info("[WIRING] selector_contract - skipped (downstream stages not active)")
 
-    # Stage 6 - Assess fairness
-    if _should_run(6):
+    # Stage 7 - Train baseline
+    if _should_run(7):
+        if selector_contract_task:
+            wait = [selector_contract_task]
+        elif feature_selection_study_task:
+            wait = [feature_selection_study_task]
+        elif hpo_study_task:
+            wait = [hpo_study_task]
+        elif preprocess_data_task:
+            wait = [preprocess_data_task]
+        else:
+            wait = []
+        train_baseline_model_task = train_baseline_model.submit(
+            run_id,
+            datasets,
+            model_types,
+            selector_contract_task,
+            verbose,
+            wait_for=wait,
+        )
+    else:
+        logger.info("[7/12] train - skipped (outside active range)")
+
+    # Stage 8 - Assess fairness
+    if _should_run(8):
         wait = [train_baseline_model_task] if train_baseline_model_task else []
         assess_predictions_task = assess_predictions.submit(
             run_id, datasets, model_types, verbose, wait_for=wait
         )
     else:
-        logger.info("[6/10] assess - skipped (outside active range)")
+        logger.info("[8/12] assess - skipped (outside active range)")
 
-    # Stage 7 - Attribute binning (optional + gated)
-    if _should_run(7) and run_attribute_binning:
-        wait = [assess_predictions_task] if assess_predictions_task else []
-        age_task = analyze_attribute_binning.submit(run_id, datasets, verbose, wait_for=wait)
+    # Stage 9 - Attribute binning (optional + gated)
+    if _should_run(9):
+        if run_attribute_binning:
+            wait = [assess_predictions_task] if assess_predictions_task else []
+            age_task = analyze_attribute_binning.submit(run_id, datasets, verbose, wait_for=wait)
+        else:
+            logger.info("[9/12] attribute_binning - skipped (disabled)")
+            _mark_skipped(9, "disabled")
     else:
-        reason = "disabled" if not run_attribute_binning else "outside active range"
-        logger.info(f"[7/10] attribute_binning - skipped ({reason})")
+        logger.info("[9/12] attribute_binning - skipped (outside active range)")
 
-    # Stage 8 - Mitigation (optional + gated)
-    if _should_run(8) and run_mitigation:
-        wait = [assess_predictions_task] if assess_predictions_task else []
-        mitigation_task = compare_mitigation_techniques.submit(
-            run_id, datasets, verbose, wait_for=wait
-        )
+    # Stage 10 - Mitigation (optional + gated)
+    if _should_run(10):
+        if run_mitigation:
+            wait = [assess_predictions_task] if assess_predictions_task else []
+            mitigation_task = compare_mitigation_techniques.submit(
+                run_id, datasets, verbose, wait_for=wait
+            )
+        else:
+            logger.info("[10/12] mitigation - skipped (disabled)")
+            _mark_skipped(10, "disabled")
     else:
-        reason = "disabled" if not run_mitigation else "outside active range"
-        logger.info(f"[8/10] mitigation - skipped ({reason})")
+        logger.info("[10/12] mitigation - skipped (outside active range)")
 
-    # Stage 9 - Combinatorial (optional + gated)
-    if _should_run(9) and run_combinatorial:
-        wait = [assess_predictions_task] if assess_predictions_task else []
-        combinatorial_task = run_combinatorial_experiments.submit(
-            run_id, datasets, model_types, verbose, wait_for=wait
-        )
+    # Stage 11 - Combinatorial (optional + gated)
+    if _should_run(11):
+        if run_combinatorial:
+            wait = [assess_predictions_task] if assess_predictions_task else []
+            combinatorial_task = run_combinatorial_experiments.submit(
+                run_id,
+                datasets,
+                model_types,
+                selector_contract_task,
+                verbose,
+                wait_for=wait,
+            )
+        else:
+            logger.info("[11/12] combinatorial - skipped (disabled)")
+            _mark_skipped(11, "disabled")
     else:
-        reason = "disabled" if not run_combinatorial else "outside active range"
-        logger.info(f"[9/10] combinatorial - skipped ({reason})")
+        logger.info("[11/12] combinatorial - skipped (outside active range)")
 
-    # Stage 10 - Comparison (optional + gated)
-    if _should_run(10) and run_comparison:
-        wait = (
-            [combinatorial_task]
-            if combinatorial_task
-            else [assess_predictions_task] if assess_predictions_task else []
-        )
-        comparison_task = compare_experiments.submit(run_id, verbose, wait_for=wait)
+    # Stage 12 - Comparison (optional + gated)
+    if _should_run(12):
+        if run_comparison:
+            wait = (
+                [combinatorial_task]
+                if combinatorial_task
+                else [assess_predictions_task] if assess_predictions_task else []
+            )
+            comparison_task = compare_experiments.submit(run_id, verbose, wait_for=wait)
+        else:
+            logger.info("[12/12] compare - skipped (disabled)")
+            _mark_skipped(12, "disabled")
     else:
-        reason = "disabled" if not run_comparison else "outside active range"
-        logger.info(f"[10/10] compare - skipped ({reason})")
+        logger.info("[12/12] compare - skipped (outside active range)")
 
     # --- Collect results & write checkpoints --------------------------------
     task_map = {
@@ -421,12 +604,14 @@ def cardiac_pipeline(
         2: profile_task,
         3: recommendations_task,
         4: preprocess_data_task,
-        5: train_baseline_model_task,
-        6: assess_predictions_task,
-        7: age_task,
-        8: mitigation_task,
-        9: combinatorial_task,
-        10: comparison_task,
+        5: hpo_study_task,
+        6: feature_selection_study_task,
+        7: train_baseline_model_task,
+        8: assess_predictions_task,
+        9: age_task,
+        10: mitigation_task,
+        11: combinatorial_task,
+        12: comparison_task,
     }
     for stage_num in sorted(task_map):
         future = task_map[stage_num]
@@ -451,11 +636,17 @@ def cardiac_pipeline(
         logger.info(f"  - Raw data:           {ROOT_DIR}/data/raw/cardiac")
     if _should_run(4):
         logger.info(f"  - Processed data:     {ROOT_DIR}/data/processed/cardiac")
+    if hpo_study_task:
+        logger.info(f"  - HPO study:          {ROOT_DIR}/output/cardiac/studies/hpo")
+    if feature_selection_study_task:
+        logger.info(f"  - FS study:           {ROOT_DIR}/output/cardiac/studies/feature_selection")
     if _should_run(2):
         logger.info(f"  - Profiling:          {run_root}/profiling")
     if _should_run(3):
         logger.info(f"  - Recommendations:    {run_root}/recommendations")
-    if _should_run(5):
+    if selector_contract_task:
+        logger.info(f"  - Selector contract:  {run_root}/recommendations/selector_contract.json")
+    if _should_run(7):
         logger.info(f"  - Baseline:           {run_root}/baseline")
     if age_task:
         logger.info(f"  - Attr binning:       {run_root}/experiments/attribute_binning")
@@ -478,8 +669,10 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 Stage names (number or name accepted):
-  1=load  2=profile  3=recommend  4=preprocess  5=train
-  6=assess  7=attribute_binning  8=mitigation  9=combinatorial  10=compare
+    1=load  2=profile  3=recommend  4=preprocess
+    5=hpo_study  6=feature_selection_study
+    7=train  8=assess  9=attribute_binning
+    10=mitigation  11=combinatorial  12=compare
 
 Examples:
   # Run only through profiling
@@ -504,6 +697,12 @@ Examples:
     )
     p.add_argument(
         "--run-id", default=None, help="Explicit run ID. On resume, defaults to latest run."
+    )
+    p.add_argument("--no-hpo-study", action="store_true", help="Skip HPO study stage.")
+    p.add_argument(
+        "--no-feature-selection-study",
+        action="store_true",
+        help="Skip feature-selection study stage.",
     )
     p.add_argument(
         "--no-attribute-binning", action="store_true", help="Skip attribute binning stage."
@@ -532,6 +731,8 @@ Examples:
 if __name__ == "__main__":
     args = _build_parser().parse_args()
     cardiac_pipeline(
+        run_hpo_study_enabled=not args.no_hpo_study,
+        run_feature_selection_study_enabled=not args.no_feature_selection_study,
         run_attribute_binning=not args.no_attribute_binning,
         run_mitigation=not args.no_mitigation,
         run_combinatorial=not args.no_combinatorial,
