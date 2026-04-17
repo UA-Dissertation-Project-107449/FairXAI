@@ -10,14 +10,15 @@ scripts/
 ├── cardiac/                # Cardiac orchestrator + thin wrappers (add --pipeline cardiac)
 ├── dermatology/            # Dermatology wrappers (TODO)
 ├── experiments/            # Pipeline experiment stages (called by flows/cardiac_pipeline.py)
-│   ├── run_attribute_binning_analysis.py  # Stage 7: sweep 26+ age-binning strategies
-│   ├── run_mitigation_comparison.py       # Stage 8: pre/in/post-processing mitigation
-│   ├── run_combinatorial_experiments.py   # Stage 9: full experiment matrix
-│   ├── run_experiment_comparison.py       # Stage 10: Pareto frontier + cross-experiment plots
+│   ├── run_attribute_binning_analysis.py  # Stage 9: sweep 26+ age-binning strategies
+│   ├── run_mitigation_comparison.py       # Stage 10: pre/in/post-processing mitigation
+│   ├── run_combinatorial_experiments.py   # Stage 11: full experiment matrix
+│   ├── run_experiment_comparison.py       # Stage 12: Pareto frontier + cross-experiment plots
 │   └── _gates.py                          # Shared recall-gate utilities
-└── studies/                # Standalone studies (NOT pipeline stages — run independently)
-    ├── run_hpo.py                         # Hyperparameter optimisation (run before pipeline)
-    ├── run_feature_selection_study.py     # Sensitive-attribute ablation study
+└── studies/                # Studies-first stages + standalone study utilities
+    ├── run_hpo.py                         # Stage 5: hyperparameter optimisation study
+    ├── run_feature_selection_study.py     # Stage 6: sensitive-attribute ablation study
+    ├── build_selector_contract.py         # Wiring helper: studies -> execution contract
     ├── run_grouping_analysis.py           # Clustering + similarity subgroup discovery
     └── generate_dissertation_plots.py     # Batch-generate dissertation figures from a run
 ```
@@ -29,13 +30,15 @@ scripts/
 | 1 | `load_data.py` | Download / locate raw CSVs |
 | 2 | `profile_data.py` | Generate profiling JSONs (complexity, imbalance, …) |
 | 3 | `generate_recommendations.py` | Pre-model fairness triage (see `src/fairxai/recommendations/README.md`) |
-| 4 | `preprocess_data.py` | Clean, encode, bin — all binning variants for combinatorial |
-| 5 | `train_baseline.py` | Train baseline models |
-| 6 | `assess_baseline_fairness.py` | Compute fairness metrics on baselines |
-| 7 | `experiments/run_attribute_binning_analysis.py` | Age-binning sensitivity analysis (26+ strategies) |
-| 8 | `experiments/run_mitigation_comparison.py` | Pre-/in-/post-processing mitigation comparison |
-| 9 | `experiments/run_combinatorial_experiments.py` | Full experiment matrix |
-| 10 | `experiments/run_experiment_comparison.py` | Cross-experiment comparison + Pareto frontier |
+| 4 | `preprocess.py` | Clean, encode, bin — all binning variants for combinatorial |
+| 5 | `studies/run_hpo.py` | Hyperparameter optimisation study |
+| 6 | `studies/run_feature_selection_study.py` | Sensitive-attribute ablation study |
+| 7 | `train_baseline.py` | Train baseline models |
+| 8 | `assess_predictions.py` | Compute fairness metrics on baselines |
+| 9 | `experiments/run_attribute_binning_analysis.py` | Age-binning sensitivity analysis (26+ strategies) |
+| 10 | `experiments/run_mitigation_comparison.py` | Pre-/in-/post-processing mitigation comparison |
+| 11 | `experiments/run_combinatorial_experiments.py` | Full experiment matrix |
+| 12 | `experiments/run_experiment_comparison.py` | Cross-experiment comparison + Pareto frontier |
 
 Stage 3 is controlled by the `RUN_RECOMMENDATIONS` env var (default `true`).
 
@@ -166,7 +169,7 @@ Both orchestrators accept CLI scope overrides:
 - `--datasets <d1> [d2 ...]`
 - `--model-types <m1> [m2 ...]`
 
-Precedence is: CLI flags > config > defaults/auto-discovery.
+Precedence is: CLI flags > selector contract (when provided) > config > defaults/auto-discovery.
 
 Examples:
 
@@ -190,7 +193,7 @@ output/cardiac/
 ├── runs/
 │   └── run_<timestamp>_<pid>_<uuid>/
 │       ├── profiling/
-│       ├── recommendations/
+│       ├── recommendations/{selector_contract.json, ...}
 │       ├── baseline/{models/, results/predictions/, prediction_fairness/}
 │       └── experiments/{attribute_binning/, mitigation/, comparisons/data/, comparisons/plots/, …}
 ├── studies/
@@ -215,19 +218,20 @@ Two helper scripts live at the **project root** (not inside `scripts/`):
 
 ## Studies
 
-Standalone investigations that run independently of the main pipeline.
-Run them before or after pipeline runs as needed — they do not block pipeline execution.
+Studies can run standalone, and two studies are also first-class pipeline stages in the cardiac flow.
+The default cardiac orchestration executes HPO and feature-selection studies before baseline/experiment stages.
 
 | Script | Purpose | Output |
 |--------|---------|--------|
-| `studies/run_hpo.py` | Hyperparameter optimisation (GridSearchCV/RandomizedSearchCV). Auto-loaded by combinatorial sweep. | `output/<pipeline>/studies/hpo/best_params_{dataset}_{model}.json` |
-| `studies/run_feature_selection_study.py` | Sensitive-attribute ablation — trains baselines for each feature-selection mode × model. | `output/<pipeline>/studies/feature_selection/<study_id>/` |
+| `studies/run_hpo.py` | Stage 5 (or standalone): hyperparameter optimisation (GridSearchCV/RandomizedSearchCV). Auto-loaded by downstream runners. | `output/<pipeline>/studies/hpo/best_params_{dataset}_{model}.json` |
+| `studies/run_feature_selection_study.py` | Stage 6 (or standalone): sensitive-attribute ablation study. | `output/<pipeline>/studies/feature_selection/<study_id>/` |
+| `studies/build_selector_contract.py` | Internal wiring helper used by orchestrators before baseline/combinatorial. Emits recommendations derived from study outputs. | `output/<pipeline>/runs/<run_id>/recommendations/selector_contract.json` |
 | `studies/run_grouping_analysis.py` | Clustering + similarity subgroup discovery. Writes `group_cluster` back to processed CSVs. | `output/<pipeline>/studies/grouping/<study_id>/` |
 | `studies/generate_dissertation_plots.py` | Batch-generate dissertation figures from a completed pipeline run. | `output/<pipeline>/studies/dissertation_figures/<run_id>/` |
 
 ### HPO workflow
 
-HPO should run before the combinatorial sweep for better hyperparameters:
+HPO can be run standalone, but the cardiac orchestrators now execute it by default before baseline and combinatorial stages:
 
 ```bash
 python scripts/studies/run_hpo.py --pipeline cardiac --datasets cleveland
@@ -247,18 +251,19 @@ Pipeline stages called automatically by `flows/cardiac_pipeline.py` and `scripts
 
 | Script | Purpose |
 |--------|---------|
-| `experiments/run_attribute_binning_analysis.py` | Stage 7: age-binning sweep (26+ strategies across 5 families). |
-| `experiments/run_mitigation_comparison.py` | Stage 8: focused mitigation strategy comparison. |
-| `experiments/run_combinatorial_experiments.py` | Stage 9: full experiment matrix. Auto-loads HPO params from `output/<pipeline>/studies/hpo/`. |
-| `experiments/run_experiment_comparison.py` | Stage 10: cross-experiment comparison (Pareto frontier, trade-off scatter). |
+| `experiments/run_attribute_binning_analysis.py` | Stage 9: age-binning sweep (26+ strategies across 5 families). |
+| `experiments/run_mitigation_comparison.py` | Stage 10: focused mitigation strategy comparison. |
+| `experiments/run_combinatorial_experiments.py` | Stage 11: full experiment matrix. Auto-loads HPO params and can consume `--selector-contract` for model-type recommendations. |
+| `experiments/run_experiment_comparison.py` | Stage 12: cross-experiment comparison (Pareto frontier, trade-off scatter). |
 
 ### Feature selection mode
 
-`train_baseline.py` accepts `--feature-selection-mode` and `--rfe-top-k`:
+`train_baseline.py` accepts `--feature-selection-mode`, `--rfe-top-k`, and `--selector-contract`:
 
 ```bash
 python scripts/common/train_baseline.py --pipeline cardiac --feature-selection-mode include_all_sensitive
 python scripts/common/train_baseline.py --pipeline cardiac --feature-selection-mode rfe_top_k --rfe-top-k 10
+python scripts/common/train_baseline.py --pipeline cardiac --selector-contract output/cardiac/runs/<run_id>/recommendations/selector_contract.json
 ```
 
 See `src/fairxai/data/README.md` for all mode descriptions.

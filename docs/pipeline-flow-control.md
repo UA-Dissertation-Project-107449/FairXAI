@@ -12,12 +12,14 @@ Both the **Prefect flow** (`flows/cardiac_pipeline.py`) and the **bash pipeline*
 | 2 | `profile`      | `profiling`                    | Profile datasets (complexity + fairness) |
 | 3 | `recommend`    | `recommendations`, `triage`    | Generate fairness triage recommendations |
 | 4 | `preprocess`   | `preprocessing`                | Split, scale, generate fairness profiles |
-| 5 | `train`        | `baseline`, `training`         | Train baseline model(s)                  |
-| 6 | `assess`       | `fairness`, `assessment`       | Assess post-prediction fairness          |
-| 7 | `attribute_binning`  | `age_binning`                  | Attribute binning strategy analysis      |
-| 8 | `mitigation`   | —                              | Mitigation technique comparison          |
-| 9 | `combinatorial`| `combo`                        | Combinatorial experiments                |
-| 10| `compare`      | `comparison`                   | Experiment comparison & reporting        |
+| 5 | `hpo_study`    | `hpo`                          | Hyperparameter optimisation study        |
+| 6 | `feature_selection_study` | `feature_selection`, `fs_study` | Feature-selection ablation study |
+| 7 | `train`        | `baseline`, `training`         | Train baseline model(s)                  |
+| 8 | `assess`       | `fairness`, `assessment`       | Assess post-prediction fairness          |
+| 9 | `attribute_binning`  | `age_binning`             | Attribute binning strategy analysis      |
+| 10 | `mitigation`  | —                              | Mitigation technique comparison          |
+| 11 | `combinatorial`| `combo`                       | Combinatorial experiments                |
+| 12| `compare`      | `comparison`                   | Experiment comparison & reporting        |
 
 Stages can be referenced by **name**, **alias**, or **number** (e.g., `profile`, `profiling`, `2`, `phase2` all resolve to stage 2).
 
@@ -26,14 +28,17 @@ Stages can be referenced by **name**, **alias**, or **number** (e.g., `profile`,
 ```
 load (1)
   └─ profile (2)
-        ├─ recommend (3)       [independent branch]
+        ├─ recommend (3)                  [independent branch]
         └─ preprocess (4)
-              └─ train (5)
-                    └─ assess (6)
-                          ├─ attribute_binning (7)  [optional]
-                          ├─ mitigation (8)        [optional]
-                          └─ combinatorial (9)     [optional]
-                                └─ compare (10)    [optional]
+              └─ hpo_study (5)            [optional]
+                    └─ feature_selection_study (6) [optional]
+                          └─ selector_contract (internal wiring helper)
+                                └─ train (7)
+                                      └─ assess (8)
+                                            ├─ attribute_binning (9)  [optional]
+                                            ├─ mitigation (10)        [optional]
+                                            └─ combinatorial (11)     [optional]
+                                                  └─ compare (12)      [optional]
 ```
 
 ---
@@ -42,15 +47,17 @@ load (1)
 
 | Flag | Prefect CLI | Bash env var | Description |
 |------|-------------|--------------|-------------|
-| Resume point | `--resume-from <stage>` | `RESUME_FROM=<stage>` | First stage to execute (inclusive). Triggers artifact validation for prior stages. |
+| Resume point | `--resume-from <stage>` | `RESUME_FROM=<stage>` | First stage to execute (inclusive). Triggers checkpoint-marker validation for prior stages. |
 | Stop point | `--go-until <stage>` | `GO_UNTIL=<stage>` | Last stage to execute (inclusive). Stages after this are skipped. |
 | Run ID | `--run-id <id>` | `RUN_ID=<id>` | Explicit run ID. On resume without this, defaults to `latest_run` symlink. |
 | Dataset scope | `--datasets <d1> [d2 ...]` | — (CLI only) | Optional dataset override propagated to stages. |
 | Model scope | `--model-types <m1> [m2 ...]` | — (CLI only) | Optional model-type override (baseline/combinatorial stages). |
-| Skip attr binning | `--no-attribute-binning` | `RUN_ATTRIBUTE_BINNING=false` | Skip stage 7 even if in active range. |
-| Skip mitigation | `--no-mitigation` | `RUN_MITIGATION=false` | Skip stage 8 even if in active range. |
-| Skip combinatorial | `--no-combinatorial` | `RUN_COMBINATORIAL=false` | Skip stage 9 even if in active range. |
-| Skip comparison | `--no-comparison` | `RUN_COMPARISON=false` | Skip stage 10 even if in active range. |
+| Skip HPO study | `--no-hpo-study` | `RUN_HPO_STUDY=false` | Skip stage 5 even if in active range. |
+| Skip feature-selection study | `--no-feature-selection-study` | `RUN_FEATURE_SELECTION_STUDY=false` | Skip stage 6 even if in active range. |
+| Skip attr binning | `--no-attribute-binning` | `RUN_ATTRIBUTE_BINNING=false` | Skip stage 9 even if in active range. |
+| Skip mitigation | `--no-mitigation` | `RUN_MITIGATION=false` | Skip stage 10 even if in active range. |
+| Skip combinatorial | `--no-combinatorial` | `RUN_COMBINATORIAL=false` | Skip stage 11 even if in active range. |
+| Skip comparison | `--no-comparison` | `RUN_COMPARISON=false` | Skip stage 12 even if in active range. |
 | Verbose | `-v` / `--verbose` | `VERBOSE=true` | Verbose logging. |
 
 ### Dataset and model override precedence
@@ -62,6 +69,17 @@ Override precedence is:
 3. Code defaults / auto-discovery
 
 No environment-variable override layer is used for dataset/model scope.
+
+### Selector contract wiring (studies -> execution)
+
+When stage 7 (`train`) or stage 11 (`combinatorial`) is active, the orchestrators build a run-scoped selector contract at:
+
+`output/<pipeline>/runs/<run_id>/recommendations/selector_contract.json`
+
+The contract is generated from available study artifacts and passed to downstream scripts:
+
+- `scripts/common/train_baseline.py` receives `--selector-contract` and applies precedence: CLI flags > selector contract > pipeline YAML > code defaults.
+- `scripts/experiments/run_combinatorial_experiments.py` receives `--selector-contract` and uses its recommended `model_types` when `--model-types` is not explicitly provided.
 
 ---
 
@@ -84,11 +102,18 @@ GO_UNTIL=recommend bash scripts/cardiac/cardiac_pipeline.sh
 python flows/cardiac_pipeline.py --go-until recommend
 ```
 
-### Run the core pipeline without experiments (stages 1–6)
+### Run the core pipeline without experiments (stages 1–8)
 
 ```bash
 GO_UNTIL=assess bash scripts/cardiac/cardiac_pipeline.sh
 python flows/cardiac_pipeline.py --go-until assess
+```
+
+### Skip studies but keep baseline and experiment flow
+
+```bash
+bash scripts/cardiac/cardiac_pipeline.sh --no-hpo-study --no-feature-selection-study
+python flows/cardiac_pipeline.py --no-hpo-study --no-feature-selection-study
 ```
 
 ### Run only Cleveland with selected models
@@ -167,12 +192,14 @@ Example after a full run:
 ├── 2_profile.done
 ├── 3_recommend.done
 ├── 4_preprocess.done
-├── 5_train.done
-├── 6_assess.done
-├── 7_attribute_binning.done
-├── 8_mitigation.done
-├── 9_combinatorial.done
-└── 10_compare.done
+├── 5_hpo_study.done
+├── 6_feature_selection_study.done
+├── 7_train.done
+├── 8_assess.done
+├── 9_attribute_binning.done
+├── 10_mitigation.done
+├── 11_combinatorial.done
+└── 12_compare.done
 ```
 
 Each `.done` file is JSON with a timestamp and hostname:
@@ -191,7 +218,7 @@ Each `.done` file is JSON with a timestamp and hostname:
 
 When `--resume-from` is set, the orchestrator checks that **every prior stage** has a `.done` marker. If any are missing, the pipeline fails immediately with a clear error message listing the missing stages.
 
-For stages that declare artifact patterns (e.g., stage 1 expects `data/raw/cardiac/*_standardized.csv`), the Prefect flow also verifies at least one file matches each glob. The bash pipeline checks markers only (simpler, lighter).
+Both orchestrators validate resume readiness using checkpoint markers only (`.checkpoints/*.done`). This keeps resume robust even when output artifact names/locations change over time.
 
 ---
 
@@ -201,12 +228,12 @@ For stages that declare artifact patterns (e.g., stage 1 expects `data/raw/cardi
 
 2. **Checkpoint markers on disk** (`.checkpoints/` dir) over a database or JSON state file: simpler, no dependencies, survives across bash and Prefect, easy to inspect with `ls`.
 
-3. **Validation in the orchestrator, not in individual scripts**: the 10 analysis scripts remain decoupled from any checkpoint logic. They don't know they're being orchestrated. This keeps them reusable standalone.
+3. **Validation in the orchestrator, not in individual scripts**: analysis scripts remain decoupled from checkpoint logic. They don't know they're being orchestrated. This keeps them reusable standalone.
 
-4. **Stage 5 (`train`) uses only the checkpoint marker**, not `.pkl` files — experiment stages produce many models that aren't individually persisted, so file-based artifact checks would be unreliable. The checkpoint marker is the source of truth.
+4. **Stage 7 (`train`) uses only the checkpoint marker**, not `.pkl` files — experiment stages produce many models that aren't individually persisted, so file-based artifact checks would be unreliable. The checkpoint marker is the source of truth.
 
 5. **Run ID auto-resolves from `latest_run` symlink** when resuming without an explicit `--run-id`. The symlink is already maintained by `runner_utils.update_latest_pointer()`.
 
 6. **Names + numbers both accepted**: more code, but more user-friendly. `3`, `recommend`, `recommendations`, `triage`, `phase3` all resolve to the same stage.
 
-7. **Optional stages (7–10) have two independent gates**: the range gate (`--resume-from` / `--go-until`) and the feature toggle (`RUN_ATTRIBUTE_BINNING`, `--no-attribute-binning`, etc.). Both must pass for the stage to execute.
+7. **Optional stages (5–12) have two independent gates**: the range gate (`--resume-from` / `--go-until`) and the feature toggle (`RUN_HPO_STUDY`, `RUN_FEATURE_SELECTION_STUDY`, `RUN_ATTRIBUTE_BINNING`, `--no-hpo-study`, etc.). Both must pass for the stage to execute.
