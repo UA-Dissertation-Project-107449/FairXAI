@@ -108,9 +108,7 @@ def main():
     hpo_cfg = load_yaml_config(str(hpo_cfg_path))
 
     pipeline_cfg = load_yaml_config(str(project_root / f"configs/pipelines/{args.pipeline}.yaml"))
-    schema_cfg = load_schema_config_shared(
-        project_root / pipeline_cfg["runtime"]["schema_mapping_json"]
-    )
+    schema_cfg = load_schema_config_shared(project_root, args.pipeline)
     target_col = pipeline_cfg.get("training", {}).get("target", "heart_disease")
     processed_dir = project_root / pipeline_cfg["paths"]["processed_dir"]
     output_dir = project_root / hpo_cfg.get("output_dir", f"output/{args.pipeline}/hpo")
@@ -137,7 +135,12 @@ def main():
         logger.info(f"[DATASET] name={dataset}")
 
         train_df = _load_processed_data(dataset, binning, processed_dir)
-        exclude_cols = default_exclude_columns(schema_cfg, train_df.columns.tolist())
+        exclude_cols = default_exclude_columns(
+            schema_cfg,
+            dataset,
+            target=target_col,
+            sensitive_attrs=pipeline_cfg.get("fairness", {}).get("sensitive_attributes", []),
+        )
         feature_cols = [c for c in train_df.columns if c not in exclude_cols and c != target_col]
 
         if target_col not in train_df.columns:

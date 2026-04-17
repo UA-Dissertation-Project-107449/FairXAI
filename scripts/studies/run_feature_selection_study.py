@@ -32,6 +32,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
@@ -92,6 +93,7 @@ def _stop_process(process: subprocess.Popen) -> None:
 def _run_one(
     project_root: Path,
     pipeline: str,
+    datasets: Optional[list[str]],
     model_type: str,
     mode: str,
     study_id: str,
@@ -104,8 +106,7 @@ def _run_one(
 ) -> dict:
     """Run train_baseline.py for one (mode, model_type) combo across all datasets.
 
-    train_baseline.py has no --datasets flag - it reads dataset list from the pipeline
-    config. One subprocess call per (mode, model_type) covers all configured datasets.
+        One subprocess call per (mode, model_type) covers all selected datasets.
     Output is routed via --output-dir to:
       output/<pipeline>/studies/feature_selection/<study_id>/runs/fs_<mode>__<model>/baseline/
     Returns a status dict with timing and exit code.
@@ -137,6 +138,8 @@ def _run_one(
         "--cv-n-jobs",
         "1",
     ]
+    if datasets:
+        cmd.extend(["--datasets", *datasets])
     if verbose:
         cmd.append("-v")
 
@@ -239,6 +242,12 @@ def main():
         help="Study config path (relative to project root)",
     )
     parser.add_argument(
+        "--datasets",
+        nargs="+",
+        default=None,
+        help="Datasets to run (CLI override).",
+    )
+    parser.add_argument(
         "--modes",
         nargs="+",
         default=None,
@@ -284,9 +293,12 @@ def main():
 
     study_cfg_path = project_root / args.config
     study_cfg = load_yaml_config(str(study_cfg_path))
+    pipeline_cfg = load_yaml_config(str(project_root / f"configs/pipelines/{args.pipeline}.yaml"))
 
     modes = args.modes or study_cfg.get("feature_selection_modes", DEFAULT_MODES)
-    datasets = study_cfg.get("datasets", ["cleveland", "kaggle_heart"])  # informational only
+    cfg_datasets = study_cfg.get("datasets")
+    pipeline_datasets = pipeline_cfg.get("runtime", {}).get("datasets", ["cleveland"])
+    datasets = args.datasets or cfg_datasets or pipeline_datasets
     model_types = args.model_types or study_cfg.get("models", ["logistic_regression"])
     rfe_top_k = int(study_cfg.get("rfe_top_k", 10))
 
@@ -333,6 +345,7 @@ def main():
                 status = _run_one(
                     project_root=project_root,
                     pipeline=args.pipeline,
+                    datasets=datasets,
                     model_type=model_type,
                     mode=mode,
                     study_id=study_id,
@@ -354,6 +367,7 @@ def main():
                         _run_one,
                         project_root,
                         args.pipeline,
+                        datasets,
                         model_type,
                         mode,
                         study_id,
@@ -398,7 +412,7 @@ def main():
                 {
                     "pipeline": args.pipeline,
                     "modes": modes,
-                    "datasets_from_pipeline_config": datasets,
+                    "datasets": datasets,
                     "models": model_types,
                     "rfe_top_k": rfe_top_k,
                     "total": total,
@@ -417,7 +431,7 @@ def main():
         "study_id": study_id,
         "config": str(study_cfg_path),
         "modes": modes,
-        "datasets_from_pipeline_config": datasets,
+        "datasets": datasets,
         "models": model_types,
         "rfe_top_k": rfe_top_k,
         "jobs": args.jobs,
