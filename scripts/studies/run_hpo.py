@@ -111,7 +111,10 @@ def main():
     schema_cfg = load_schema_config_shared(project_root, args.pipeline)
     target_col = pipeline_cfg.get("training", {}).get("target", "heart_disease")
     processed_dir = project_root / pipeline_cfg["paths"]["processed_dir"]
-    output_dir = project_root / hpo_cfg.get("output_dir", f"output/{args.pipeline}/hpo")
+    hpo_output_root = project_root / hpo_cfg.get(
+        "output_dir", f"output/{args.pipeline}/studies/hpo"
+    )
+    output_dir = hpo_output_root / study_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
     datasets = args.datasets or pipeline_cfg["runtime"]["datasets"]
@@ -199,11 +202,17 @@ def main():
                 logger.error(f"  [FAILED] dataset={dataset} model={model_type} error={exc}")
 
     logger.info("[PHASE] HPO study complete")
-    update_output_study_pointer(
-        project_root / f"output/{args.pipeline}",
-        "hpo",
-        study_id,
-    )
+    default_hpo_root = project_root / f"output/{args.pipeline}/studies/hpo"
+    if hpo_output_root == default_hpo_root:
+        update_output_study_pointer(
+            project_root / f"output/{args.pipeline}",
+            "hpo",
+            study_id,
+        )
+    else:
+        hpo_output_root.mkdir(parents=True, exist_ok=True)
+        (hpo_output_root / "latest.txt").write_text(study_id, encoding="utf-8")
+        logger.info("Updated latest HPO pointer: %s", hpo_output_root / "latest.txt")
 
 
 if __name__ == "__main__":
