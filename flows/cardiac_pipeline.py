@@ -32,6 +32,7 @@ from fairxai.pipeline.stages import (  # noqa: E402
     resolve_stage,
     validate_prior_stages,
 )
+from fairxai.utils.config import load_yaml_config  # noqa: E402
 from fairxai.utils.logging_utils import summarize_run_logs  # noqa: E402
 
 
@@ -321,6 +322,7 @@ def compare_experiments(run_id: str, verbose: int = 0):
 def cardiac_pipeline(
     run_hpo_study_enabled: bool = True,
     run_feature_selection_study_enabled: bool = True,
+    skip_studies: Optional[bool] = None,
     run_attribute_binning: bool = True,
     run_mitigation: bool = True,
     run_combinatorial: bool = True,
@@ -342,6 +344,20 @@ def cardiac_pipeline(
     run_id_override : explicit run ID; on resume, defaults to latest run.
     """
     logger = get_run_logger()
+
+    skip_studies_cfg = False
+    if skip_studies is None:
+        cfg_path = ROOT_DIR / "configs" / "pipelines" / "cardiac.yaml"
+        try:
+            pipeline_cfg = load_yaml_config(str(cfg_path))
+            skip_studies_cfg = bool((pipeline_cfg.get("studies") or {}).get("skip", False))
+        except Exception as exc:
+            logger.warning("Could not read studies.skip from %s: %s", cfg_path, exc)
+    resolved_skip_studies = skip_studies if skip_studies is not None else skip_studies_cfg
+
+    if resolved_skip_studies:
+        run_hpo_study_enabled = False
+        run_feature_selection_study_enabled = False
 
     # --- Resolve stage range ------------------------------------------------
     active_stages = get_stage_range(resume_from, go_until)
@@ -391,6 +407,7 @@ def cardiac_pipeline(
     logger.info("[PHASE] Cardiac fairness pipeline started")
     logger.info(f"Run ID: {run_id}")
     logger.info(f"Stage window: {first.number}..{last.number} ({first.name} to {last.name})")
+    logger.info(f"Skip studies: {resolved_skip_studies}")
     logger.info(f"HPO study enabled: {run_hpo_study_enabled}")
     logger.info(f"Feature-selection study enabled: {run_feature_selection_study_enabled}")
     logger.info(f"Attribute binning enabled: {run_attribute_binning}")
@@ -698,6 +715,20 @@ Examples:
     p.add_argument(
         "--run-id", default=None, help="Explicit run ID. On resume, defaults to latest run."
     )
+    skip_group = p.add_mutually_exclusive_group()
+    skip_group.add_argument(
+        "--skip-studies",
+        dest="skip_studies",
+        action="store_true",
+        help="Skip both HPO and feature-selection study stages.",
+    )
+    skip_group.add_argument(
+        "--no-skip-studies",
+        dest="skip_studies",
+        action="store_false",
+        help="Force studies enabled even if config has studies.skip=true.",
+    )
+    p.set_defaults(skip_studies=None)
     p.add_argument("--no-hpo-study", action="store_true", help="Skip HPO study stage.")
     p.add_argument(
         "--no-feature-selection-study",
@@ -733,6 +764,7 @@ if __name__ == "__main__":
     cardiac_pipeline(
         run_hpo_study_enabled=not args.no_hpo_study,
         run_feature_selection_study_enabled=not args.no_feature_selection_study,
+        skip_studies=args.skip_studies,
         run_attribute_binning=not args.no_attribute_binning,
         run_mitigation=not args.no_mitigation,
         run_combinatorial=not args.no_combinatorial,

@@ -49,6 +49,8 @@ resolve_stage() {
 RUN_ATTRIBUTE_BINNING=${RUN_ATTRIBUTE_BINNING:-${RUN_AGE_BINNING:-true}}
 RUN_HPO_STUDY=${RUN_HPO_STUDY:-true}
 RUN_FEATURE_SELECTION_STUDY=${RUN_FEATURE_SELECTION_STUDY:-true}
+FS_JOBS=1
+FS_JOBS_FROM_CLI=false
 RUN_MITIGATION=${RUN_MITIGATION:-true}
 RUN_COMBINATORIAL=${RUN_COMBINATORIAL:-true}
 RUN_COMPARISON=${RUN_COMPARISON:-true}
@@ -112,14 +114,57 @@ while [[ $# -gt 0 ]]; do
         --no-feature-selection-study)
             RUN_FEATURE_SELECTION_STUDY=false
             ;;
+        --skip-studies)
+            RUN_HPO_STUDY=false
+            RUN_FEATURE_SELECTION_STUDY=false
+            ;;
+        --fs-jobs)
+            shift
+            [[ $# -gt 0 ]] || { echo "ERROR: --fs-jobs requires a value" >&2; exit 1; }
+            FS_JOBS="$1"
+            [[ "$FS_JOBS" =~ ^[1-9][0-9]*$ ]] || {
+                echo "ERROR: --fs-jobs must be a positive integer" >&2
+                exit 1
+            }
+            FS_JOBS_FROM_CLI=true
+            ;;
         *)
             echo "ERROR: Unknown argument '$1'" >&2
-            echo "Supported: --datasets ... --model-types ... --resume-from STAGE --go-until STAGE --run-id ID --no-hpo-study --no-feature-selection-study -v -vv" >&2
+            echo "Supported: --datasets ... --model-types ... --resume-from STAGE --go-until STAGE --run-id ID --no-hpo-study --no-feature-selection-study --skip-studies --fs-jobs N -v -vv" >&2
             exit 1
             ;;
     esac
     shift
 done
+
+if [[ "$FS_JOBS_FROM_CLI" != "true" ]]; then
+    FS_JOBS_FROM_CONFIG=$(python3 - <<PY
+from pathlib import Path
+
+cfg_path = Path(r"$ROOT_DIR/configs/pipelines/cardiac.yaml")
+try:
+    import yaml
+except Exception:
+    print("")
+    raise SystemExit
+
+try:
+    payload = yaml.safe_load(cfg_path.read_text()) or {}
+except Exception:
+    print("")
+    raise SystemExit
+
+value = ((payload.get("scheduling") or {}).get("fs_jobs"))
+if isinstance(value, int) and value > 0:
+    print(value)
+else:
+    print("")
+PY
+)
+    if [[ "$FS_JOBS_FROM_CONFIG" =~ ^[1-9][0-9]*$ ]]; then
+        FS_JOBS="$FS_JOBS_FROM_CONFIG"
+    fi
+fi
 
 DATASET_ARGS=()
 if (( ${#DATASETS[@]} > 0 )); then
@@ -255,6 +300,7 @@ echo "Run ID:           $RUN_ID"
 echo "Stages:           $START_NUM..${END_NUM}  (${STAGE_NAME[$START_NUM]} → ${STAGE_NAME[$END_NUM]})"
 echo "HPO study:        $RUN_HPO_STUDY"
 echo "Feature study:    $RUN_FEATURE_SELECTION_STUDY"
+echo "FS jobs:          $FS_JOBS"
 echo "Attr binning:     $RUN_ATTRIBUTE_BINNING"
 echo "Mitigation:       $RUN_MITIGATION"
 echo "Combinatorial:    $RUN_COMBINATORIAL"
@@ -361,6 +407,7 @@ if should_run 6; then
         echo "[PHASE 6/12] Feature-selection ablation study"
         python3 "$ROOT_DIR/scripts/studies/run_feature_selection_study.py" \
             --pipeline cardiac --config "$FEATURE_SELECTION_STUDY_CONFIG" \
+            --jobs "$FS_JOBS" \
             "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $STUDY_VERBOSE_FLAG
         mark_done 6 "feature_selection_study"
         echo ""
