@@ -226,11 +226,7 @@ def append_to_jsonl(jsonl_path: Path, record: Dict[str, Any]) -> None:
 def append_run_history(base_results: Path, record: Dict[str, Any]) -> None:
     history_path = base_results / "run_history.jsonl"
     history_path.parent.mkdir(parents=True, exist_ok=True)
-    record = dict(record)
-    record.setdefault("timestamp", datetime.now().isoformat())
-    with open(history_path, "a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, default=str))
-        handle.write("\n")
+    append_to_jsonl(history_path, record)
 
 
 def update_log_latest_pointer(

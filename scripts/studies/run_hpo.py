@@ -27,6 +27,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
+from fairxai.cli.memory_utils import safe_n_jobs, warn_if_large_dataset
 from fairxai.cli.runner_base import get_project_root, setup_study_logging
 from fairxai.cli.runner_utils import (
     resolve_run_id,
@@ -82,6 +83,24 @@ def main():
         action="store_true",
         help="Print what would run without fitting",
     )
+    parser.add_argument(
+        "--search-n-jobs",
+        type=int,
+        default=None,
+        help="Parallel workers for GridSearch/RandomizedSearch (default: config or -1).",
+    )
+    parser.add_argument(
+        "--model-n-jobs",
+        type=int,
+        default=None,
+        help="n_jobs passed to underlying model when supported (default: config or 1).",
+    )
+    parser.add_argument(
+        "--max-rows-for-rbf-svm",
+        type=int,
+        default=None,
+        help="Maximum rows to keep RBF kernel in SVM HPO grid (default: hpo.yaml).",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -125,11 +144,48 @@ def main():
     cv_folds = int(hpo_cfg.get("cv_folds", 5))
     recall_floor = float(hpo_cfg.get("recall_hard_floor", 0.60))
 
+    sched_cfg = pipeline_cfg.get("scheduling") or {}
+    warn_rows_threshold = int(sched_cfg.get("warn_rows_threshold", 50_000))
+    max_memory_fraction = float(sched_cfg.get("max_memory_fraction", 0.80))
+
+    search_n_jobs = (
+        int(args.search_n_jobs)
+        if args.search_n_jobs is not None
+        else int(hpo_cfg.get("search_n_jobs", -1))
+    )
+    model_n_jobs = (
+        int(args.model_n_jobs)
+        if args.model_n_jobs is not None
+        else int(hpo_cfg.get("model_n_jobs", 1))
+    )
+    max_rows_for_rbf_svm = (
+        int(args.max_rows_for_rbf_svm)
+        if args.max_rows_for_rbf_svm is not None
+        else int(hpo_cfg.get("max_rows_for_rbf_svm", 5000))
+    )
+
+    if search_n_jobs <= 0 and search_n_jobs != -1:
+        logger.warning(
+            "search_n_jobs=%d is invalid; using 1 (only -1 or positive integers are supported)",
+            search_n_jobs,
+        )
+        search_n_jobs = 1
+    if model_n_jobs <= 0 and model_n_jobs != -1:
+        logger.warning(
+            "model_n_jobs=%d is invalid; using 1 (only -1 or positive integers are supported)",
+            model_n_jobs,
+        )
+        model_n_jobs = 1
+    if max_rows_for_rbf_svm <= 0:
+        logger.warning("max_rows_for_rbf_svm<=0 is invalid; using 5000")
+        max_rows_for_rbf_svm = 5000
+
     logger.info("[PHASE] HPO study started")
     logger.info(
         f"[RUN_CONTEXT] pipeline={args.pipeline} study_id={study_id} datasets={datasets} "
         f"models={model_types} binning={binning} scoring={scoring} cv_folds={cv_folds} "
-        f"output_dir={output_dir} dry_run={args.dry_run}"
+        f"search_n_jobs={search_n_jobs} model_n_jobs={model_n_jobs} "
+        f"rbf_max_rows={max_rows_for_rbf_svm} output_dir={output_dir} dry_run={args.dry_run}"
     )
 
     grids_cfg = hpo_cfg.get("grids", {})
@@ -153,7 +209,13 @@ def main():
         X_train = train_df[feature_cols]
         y_train = train_df[target_col]
         n_rows = len(X_train)
-        logger.info(f"  n_train={n_rows}, n_features={len(feature_cols)}")
+        n_cols = len(feature_cols)
+        logger.info(f"  n_train={n_rows}, n_features={n_cols}")
+
+        warn_if_large_dataset(n_rows, warn_rows_threshold, context=f"dataset={dataset}")
+        effective_search_n_jobs = safe_n_jobs(
+            n_rows, n_cols, search_n_jobs, cv_folds, max_memory_fraction
+        )
 
         for model_type in model_types:
             if model_type not in grids_cfg:
@@ -184,13 +246,14 @@ def main():
                     X_train=X_train,
                     y_train=y_train,
                     param_grid=param_grid,
-                    base_params={"random_state": 42, "n_jobs": -1},
+                    base_params={"random_state": 42, "n_jobs": model_n_jobs},
                     search=search_mode,
                     cv=cv_folds,
                     scoring=scoring,
                     n_iter=n_iter,
-                    n_jobs=-1,
+                    n_jobs=effective_search_n_jobs,
                     recall_hard_floor=recall_floor,
+                    max_rows_for_rbf_svm=max_rows_for_rbf_svm,
                 )
                 result["dataset"] = dataset
                 save_hpo_results(result, out_path)
