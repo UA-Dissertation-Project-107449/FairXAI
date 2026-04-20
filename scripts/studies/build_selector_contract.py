@@ -130,21 +130,60 @@ def _find_latest_study_dir(studies_root: Path) -> tuple[Optional[str], Optional[
     return latest.name, latest
 
 
+def _resolve_hpo_root(project_root: Path, pipeline: str) -> Path:
+    default_root = project_root / f"output/{pipeline}/studies/hpo"
+    cfg_path = project_root / "configs" / "experiments" / "hpo.yaml"
+    if not cfg_path.exists():
+        return default_root
+    try:
+        hpo_cfg = load_yaml_config(str(cfg_path))
+    except Exception as exc:
+        logger.warning("Could not read HPO config at %s: %s", cfg_path, exc)
+        return default_root
+
+    output_dir = hpo_cfg.get("output_dir")
+    if not output_dir:
+        return default_root
+    return project_root / str(output_dir)
+
+
 def _scan_hpo(
     project_root: Path,
     pipeline: str,
     selected_datasets: list[str],
     requested_model_types: list[str],
 ) -> dict[str, Any]:
-    hpo_dir = project_root / f"output/{pipeline}/studies/hpo"
-    files = sorted(hpo_dir.glob("best_params_*.json")) if hpo_dir.exists() else []
+    hpo_root = _resolve_hpo_root(project_root, pipeline)
+    study_id, study_dir = _find_latest_study_dir(hpo_root)
+    legacy_layout = False
+
+    if not study_dir:
+        legacy_files = sorted(hpo_root.glob("best_params_*.json")) if hpo_root.exists() else []
+        if legacy_files:
+            study_dir = hpo_root
+            files = legacy_files
+            legacy_layout = True
+        else:
+            return {
+                "available": False,
+                "dir": None,
+                "study_id": None,
+                "study_dir": None,
+                "layout": "missing",
+                "total_best_params_files": 0,
+                "coverage": {},
+                "available_pairs": [],
+                "use_hpo": False,
+            }
+    else:
+        files = sorted(study_dir.glob("best_params_*.json"))
 
     coverage: dict[str, bool] = {}
     available_pairs: list[dict[str, str]] = []
 
     for dataset in selected_datasets:
         for model_type in requested_model_types:
-            file_path = hpo_dir / f"best_params_{dataset}_{model_type}.json"
+            file_path = study_dir / f"best_params_{dataset}_{model_type}.json"
             has_params = file_path.exists()
             coverage[f"{dataset}:{model_type}"] = has_params
             if has_params:
@@ -163,7 +202,10 @@ def _scan_hpo(
 
     return {
         "available": bool(files),
-        "dir": str(hpo_dir),
+        "dir": str(study_dir),
+        "study_id": study_id,
+        "study_dir": str(study_dir),
+        "layout": "legacy_flat" if legacy_layout else "run_scoped",
         "total_best_params_files": len(files),
         "coverage": coverage,
         "available_pairs": available_pairs,
@@ -380,6 +422,18 @@ def main() -> None:
         selected_datasets,
         requested_model_types,
     )
+
+    if not hpo_scan.get("use_hpo"):
+        logger.warning(
+            "No HPO study output found — use_hpo=False, falling back to base model configs. "
+            "Run the HPO study (stage 5) to enable tuned hyperparameters."
+        )
+    if not fs_scan.get("recommended_mode"):
+        logger.warning(
+            "No feature-selection study output found — using YAML fallback mode '%s'. "
+            "Run the feature-selection study (stage 6) to enable data-driven mode selection.",
+            fallback_feature_mode,
+        )
 
     recommended_mode = fs_scan.get("recommended_mode") or fallback_feature_mode
     recommended_rfe_top_k = fs_scan.get("rfe_top_k")
