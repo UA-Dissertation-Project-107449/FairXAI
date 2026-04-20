@@ -51,6 +51,21 @@ RUN_HPO_STUDY=${RUN_HPO_STUDY:-true}
 RUN_FEATURE_SELECTION_STUDY=${RUN_FEATURE_SELECTION_STUDY:-true}
 FS_JOBS=1
 FS_JOBS_FROM_CLI=false
+FS_JOBS_FROM_CONFIG=false
+STUDY_MODE=""
+STUDY_MODE_FROM_CLI=false
+PARALLEL_STUDIES=""
+PARALLEL_STUDIES_FROM_CLI=false
+PARALLEL_EXPERIMENTS=""
+PARALLEL_EXPERIMENTS_FROM_CLI=false
+HPO_SEARCH_N_JOBS=""
+HPO_SEARCH_N_JOBS_FROM_CLI=false
+HPO_MODEL_N_JOBS=""
+HPO_MODEL_N_JOBS_FROM_CLI=false
+MAX_CORES=""
+MAX_CORES_FROM_CLI=false
+CPU_FRACTION=""
+CPU_FRACTION_FROM_CLI=false
 RUN_MITIGATION=${RUN_MITIGATION:-true}
 RUN_COMBINATORIAL=${RUN_COMBINATORIAL:-true}
 RUN_COMPARISON=${RUN_COMPARISON:-true}
@@ -128,44 +143,202 @@ while [[ $# -gt 0 ]]; do
             }
             FS_JOBS_FROM_CLI=true
             ;;
+        --study-mode)
+            shift
+            [[ $# -gt 0 ]] || { echo "ERROR: --study-mode requires a value" >&2; exit 1; }
+            STUDY_MODE="$1"
+            STUDY_MODE_FROM_CLI=true
+            ;;
+        --parallel-studies)
+            PARALLEL_STUDIES=true
+            PARALLEL_STUDIES_FROM_CLI=true
+            ;;
+        --no-parallel-studies)
+            PARALLEL_STUDIES=false
+            PARALLEL_STUDIES_FROM_CLI=true
+            ;;
+        --parallel-experiments)
+            PARALLEL_EXPERIMENTS=true
+            PARALLEL_EXPERIMENTS_FROM_CLI=true
+            ;;
+        --no-parallel-experiments)
+            PARALLEL_EXPERIMENTS=false
+            PARALLEL_EXPERIMENTS_FROM_CLI=true
+            ;;
+        --max-cores)
+            shift
+            [[ $# -gt 0 ]] || { echo "ERROR: --max-cores requires a value" >&2; exit 1; }
+            MAX_CORES="$1"
+            [[ "$MAX_CORES" =~ ^-?[0-9]+$ ]] || {
+                echo "ERROR: --max-cores must be an integer" >&2
+                exit 1
+            }
+            [[ "$MAX_CORES" != "0" ]] || {
+                echo "ERROR: --max-cores cannot be 0" >&2
+                exit 1
+            }
+            MAX_CORES_FROM_CLI=true
+            ;;
+        --cpu-fraction)
+            shift
+            [[ $# -gt 0 ]] || { echo "ERROR: --cpu-fraction requires a value" >&2; exit 1; }
+            CPU_FRACTION="$1"
+            [[ "$CPU_FRACTION" =~ ^[0-9]*\.?[0-9]+$ ]] || {
+                echo "ERROR: --cpu-fraction must be a positive number" >&2
+                exit 1
+            }
+            CPU_FRACTION_FROM_CLI=true
+            ;;
+        --hpo-search-n-jobs)
+            shift
+            [[ $# -gt 0 ]] || { echo "ERROR: --hpo-search-n-jobs requires a value" >&2; exit 1; }
+            HPO_SEARCH_N_JOBS="$1"
+            [[ "$HPO_SEARCH_N_JOBS" =~ ^-?[0-9]+$ ]] || {
+                echo "ERROR: --hpo-search-n-jobs must be an integer" >&2
+                exit 1
+            }
+            [[ "$HPO_SEARCH_N_JOBS" != "0" ]] || {
+                echo "ERROR: --hpo-search-n-jobs cannot be 0" >&2
+                exit 1
+            }
+            HPO_SEARCH_N_JOBS_FROM_CLI=true
+            ;;
+        --hpo-model-n-jobs)
+            shift
+            [[ $# -gt 0 ]] || { echo "ERROR: --hpo-model-n-jobs requires a value" >&2; exit 1; }
+            HPO_MODEL_N_JOBS="$1"
+            [[ "$HPO_MODEL_N_JOBS" =~ ^-?[0-9]+$ ]] || {
+                echo "ERROR: --hpo-model-n-jobs must be an integer" >&2
+                exit 1
+            }
+            [[ "$HPO_MODEL_N_JOBS" != "0" ]] || {
+                echo "ERROR: --hpo-model-n-jobs cannot be 0" >&2
+                exit 1
+            }
+            HPO_MODEL_N_JOBS_FROM_CLI=true
+            ;;
         *)
             echo "ERROR: Unknown argument '$1'" >&2
-            echo "Supported: --datasets ... --model-types ... --resume-from STAGE --go-until STAGE --run-id ID --no-hpo-study --no-feature-selection-study --skip-studies --fs-jobs N -v -vv" >&2
+            echo "Supported: --datasets ... --model-types ... --resume-from STAGE --go-until STAGE --run-id ID --no-hpo-study --no-feature-selection-study --skip-studies --fs-jobs N --study-mode MODE --parallel-studies --no-parallel-studies --parallel-experiments --no-parallel-experiments --max-cores N --cpu-fraction F --hpo-search-n-jobs N --hpo-model-n-jobs N -v -vv" >&2
             exit 1
             ;;
     esac
     shift
 done
 
-if [[ "$FS_JOBS_FROM_CLI" != "true" ]]; then
-    FS_JOBS_FROM_CONFIG=$(python3 - <<PY
+# ======================================================================
+# Resolve scheduling config (one Python call reads all YAML keys at once)
+# ======================================================================
+eval "$(python3 - "$ROOT_DIR" <<'SCHED_PY'
+import os, sys, shlex
 from pathlib import Path
 
-cfg_path = Path(r"$ROOT_DIR/configs/pipelines/cardiac.yaml")
+root = Path(sys.argv[1])
+cfg_path = root / "configs" / "pipelines" / "cardiac.yaml"
+
 try:
     import yaml
-except Exception:
-    print("")
-    raise SystemExit
-
-try:
     payload = yaml.safe_load(cfg_path.read_text()) or {}
 except Exception:
-    print("")
-    raise SystemExit
+    payload = {}
 
-value = ((payload.get("scheduling") or {}).get("fs_jobs"))
-if isinstance(value, int) and value > 0:
-    print(value)
-else:
-    print("")
-PY
-)
-    if [[ "$FS_JOBS_FROM_CONFIG" =~ ^[1-9][0-9]*$ ]]; then
-        FS_JOBS="$FS_JOBS_FROM_CONFIG"
-    fi
+s = payload.get("scheduling") or {}
+
+def _pos_int(v):
+    return int(v) if isinstance(v, int) and v > 0 else None
+
+def _nonzero_int(v):
+    return int(v) if isinstance(v, int) and v != 0 else None
+
+def _pos_float(v):
+    return float(v) if isinstance(v, (int, float)) and v > 0 else None
+
+def _bool_str(v):
+    return "true" if v is True else ("false" if v is False else "")
+
+def out(key, val):
+    print(f"{key}={shlex.quote('' if val is None else str(val))}")
+
+out("_SCHED_MODE",             s.get("mode") or "")
+out("_SCHED_FS_JOBS",          _pos_int(s.get("fs_jobs")))
+out("_SCHED_PARALLEL_STUDIES", _bool_str(s.get("parallel_studies")))
+out("_SCHED_PARALLEL_EXPS",    _bool_str(s.get("parallel_experiments")))
+out("_SCHED_MAX_CORES",        _nonzero_int(s.get("max_cores")))
+out("_SCHED_CPU_FRACTION",     _pos_float(s.get("cpu_fraction")))
+out("_SCHED_HPO_SEARCH_JOBS",  _nonzero_int(s.get("hpo_search_n_jobs")))
+out("_SCHED_HPO_MODEL_JOBS",   _nonzero_int(s.get("hpo_model_n_jobs")))
+out("_SCHED_WARN_ROWS",        _pos_int(s.get("warn_rows_threshold")))
+out("_SCHED_CPU_COUNT",        os.cpu_count() or 1)
+SCHED_PY
+)"
+
+# Apply config values where CLI did not override
+[[ "$STUDY_MODE_FROM_CLI"           != "true" && -n "$_SCHED_MODE"             ]] && STUDY_MODE="$_SCHED_MODE"
+[[ "$FS_JOBS_FROM_CLI"              != "true" && -n "$_SCHED_FS_JOBS"          ]] && FS_JOBS="$_SCHED_FS_JOBS"
+[[ "$PARALLEL_STUDIES_FROM_CLI"     != "true" && -n "$_SCHED_PARALLEL_STUDIES" ]] && PARALLEL_STUDIES="$_SCHED_PARALLEL_STUDIES"
+[[ "$PARALLEL_EXPERIMENTS_FROM_CLI" != "true" && -n "$_SCHED_PARALLEL_EXPS"   ]] && PARALLEL_EXPERIMENTS="$_SCHED_PARALLEL_EXPS"
+[[ "$MAX_CORES_FROM_CLI"            != "true" && -n "$_SCHED_MAX_CORES"        ]] && MAX_CORES="$_SCHED_MAX_CORES"
+[[ "$CPU_FRACTION_FROM_CLI"         != "true" && -n "$_SCHED_CPU_FRACTION"     ]] && CPU_FRACTION="$_SCHED_CPU_FRACTION"
+[[ "$HPO_SEARCH_N_JOBS_FROM_CLI"    != "true" && -n "$_SCHED_HPO_SEARCH_JOBS"  ]] && HPO_SEARCH_N_JOBS="$_SCHED_HPO_SEARCH_JOBS"
+[[ "$HPO_MODEL_N_JOBS_FROM_CLI"     != "true" && -n "$_SCHED_HPO_MODEL_JOBS"   ]] && HPO_MODEL_N_JOBS="$_SCHED_HPO_MODEL_JOBS"
+[[ -n "$_SCHED_WARN_ROWS"                                                       ]] && WARN_ROWS_THRESHOLD="$_SCHED_WARN_ROWS"
+CPU_COUNT="${_SCHED_CPU_COUNT:-1}"
+: "${WARN_ROWS_THRESHOLD:=50000}"
+
+# Apply defaults for anything still unset
+[[ -z "$STUDY_MODE" ]] && STUDY_MODE="auto_safe"
+if [[ "$STUDY_MODE" != "serial" && "$STUDY_MODE" != "auto_safe" && "$STUDY_MODE" != "aggressive" ]]; then
+    echo "WARNING: Unknown study mode '$STUDY_MODE' - using auto_safe" >&2
+    STUDY_MODE="auto_safe"
 fi
 
+# serial forces no parallelism; otherwise apply mode-driven defaults
+if [[ "$STUDY_MODE" == "serial" ]]; then
+    PARALLEL_STUDIES=false
+    PARALLEL_EXPERIMENTS=false
+else
+    [[ -z "$PARALLEL_STUDIES"     ]] && PARALLEL_STUDIES=true
+    [[ -z "$PARALLEL_EXPERIMENTS" ]] && { [[ "$STUDY_MODE" == "aggressive" ]] && PARALLEL_EXPERIMENTS=true || PARALLEL_EXPERIMENTS=false; }
+fi
+
+# Effective cores from resolved MAX_CORES / CPU_FRACTION (second short call)
+EFFECTIVE_CORES=$(python3 - "$MAX_CORES" "$CPU_FRACTION" <<'CORES_PY'
+import os, sys
+cpu_total = os.cpu_count() or 1
+max_c = sys.argv[1].strip() if len(sys.argv) > 1 else ""
+cpu_f = sys.argv[2].strip() if len(sys.argv) > 2 else ""
+try:
+    mc = int(max_c)
+    print(cpu_total if mc == -1 else max(1, min(cpu_total, mc)))
+except ValueError:
+    frac = 0.75
+    try:
+        frac = float(cpu_f)
+    except ValueError:
+        pass
+    frac = min(max(frac, 0.05), 1.0)
+    print(max(1, int(cpu_total * frac)))
+CORES_PY
+)
+
+# Auto-compute HPO jobs if not set
+if [[ -z "$HPO_SEARCH_N_JOBS" ]]; then
+    if [[ "$PARALLEL_STUDIES" == "true" && "$RUN_HPO_STUDY" == "true" && "$RUN_FEATURE_SELECTION_STUDY" == "true" ]]; then
+        HPO_SEARCH_N_JOBS=$(( EFFECTIVE_CORES / 2 ))
+        (( HPO_SEARCH_N_JOBS < 1 )) && HPO_SEARCH_N_JOBS=1
+    else
+        HPO_SEARCH_N_JOBS="$EFFECTIVE_CORES"
+    fi
+fi
+[[ -z "$HPO_MODEL_N_JOBS" ]] && { [[ "$HPO_SEARCH_N_JOBS" == "1" ]] && HPO_MODEL_N_JOBS=-1 || HPO_MODEL_N_JOBS=1; }
+
+# Auto-balance FS_JOBS from remaining cores when parallel and not explicitly set
+if [[ "$PARALLEL_STUDIES" == "true" && "$FS_JOBS_FROM_CLI" != "true" && -z "$_SCHED_FS_JOBS" ]]; then
+    if [[ "$HPO_SEARCH_N_JOBS" =~ ^[1-9][0-9]*$ ]]; then
+        FS_JOBS=$(( EFFECTIVE_CORES - HPO_SEARCH_N_JOBS ))
+        (( FS_JOBS < 1 )) && FS_JOBS=1
+    fi
+fi
 DATASET_ARGS=()
 if (( ${#DATASETS[@]} > 0 )); then
     DATASET_ARGS=(--datasets "${DATASETS[@]}")
@@ -300,7 +473,13 @@ echo "Run ID:           $RUN_ID"
 echo "Stages:           $START_NUM..${END_NUM}  (${STAGE_NAME[$START_NUM]} → ${STAGE_NAME[$END_NUM]})"
 echo "HPO study:        $RUN_HPO_STUDY"
 echo "Feature study:    $RUN_FEATURE_SELECTION_STUDY"
+echo "Study mode:       $STUDY_MODE"
+echo "Parallel studies: $PARALLEL_STUDIES"
+echo "Parallel exps:    $PARALLEL_EXPERIMENTS"
 echo "FS jobs:          $FS_JOBS"
+echo "HPO search jobs:  $HPO_SEARCH_N_JOBS"
+echo "HPO model jobs:   $HPO_MODEL_N_JOBS"
+echo "Effective cores:  $EFFECTIVE_CORES"
 echo "Attr binning:     $RUN_ATTRIBUTE_BINNING"
 echo "Mitigation:       $RUN_MITIGATION"
 echo "Combinatorial:    $RUN_COMBINATORIAL"
@@ -383,12 +562,50 @@ else
     echo "[4/12] preprocess — SKIPPED (outside active range)"
 fi
 
-# Stage 5 — HPO study (optional)
+# Stage 5/6 — studies (optional)
+PARALLEL_STUDIES_HANDLED=false
+if should_run 5 && should_run 6 && [[ "$RUN_HPO_STUDY" == "true" ]] && [[ "$RUN_FEATURE_SELECTION_STUDY" == "true" ]] && [[ "$PARALLEL_STUDIES" == "true" ]]; then
+    echo "[PHASE 5-6/12] Running HPO and Feature-selection studies in parallel"
+    set +e
+    python3 "$ROOT_DIR/scripts/studies/run_hpo.py" \
+        --pipeline cardiac --config "$HPO_CONFIG" \
+        --search-n-jobs "$HPO_SEARCH_N_JOBS" \
+        --model-n-jobs "$HPO_MODEL_N_JOBS" \
+        "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $STUDY_VERBOSE_FLAG &
+    HPO_PID=$!
+
+    python3 "$ROOT_DIR/scripts/studies/run_feature_selection_study.py" \
+        --pipeline cardiac --config "$FEATURE_SELECTION_STUDY_CONFIG" \
+        --jobs "$FS_JOBS" \
+        "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $STUDY_VERBOSE_FLAG &
+    FS_PID=$!
+
+    wait "$HPO_PID"
+    HPO_RC=$?
+    wait "$FS_PID"
+    FS_RC=$?
+    set -e
+
+    if (( HPO_RC != 0 || FS_RC != 0 )); then
+        echo "ERROR: Parallel studies failed (hpo_rc=$HPO_RC fs_rc=$FS_RC)" >&2
+        exit 1
+    fi
+
+    mark_done 5 "hpo_study"
+    mark_done 6 "feature_selection_study"
+    PARALLEL_STUDIES_HANDLED=true
+    echo ""
+fi
+
 if should_run 5; then
-    if [[ "$RUN_HPO_STUDY" == "true" ]]; then
+    if [[ "$PARALLEL_STUDIES_HANDLED" == "true" ]]; then
+        :
+    elif [[ "$RUN_HPO_STUDY" == "true" ]]; then
         echo "[PHASE 5/12] Hyperparameter optimisation study"
         python3 "$ROOT_DIR/scripts/studies/run_hpo.py" \
             --pipeline cardiac --config "$HPO_CONFIG" \
+            --search-n-jobs "$HPO_SEARCH_N_JOBS" \
+            --model-n-jobs "$HPO_MODEL_N_JOBS" \
             "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $STUDY_VERBOSE_FLAG
         mark_done 5 "hpo_study"
         echo ""
@@ -403,7 +620,9 @@ fi
 
 # Stage 6 — Feature-selection study (optional)
 if should_run 6; then
-    if [[ "$RUN_FEATURE_SELECTION_STUDY" == "true" ]]; then
+    if [[ "$PARALLEL_STUDIES_HANDLED" == "true" ]]; then
+        :
+    elif [[ "$RUN_FEATURE_SELECTION_STUDY" == "true" ]]; then
         echo "[PHASE 6/12] Feature-selection ablation study"
         python3 "$ROOT_DIR/scripts/studies/run_feature_selection_study.py" \
             --pipeline cardiac --config "$FEATURE_SELECTION_STUDY_CONFIG" \
@@ -455,8 +674,49 @@ fi
 
 # Stage 9 — Attribute binning (optional)
 ARCHIVE_EXPERIMENTS=true
+PARALLEL_EXPERIMENTS_HANDLED=false
+if should_run 9 && should_run 10 && should_run 11 && [[ "$RUN_ATTRIBUTE_BINNING" == "true" ]] && [[ "$RUN_MITIGATION" == "true" ]] && [[ "$RUN_COMBINATORIAL" == "true" ]] && [[ "$PARALLEL_EXPERIMENTS" == "true" ]]; then
+    echo "[PHASE 9-11/12] Running attribute_binning, mitigation, combinatorial in parallel"
+    set +e
+    EXPERIMENT_RUN_MODE=full ARCHIVE_PREVIOUS=$ARCHIVE_EXPERIMENTS python3 "$ROOT_DIR/scripts/experiments/run_attribute_binning_analysis.py" \
+        --config "$ATTRIBUTE_BINNING_CONFIG" --run-id "$RUN_ID" --pipeline cardiac "${DATASET_ARGS[@]}" $VERBOSE_FLAG &
+    AGE_PID=$!
+
+    EXPERIMENT_RUN_MODE=full ARCHIVE_PREVIOUS=$ARCHIVE_EXPERIMENTS python3 "$ROOT_DIR/scripts/cardiac/mitigation.py" \
+        --config "$MITIGATION_CONFIG" --run-id "$RUN_ID" "${DATASET_ARGS[@]}" $VERBOSE_FLAG &
+    MIT_PID=$!
+
+    python3 "$ROOT_DIR/scripts/cardiac/combinatorial.py" \
+        --config "$COMBINATORIAL_CONFIG" --run-id "$RUN_ID" \
+        --selector-contract "$SELECTOR_CONTRACT_PATH" \
+        "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $VERBOSE_FLAG &
+    COMB_PID=$!
+
+    wait "$AGE_PID"
+    AGE_RC=$?
+    wait "$MIT_PID"
+    MIT_RC=$?
+    wait "$COMB_PID"
+    COMB_RC=$?
+    set -e
+
+    if (( AGE_RC != 0 || MIT_RC != 0 || COMB_RC != 0 )); then
+        echo "ERROR: Parallel experiments failed (attribute_binning_rc=$AGE_RC mitigation_rc=$MIT_RC combinatorial_rc=$COMB_RC)" >&2
+        exit 1
+    fi
+
+    mark_done 9 "attribute_binning"
+    mark_done 10 "mitigation"
+    mark_done 11 "combinatorial"
+    ARCHIVE_EXPERIMENTS=false
+    PARALLEL_EXPERIMENTS_HANDLED=true
+    echo ""
+fi
+
 if should_run 9; then
-    if [[ "$RUN_ATTRIBUTE_BINNING" == "true" ]]; then
+    if [[ "$PARALLEL_EXPERIMENTS_HANDLED" == "true" ]]; then
+        :
+    elif [[ "$RUN_ATTRIBUTE_BINNING" == "true" ]]; then
         echo "[PHASE 9/12] Attribute binning strategies analysis"
         EXPERIMENT_RUN_MODE=full ARCHIVE_PREVIOUS=$ARCHIVE_EXPERIMENTS python3 "$ROOT_DIR/scripts/experiments/run_attribute_binning_analysis.py" \
             --config "$ATTRIBUTE_BINNING_CONFIG" --run-id "$RUN_ID" --pipeline cardiac "${DATASET_ARGS[@]}" $VERBOSE_FLAG
@@ -474,7 +734,9 @@ fi
 
 # Stage 10 — Mitigation (optional)
 if should_run 10; then
-    if [[ "$RUN_MITIGATION" == "true" ]]; then
+    if [[ "$PARALLEL_EXPERIMENTS_HANDLED" == "true" ]]; then
+        :
+    elif [[ "$RUN_MITIGATION" == "true" ]]; then
         echo "[PHASE 10/12] Mitigation techniques comparison"
         EXPERIMENT_RUN_MODE=full ARCHIVE_PREVIOUS=$ARCHIVE_EXPERIMENTS python3 "$ROOT_DIR/scripts/cardiac/mitigation.py" \
             --config "$MITIGATION_CONFIG" --run-id "$RUN_ID" "${DATASET_ARGS[@]}" $VERBOSE_FLAG
@@ -492,7 +754,9 @@ fi
 
 # Stage 11 — Combinatorial (optional)
 if should_run 11; then
-    if [[ "$RUN_COMBINATORIAL" == "true" ]]; then
+    if [[ "$PARALLEL_EXPERIMENTS_HANDLED" == "true" ]]; then
+        :
+    elif [[ "$RUN_COMBINATORIAL" == "true" ]]; then
         echo "[PHASE 11/12] Combinatorial experiments"
         python3 "$ROOT_DIR/scripts/cardiac/combinatorial.py" \
             --config "$COMBINATORIAL_CONFIG" --run-id "$RUN_ID" \

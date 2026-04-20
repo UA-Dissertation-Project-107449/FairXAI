@@ -55,6 +55,34 @@ def _study_verbose_flags(level: int) -> list[str]:
     return ["-v"] if level >= 1 else []
 
 
+def _as_int(value: Optional[object]) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_effective_cores(
+    max_cores: Optional[int],
+    cpu_fraction: Optional[float],
+) -> int:
+    cpu_total = os.cpu_count() or 1
+    if max_cores is not None:
+        if max_cores == -1:
+            return cpu_total
+        return max(1, min(cpu_total, max_cores))
+
+    fraction = cpu_fraction if cpu_fraction is not None else 0.75
+    try:
+        fraction = float(fraction)
+    except (TypeError, ValueError):
+        fraction = 0.75
+    fraction = min(max(fraction, 0.05), 1.0)
+    return max(1, int(cpu_total * fraction))
+
+
 @task
 def load_data(run_id: str, datasets: Optional[list[str]] = None, verbose: int = 0):
     logger = get_run_logger()
@@ -120,6 +148,8 @@ def preprocess_data(
 def run_hpo_study(
     datasets: Optional[list[str]] = None,
     model_types: Optional[list[str]] = None,
+    search_n_jobs: int = -1,
+    model_n_jobs: int = 1,
     verbose: int = 0,
 ):
     """Runs HPO study before baseline/experiments."""
@@ -131,6 +161,8 @@ def run_hpo_study(
         args.extend(["--datasets", *datasets])
     if model_types:
         args.extend(["--model-types", *model_types])
+    args.extend(["--search-n-jobs", str(search_n_jobs)])
+    args.extend(["--model-n-jobs", str(model_n_jobs)])
     args.extend(_study_verbose_flags(verbose))
     _run_script(script, args, os.environ.copy())
 
@@ -139,6 +171,7 @@ def run_hpo_study(
 def run_feature_selection_study(
     datasets: Optional[list[str]] = None,
     model_types: Optional[list[str]] = None,
+    jobs: int = 1,
     verbose: int = 0,
 ):
     """Runs feature-selection study before baseline/experiments."""
@@ -155,6 +188,7 @@ def run_feature_selection_study(
         args.extend(["--datasets", *datasets])
     if model_types:
         args.extend(["--model-types", *model_types])
+    args.extend(["--jobs", str(max(1, jobs))])
     args.extend(_study_verbose_flags(verbose))
     _run_script(script, args, os.environ.copy())
 
@@ -323,6 +357,14 @@ def cardiac_pipeline(
     run_hpo_study_enabled: bool = True,
     run_feature_selection_study_enabled: bool = True,
     skip_studies: Optional[bool] = None,
+    study_mode: Optional[str] = None,
+    parallel_studies: Optional[bool] = None,
+    parallel_experiments: Optional[bool] = None,
+    max_cores: Optional[int] = None,
+    cpu_fraction: Optional[float] = None,
+    fs_jobs: Optional[int] = None,
+    hpo_search_n_jobs: Optional[int] = None,
+    hpo_model_n_jobs: Optional[int] = None,
     run_attribute_binning: bool = True,
     run_mitigation: bool = True,
     run_combinatorial: bool = True,
@@ -345,19 +387,93 @@ def cardiac_pipeline(
     """
     logger = get_run_logger()
 
-    skip_studies_cfg = False
-    if skip_studies is None:
-        cfg_path = ROOT_DIR / "configs" / "pipelines" / "cardiac.yaml"
-        try:
-            pipeline_cfg = load_yaml_config(str(cfg_path))
-            skip_studies_cfg = bool((pipeline_cfg.get("studies") or {}).get("skip", False))
-        except Exception as exc:
-            logger.warning("Could not read studies.skip from %s: %s", cfg_path, exc)
+    cfg_path = ROOT_DIR / "configs" / "pipelines" / "cardiac.yaml"
+    pipeline_cfg: dict = {}
+    try:
+        pipeline_cfg = load_yaml_config(str(cfg_path))
+    except Exception as exc:
+        logger.warning("Could not read pipeline config from %s: %s", cfg_path, exc)
+
+    studies_cfg = pipeline_cfg.get("studies") or {}
+    scheduling_cfg = pipeline_cfg.get("scheduling") or {}
+
+    skip_studies_cfg = bool(studies_cfg.get("skip", False))
     resolved_skip_studies = skip_studies if skip_studies is not None else skip_studies_cfg
+
+    resolved_study_mode = (
+        str(study_mode if study_mode is not None else scheduling_cfg.get("mode", "auto_safe"))
+        .strip()
+        .lower()
+    )
+    if resolved_study_mode not in {"serial", "auto_safe", "aggressive"}:
+        logger.warning("Unknown study_mode '%s' - falling back to auto_safe", resolved_study_mode)
+        resolved_study_mode = "auto_safe"
+
+    if parallel_studies is None:
+        if "parallel_studies" in scheduling_cfg:
+            resolved_parallel_studies = bool(scheduling_cfg.get("parallel_studies"))
+        else:
+            resolved_parallel_studies = resolved_study_mode != "serial"
+    else:
+        resolved_parallel_studies = parallel_studies
+
+    if parallel_experiments is None:
+        if "parallel_experiments" in scheduling_cfg:
+            resolved_parallel_experiments = bool(scheduling_cfg.get("parallel_experiments"))
+        else:
+            resolved_parallel_experiments = resolved_study_mode == "aggressive"
+    else:
+        resolved_parallel_experiments = parallel_experiments
+
+    if resolved_study_mode == "serial":
+        resolved_parallel_studies = False
+        resolved_parallel_experiments = False
+
+    resolved_max_cores = (
+        max_cores if max_cores is not None else _as_int(scheduling_cfg.get("max_cores"))
+    )
+    resolved_cpu_fraction = (
+        cpu_fraction if cpu_fraction is not None else scheduling_cfg.get("cpu_fraction", 0.75)
+    )
+    effective_cores = _resolve_effective_cores(resolved_max_cores, resolved_cpu_fraction)
 
     if resolved_skip_studies:
         run_hpo_study_enabled = False
         run_feature_selection_study_enabled = False
+
+    cfg_hpo_search_n_jobs = _as_int(scheduling_cfg.get("hpo_search_n_jobs"))
+    cfg_hpo_model_n_jobs = _as_int(scheduling_cfg.get("hpo_model_n_jobs"))
+    cfg_fs_jobs = _as_int(scheduling_cfg.get("fs_jobs"))
+
+    studies_parallel_pair = (
+        resolved_parallel_studies and run_hpo_study_enabled and run_feature_selection_study_enabled
+    )
+    default_hpo_branch = max(1, effective_cores // 2) if studies_parallel_pair else effective_cores
+    default_fs_jobs = max(1, effective_cores - default_hpo_branch) if studies_parallel_pair else 1
+
+    resolved_hpo_search_n_jobs = (
+        _as_int(hpo_search_n_jobs)
+        if hpo_search_n_jobs is not None
+        else cfg_hpo_search_n_jobs if cfg_hpo_search_n_jobs is not None else default_hpo_branch
+    )
+    if resolved_hpo_search_n_jobs is None or resolved_hpo_search_n_jobs == 0:
+        resolved_hpo_search_n_jobs = 1
+
+    resolved_hpo_model_n_jobs = (
+        _as_int(hpo_model_n_jobs) if hpo_model_n_jobs is not None else cfg_hpo_model_n_jobs
+    )
+    if resolved_hpo_model_n_jobs is None:
+        resolved_hpo_model_n_jobs = 1 if resolved_hpo_search_n_jobs != 1 else -1
+    if resolved_hpo_model_n_jobs == 0:
+        resolved_hpo_model_n_jobs = 1
+
+    resolved_fs_jobs = (
+        _as_int(fs_jobs)
+        if fs_jobs is not None
+        else cfg_fs_jobs if cfg_fs_jobs is not None else default_fs_jobs
+    )
+    if resolved_fs_jobs is None or resolved_fs_jobs <= 0:
+        resolved_fs_jobs = 1
 
     # --- Resolve stage range ------------------------------------------------
     active_stages = get_stage_range(resume_from, go_until)
@@ -408,6 +524,19 @@ def cardiac_pipeline(
     logger.info(f"Run ID: {run_id}")
     logger.info(f"Stage window: {first.number}..{last.number} ({first.name} to {last.name})")
     logger.info(f"Skip studies: {resolved_skip_studies}")
+    logger.info(
+        "Scheduling: mode=%s parallel_studies=%s parallel_experiments=%s",
+        resolved_study_mode,
+        resolved_parallel_studies,
+        resolved_parallel_experiments,
+    )
+    logger.info(
+        "Resource budget: effective_cores=%s hpo_search_n_jobs=%s hpo_model_n_jobs=%s fs_jobs=%s",
+        effective_cores,
+        resolved_hpo_search_n_jobs,
+        resolved_hpo_model_n_jobs,
+        resolved_fs_jobs,
+    )
     logger.info(f"HPO study enabled: {run_hpo_study_enabled}")
     logger.info(f"Feature-selection study enabled: {run_feature_selection_study_enabled}")
     logger.info(f"Attribute binning enabled: {run_attribute_binning}")
@@ -473,11 +602,26 @@ def cardiac_pipeline(
     else:
         logger.info("[4/12] preprocess - skipped (outside active range)")
 
+    parallel_studies_enabled = (
+        resolved_parallel_studies
+        and _should_run(5)
+        and _should_run(6)
+        and run_hpo_study_enabled
+        and run_feature_selection_study_enabled
+    )
+
     # Stage 5 - HPO study (optional + gated)
     if _should_run(5):
         if run_hpo_study_enabled:
             wait = [preprocess_data_task] if preprocess_data_task else []
-            hpo_study_task = run_hpo_study.submit(datasets, model_types, verbose, wait_for=wait)
+            hpo_study_task = run_hpo_study.submit(
+                datasets,
+                model_types,
+                resolved_hpo_search_n_jobs,
+                resolved_hpo_model_n_jobs,
+                verbose,
+                wait_for=wait,
+            )
         else:
             logger.info("[5/12] hpo_study - skipped (disabled)")
             _mark_skipped(5, "disabled")
@@ -487,7 +631,9 @@ def cardiac_pipeline(
     # Stage 6 - Feature-selection study (optional + gated)
     if _should_run(6):
         if run_feature_selection_study_enabled:
-            if hpo_study_task:
+            if parallel_studies_enabled:
+                wait = [preprocess_data_task] if preprocess_data_task else []
+            elif hpo_study_task:
                 wait = [hpo_study_task]
             elif preprocess_data_task:
                 wait = [preprocess_data_task]
@@ -496,6 +642,7 @@ def cardiac_pipeline(
             feature_selection_study_task = run_feature_selection_study.submit(
                 datasets,
                 model_types,
+                resolved_fs_jobs,
                 verbose,
                 wait_for=wait,
             )
@@ -507,14 +654,13 @@ def cardiac_pipeline(
 
     # Wiring - Selector contract (internal helper for stages 7/11)
     if _should_run(7) or (_should_run(11) and run_combinatorial):
+        wait = []
+        if hpo_study_task:
+            wait.append(hpo_study_task)
         if feature_selection_study_task:
-            wait = [feature_selection_study_task]
-        elif hpo_study_task:
-            wait = [hpo_study_task]
-        elif preprocess_data_task:
+            wait.append(feature_selection_study_task)
+        if not wait and preprocess_data_task:
             wait = [preprocess_data_task]
-        else:
-            wait = []
 
         selector_contract_task = build_selector_contract.submit(
             run_id,
@@ -558,11 +704,19 @@ def cardiac_pipeline(
     else:
         logger.info("[8/12] assess - skipped (outside active range)")
 
+    # Stage 9-11 scheduling anchor for serial mode
+    serial_experiment_anchor = assess_predictions_task
+
     # Stage 9 - Attribute binning (optional + gated)
     if _should_run(9):
         if run_attribute_binning:
-            wait = [assess_predictions_task] if assess_predictions_task else []
+            if resolved_parallel_experiments:
+                wait = [assess_predictions_task] if assess_predictions_task else []
+            else:
+                wait = [serial_experiment_anchor] if serial_experiment_anchor else []
             age_task = analyze_attribute_binning.submit(run_id, datasets, verbose, wait_for=wait)
+            if not resolved_parallel_experiments:
+                serial_experiment_anchor = age_task
         else:
             logger.info("[9/12] attribute_binning - skipped (disabled)")
             _mark_skipped(9, "disabled")
@@ -572,10 +726,15 @@ def cardiac_pipeline(
     # Stage 10 - Mitigation (optional + gated)
     if _should_run(10):
         if run_mitigation:
-            wait = [assess_predictions_task] if assess_predictions_task else []
+            if resolved_parallel_experiments:
+                wait = [assess_predictions_task] if assess_predictions_task else []
+            else:
+                wait = [serial_experiment_anchor] if serial_experiment_anchor else []
             mitigation_task = compare_mitigation_techniques.submit(
                 run_id, datasets, verbose, wait_for=wait
             )
+            if not resolved_parallel_experiments:
+                serial_experiment_anchor = mitigation_task
         else:
             logger.info("[10/12] mitigation - skipped (disabled)")
             _mark_skipped(10, "disabled")
@@ -585,7 +744,10 @@ def cardiac_pipeline(
     # Stage 11 - Combinatorial (optional + gated)
     if _should_run(11):
         if run_combinatorial:
-            wait = [assess_predictions_task] if assess_predictions_task else []
+            if resolved_parallel_experiments:
+                wait = [assess_predictions_task] if assess_predictions_task else []
+            else:
+                wait = [serial_experiment_anchor] if serial_experiment_anchor else []
             combinatorial_task = run_combinatorial_experiments.submit(
                 run_id,
                 datasets,
@@ -594,6 +756,8 @@ def cardiac_pipeline(
                 verbose,
                 wait_for=wait,
             )
+            if not resolved_parallel_experiments:
+                serial_experiment_anchor = combinatorial_task
         else:
             logger.info("[11/12] combinatorial - skipped (disabled)")
             _mark_skipped(11, "disabled")
@@ -603,11 +767,20 @@ def cardiac_pipeline(
     # Stage 12 - Comparison (optional + gated)
     if _should_run(12):
         if run_comparison:
-            wait = (
-                [combinatorial_task]
-                if combinatorial_task
-                else [assess_predictions_task] if assess_predictions_task else []
-            )
+            if resolved_parallel_experiments:
+                wait = [t for t in [age_task, mitigation_task, combinatorial_task] if t]
+            else:
+                wait = [
+                    t
+                    for t in [
+                        combinatorial_task,
+                        mitigation_task,
+                        age_task,
+                    ]
+                    if t
+                ]
+            if not wait and assess_predictions_task:
+                wait = [assess_predictions_task]
             comparison_task = compare_experiments.submit(run_id, verbose, wait_for=wait)
         else:
             logger.info("[12/12] compare - skipped (disabled)")
@@ -715,6 +888,69 @@ Examples:
     p.add_argument(
         "--run-id", default=None, help="Explicit run ID. On resume, defaults to latest run."
     )
+    p.add_argument(
+        "--study-mode",
+        choices=["serial", "auto_safe", "aggressive"],
+        default=None,
+        help="Scheduling mode for study/experiment stages (CLI > config > default).",
+    )
+    ps_group = p.add_mutually_exclusive_group()
+    ps_group.add_argument(
+        "--parallel-studies",
+        dest="parallel_studies",
+        action="store_true",
+        help="Run HPO and feature-selection studies in parallel.",
+    )
+    ps_group.add_argument(
+        "--no-parallel-studies",
+        dest="parallel_studies",
+        action="store_false",
+        help="Force serial execution of study stages.",
+    )
+    pe_group = p.add_mutually_exclusive_group()
+    pe_group.add_argument(
+        "--parallel-experiments",
+        dest="parallel_experiments",
+        action="store_true",
+        help="Run experiment stages (9-11) in parallel when dependencies allow.",
+    )
+    pe_group.add_argument(
+        "--no-parallel-experiments",
+        dest="parallel_experiments",
+        action="store_false",
+        help="Force serial execution of experiment stages (9-11).",
+    )
+    p.set_defaults(parallel_studies=None, parallel_experiments=None)
+    p.add_argument(
+        "--max-cores",
+        type=int,
+        default=None,
+        help="CPU budget cap (-1 for all cores).",
+    )
+    p.add_argument(
+        "--cpu-fraction",
+        type=float,
+        default=None,
+        help="CPU fraction used when max-cores is not set.",
+    )
+    p.add_argument(
+        "--fs-jobs",
+        type=int,
+        default=None,
+        help="Parallel jobs for feature-selection study.",
+    )
+    p.add_argument(
+        "--hpo-search-n-jobs",
+        type=int,
+        default=None,
+        help="Parallel jobs for HPO search backend.",
+    )
+    p.add_argument(
+        "--hpo-model-n-jobs",
+        type=int,
+        default=None,
+        help="Model n_jobs passed to HPO base estimator when supported.",
+    )
     skip_group = p.add_mutually_exclusive_group()
     skip_group.add_argument(
         "--skip-studies",
@@ -765,6 +1001,14 @@ if __name__ == "__main__":
         run_hpo_study_enabled=not args.no_hpo_study,
         run_feature_selection_study_enabled=not args.no_feature_selection_study,
         skip_studies=args.skip_studies,
+        study_mode=args.study_mode,
+        parallel_studies=args.parallel_studies,
+        parallel_experiments=args.parallel_experiments,
+        max_cores=args.max_cores,
+        cpu_fraction=args.cpu_fraction,
+        fs_jobs=args.fs_jobs,
+        hpo_search_n_jobs=args.hpo_search_n_jobs,
+        hpo_model_n_jobs=args.hpo_model_n_jobs,
         run_attribute_binning=not args.no_attribute_binning,
         run_mitigation=not args.no_mitigation,
         run_combinatorial=not args.no_combinatorial,
