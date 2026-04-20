@@ -24,6 +24,7 @@ python scripts/studies/run_feature_selection_study.py --pipeline cardiac --dry-r
 
 import argparse
 import concurrent.futures as cf
+import csv
 import json
 import logging
 import os
@@ -36,6 +37,7 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
+from fairxai.cli.memory_utils import safe_n_jobs, warn_if_large_dataset
 from fairxai.cli.runner_base import get_project_root, setup_study_logging
 from fairxai.cli.runner_utils import (
     resolve_run_id,
@@ -60,6 +62,68 @@ DEFAULT_MODES = [
 
 def _build_sub_run_key(mode: str, model_type: str) -> str:
     return f"fs_{mode}__{model_type}"
+
+
+def _is_selected_dataset(dataset_name: str, selected_datasets: set[str]) -> bool:
+    if not selected_datasets:
+        return True
+    return any(dataset_name == d or dataset_name.startswith(f"{d}_") for d in selected_datasets)
+
+
+def _read_csv_shape(csv_path: Path) -> Optional[tuple[int, int]]:
+    try:
+        with open(csv_path, newline="", encoding="utf-8") as handle:
+            reader = csv.reader(handle)
+            header = next(reader, None)
+            if not header:
+                return None
+            n_cols = len(header)
+            n_rows = sum(1 for _ in reader)
+            return n_rows, n_cols
+    except Exception:
+        logger.debug("Could not read shape for %s", csv_path)
+        return None
+
+
+def _estimate_max_processed_shape(
+    processed_dir: Path,
+    datasets: list[str],
+    warn_rows_threshold: int,
+) -> tuple[int, int]:
+    selected = {str(d).strip() for d in datasets if str(d).strip()}
+    train_files = sorted(processed_dir.glob("*_train_scaled.csv"))
+    if selected:
+        train_files = [
+            path
+            for path in train_files
+            if _is_selected_dataset(path.stem.replace("_train_scaled", ""), selected)
+        ]
+
+    max_rows = 0
+    max_cols = 0
+    max_cells = 0
+    for train_path in train_files:
+        shape = _read_csv_shape(train_path)
+        if shape is None:
+            continue
+        n_rows, n_cols = shape
+        dataset_name = train_path.stem.replace("_train_scaled", "")
+        warn_if_large_dataset(n_rows, warn_rows_threshold, context=f"dataset={dataset_name}")
+
+        n_cells = n_rows * max(1, n_cols)
+        if n_cells > max_cells:
+            max_cells = n_cells
+            max_rows = n_rows
+            max_cols = n_cols
+
+    if max_cells == 0:
+        logger.warning(
+            "Could not infer processed dataset shape under %s for datasets=%s; "
+            "memory capping will fall back to requested jobs",
+            processed_dir,
+            datasets,
+        )
+    return max_rows, max_cols
 
 
 def _register_process(process: subprocess.Popen) -> None:
@@ -302,6 +366,14 @@ def main():
     model_types = args.model_types or study_cfg.get("models", ["logistic_regression"])
     rfe_top_k = int(study_cfg.get("rfe_top_k", 10))
 
+    requested_jobs = int(args.jobs)
+    if requested_jobs <= 0 and requested_jobs != -1:
+        logger.warning(
+            "jobs=%d is invalid; using 1 (only -1 or positive integers are supported)",
+            requested_jobs,
+        )
+        requested_jobs = 1
+
     # Study output: summary/manifest + training sub-runs all under studies/feature_selection/<study_id>/
     study_base = project_root / study_cfg.get(
         "output_dir", f"output/{args.pipeline}/studies/feature_selection"
@@ -311,10 +383,32 @@ def main():
     summary_path = summary_dir / "study_summary.json"
     manifest_path = summary_dir / "study_manifest.json"
 
+    sched_cfg = pipeline_cfg.get("scheduling") or {}
+    warn_rows_threshold = int(sched_cfg.get("warn_rows_threshold", 50_000))
+    max_memory_fraction = float(sched_cfg.get("max_memory_fraction", 0.80))
+    cv_folds = int((pipeline_cfg.get("training") or {}).get("cv_folds", 5))
+
+    processed_dir = project_root / pipeline_cfg.get("paths", {}).get(
+        "processed_dir", f"data/processed/{args.pipeline}"
+    )
+    max_n_rows, max_n_cols = _estimate_max_processed_shape(
+        processed_dir=processed_dir,
+        datasets=datasets,
+        warn_rows_threshold=warn_rows_threshold,
+    )
+
+    effective_jobs = safe_n_jobs(
+        max_n_rows,
+        max_n_cols,
+        requested_jobs,
+        cv_folds,
+        max_memory_fraction,
+    )
+
     cpu_count = os.cpu_count() or 1
-    if args.jobs > 1:
+    if effective_jobs > 1:
         model_n_jobs = 1
-        threads_per_worker = max(1, cpu_count // args.jobs)
+        threads_per_worker = max(1, cpu_count // effective_jobs)
     else:
         model_n_jobs = -1
         threads_per_worker = 0
@@ -322,8 +416,9 @@ def main():
     logger.info("[PHASE] Feature selection study started")
     logger.info(
         f"[RUN_CONTEXT] pipeline={args.pipeline} study_id={study_id} datasets={datasets} "
-        f"models={model_types} modes={modes} rfe_top_k={rfe_top_k} jobs={args.jobs} "
+        f"models={model_types} modes={modes} rfe_top_k={rfe_top_k} "
         f"model_n_jobs={model_n_jobs} threads_per_worker={threads_per_worker or 'uncapped'} "
+        f"jobs_requested={args.jobs} jobs_normalized={requested_jobs} jobs_effective={effective_jobs} "
         f"summary_path={summary_path} manifest_path={manifest_path} dry_run={args.dry_run}"
     )
 
@@ -340,7 +435,7 @@ def main():
             for model_type in model_types:
                 tasks.append((mode, model_type))
 
-        if args.jobs == 1:
+        if effective_jobs == 1:
             for mode, model_type in tasks:
                 status = _run_one(
                     project_root=project_root,
@@ -360,8 +455,10 @@ def main():
                 if status["status"] == "interrupted":
                     raise KeyboardInterrupt
         else:
-            logger.info(f"[RUN] Parallel mode enabled with jobs={args.jobs}")
-            with cf.ThreadPoolExecutor(max_workers=args.jobs) as executor:
+            logger.info(
+                f"[RUN] Parallel mode enabled with jobs={effective_jobs} (requested={args.jobs})"
+            )
+            with cf.ThreadPoolExecutor(max_workers=effective_jobs) as executor:
                 future_map = {
                     executor.submit(
                         _run_one,
@@ -434,7 +531,9 @@ def main():
         "datasets": datasets,
         "models": model_types,
         "rfe_top_k": rfe_top_k,
-        "jobs": args.jobs,
+        "jobs_requested": args.jobs,
+        "jobs_normalized": requested_jobs,
+        "jobs_effective": effective_jobs,
         "summary_dir": str(summary_dir),
         "summary_path": str(summary_path),
         "runs": [

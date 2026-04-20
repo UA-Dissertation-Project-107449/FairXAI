@@ -32,6 +32,7 @@ experiment = [
     "fairlearn>=0.10.0",        # (reqs: 0.13.0) fairness metrics and mitigation algorithms
     "xgboost>=3.2.0",           # (reqs: 3.2.0) gradient-boosted trees for model_type='xgboost'
     "interpret>=0.6.0",         # (reqs: 0.6.10) InterpretML — loads the EBM difficulty model
+    "psutil>=5.9.0",            # (reqs: 7.0.0)  memory-aware worker budgeting in studies
 ]
 
 # DEV: Local notebooks, visualisation, and explainability analysis
