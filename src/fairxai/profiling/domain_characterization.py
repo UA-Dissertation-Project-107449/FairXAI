@@ -333,27 +333,60 @@ def characterize_dataset(
         str(column_name): float(np.round(X[column_name].isna().mean() * 100, 2))
         for column_name in X.columns
     }
-    duplicate_count = int(df.drop(columns=[index_column], errors="ignore").duplicated().sum())
+    top_missing_col: str | None = max(missing_percentages, key=missing_percentages.get, default=None)  # type: ignore[arg-type]
+    target_missing_pct = round(float(pd.Series(y).isna().mean() * 100), 2)
+
+    duplicate_base = df.drop(columns=[index_column], errors="ignore")
+    duplicate_count = int(duplicate_base.duplicated().sum())
+    dup_mask = duplicate_base.duplicated(keep=False)
+    if index_column and index_column in df.columns:
+        duplicate_row_ids: list[Any] = df.loc[dup_mask, index_column].tolist()[:1000]
+    else:
+        duplicate_row_ids = df.index[dup_mask].tolist()[:1000]
+
+    raw_counts = pd.Series(y).value_counts(dropna=False).to_dict()
+    total_count = sum(raw_counts.values())
     class_distribution = {
-        str(class_name): int(count)
-        for class_name, count in pd.Series(y).value_counts(dropna=False).to_dict().items()
+        str(k): {"count": int(v), "pct": round(int(v) / total_count * 100, 2)}
+        for k, v in raw_counts.items()
     }
+    class_counts = [v["count"] for v in class_distribution.values()]
+    if class_counts and min(class_counts) > 0:
+        class_balance_delta: float | None = round(max(class_counts) / min(class_counts), 2)
+    else:
+        class_balance_delta = None
+    if class_balance_delta is None:
+        class_balance_label = "highly_imbalanced"
+    elif class_balance_delta < 1.5:
+        class_balance_label = "balanced"
+    elif class_balance_delta < 3.0:
+        class_balance_label = "mildly_imbalanced"
+    else:
+        class_balance_label = "highly_imbalanced"
 
     feature_type_summary = _compute_feature_type_summary(X)
 
     result: dict[str, Any] = {
+        "schema_version": "1.1",
         "jobId": file_id,
         "metrics": metrics,
         "pca2d": pca2d,
         "missing_percentages": missing_percentages,
+        "top_missing_column": top_missing_col,
+        "top_missing_pct": missing_percentages.get(top_missing_col) if top_missing_col else None,
+        "target_missing_pct": target_missing_pct,
         "duplicate_count": duplicate_count,
+        "duplicate_row_ids": duplicate_row_ids,
         "class_distribution": class_distribution,
+        "class_balance_label": class_balance_label,
+        "class_balance_delta": class_balance_delta,
         "feature_type_summary": feature_type_summary,
     }
 
+    result["triage_status"] = "not_requested"
     if include_triage:
         try:
-            triage_report, triage_feature_summary = _build_triage_report(
+            triage_report, _triage_feature_summary = _build_triage_report(
                 csv_path=csv_path,
                 dataset_name=file_id,
                 target_column=target,
@@ -362,10 +395,10 @@ def characterize_dataset(
                 project_root=triage_project_root,
             )
             result["triage_report"] = triage_report
-            if triage_feature_summary:
-                result["feature_type_summary"] = triage_feature_summary
+            result["triage_status"] = "success"
         except Exception as exc:  # pragma: no cover - keep characterize resilient
             result["triage_error"] = str(exc)
+            result["triage_status"] = "failed"
 
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
