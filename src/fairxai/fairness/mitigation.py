@@ -497,9 +497,7 @@ class MitigationEngine:
         if not isinstance(y_train, pd.Series):
             raise TypeError(f"y_train must be pd.Series, got: {type(y_train)}")
 
-        logger.info(f"\n{'='*60}")
-        logger.info(f"Applying {technique_name} ({stage})")
-        logger.info(f"{'='*60}")
+        logger.info(f"[MITIGATION] Applying technique={technique_name} stage={stage}")
 
         if stage == "pre-processing":
             return self._apply_preprocessing(
@@ -545,14 +543,14 @@ class MitigationEngine:
 
     @staticmethod
     def _validate_combo_chain(techniques: List[str]) -> None:
-        """Validate a combo chain satisfies pre* → in? → post? ordering.
+        """Validate a combo chain satisfies pre* to in? to post? ordering.
 
         Rules:
         - At least 2 techniques required.
         - All pre-processing must come before in/post-processing.
         - At most one in-processing technique.
         - At most one post-processing technique.
-        - in-processing and post-processing cannot both appear unless order is in → post.
+        - in-processing and post-processing cannot both appear unless order is in to post.
         """
         if len(techniques) < 2:
             raise ValueError(f"apply_combo requires at least 2 techniques, got: {techniques}")
@@ -623,7 +621,7 @@ class MitigationEngine:
     ) -> Dict:
         """Apply a sequential chain of mitigation techniques.
 
-        Chain execution order: pre-processing* → in-processing? → post-processing?
+        Chain execution order: pre-processing* to in-processing? to post-processing?
 
         Pre-processing steps transform the training data in place.  If the
         data is expanded (SMOTE/ADASYN), ``sensitive_train`` is extended to
@@ -655,9 +653,7 @@ class MitigationEngine:
         """
         self._validate_combo_chain(techniques)
 
-        logger.info(f"\n{'='*60}")
-        logger.info(f"Applying combo chain: {' → '.join(techniques)}")
-        logger.info(f"{'='*60}")
+        logger.info(f"[MITIGATION_COMBO] Applying chain: {', '.join(techniques)}")
 
         _PRE = set(self.VALID_PREPROCESSING)
         _IN = set(self.VALID_INPROCESSING)
@@ -689,7 +685,7 @@ class MitigationEngine:
                 sensitive_curr = self._extend_sensitive_for_resampled(
                     sensitive_curr, len(X_curr), self.random_state
                 )
-                logger.info(f"  [{technique}] {n_before} → {len(X_curr)} training samples")
+                logger.info(f"  [{technique}] training samples from {n_before} to {len(X_curr)}")
             elif technique == "adasyn":
                 X_curr, y_curr = self.preprocessing.apply_adasyn(
                     X_curr, y_curr, random_state=self.random_state
@@ -697,7 +693,7 @@ class MitigationEngine:
                 sensitive_curr = self._extend_sensitive_for_resampled(
                     sensitive_curr, len(X_curr), self.random_state
                 )
-                logger.info(f"  [{technique}] {n_before} → {len(X_curr)} training samples")
+                logger.info(f"  [{technique}] training samples from {n_before} to {len(X_curr)}")
             else:
                 raise ValueError(
                     f"Pre-processing technique '{technique}' not supported in combos. "

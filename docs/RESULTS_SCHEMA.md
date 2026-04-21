@@ -211,7 +211,7 @@ import json
 from pathlib import Path
 import pandas as pd
 
-results_dir = Path("output/cardiac/runs/latest_run/experiments/full/results/cleveland/holdout")
+results_dir = Path("output/cardiac/runs/latest_run/experiments/results/cleveland/holdout")
 rows = []
 for f in results_dir.glob("results_*.json"):
     with open(f) as fh:

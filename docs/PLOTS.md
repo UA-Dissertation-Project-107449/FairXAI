@@ -225,7 +225,7 @@ Pareto frontier drawn per model type.
 Pipeline plots are saved by the comparison script:
 
 ```
-output/cardiac/runs/<run_id>/experiments/full/comparisons/
+output/cardiac/runs/<run_id>/experiments/comparisons/plots/
 ├── comparison_heatmap.png
 ├── tradeoff_scatter.png
 └── pareto_frontier.png

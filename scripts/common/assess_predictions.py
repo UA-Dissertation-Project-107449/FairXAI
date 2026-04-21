@@ -20,8 +20,106 @@ import pandas as pd
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root / "src"))
 
-from fairxai.cli.runner_base import load_pipeline_config, setup_phase_logging
+from fairxai.cli.runner_base import setup_phase_logging
 from fairxai.fairness.metrics import FairnessMetrics, summarize_fairness_results
+
+_KNOWN_MODELS = ["logistic_regression", "random_forest", "svm", "xgboost"]
+
+
+def _split_dataset_model(combined: str, known_models: list = _KNOWN_MODELS) -> tuple:
+    """Split 'cleveland_logistic_regression' → ('cleveland', 'logistic_regression')."""
+    for model in sorted(known_models, key=len, reverse=True):
+        if combined.endswith(f"_{model}"):
+            return combined[: -(len(model) + 1)], model
+    return combined, "unknown"
+
+
+def _render_fairness_md(nested_results: dict) -> str:
+    """Render nested {dataset: {model: {method: results}}} fairness dict as markdown."""
+
+    def _iter_methods(model_results: dict) -> list[tuple[str, dict]]:
+        if not isinstance(model_results, dict):
+            return []
+        if any(key in model_results for key in ("train_metrics", "test_metrics", "cv_metrics")):
+            # Backward compatibility with legacy shape {model: direct_results}
+            return [("single_split", model_results)]
+        rows: list[tuple[str, dict]] = []
+        for method in ("single_split", "kfold_cv"):
+            value = model_results.get(method)
+            if isinstance(value, dict):
+                rows.append((method, value))
+        return rows
+
+    lines = ["# Prediction Fairness Report\n"]
+    for dataset, models in sorted(nested_results.items()):
+        lines.append(f"## {dataset.replace('_', ' ').title()}\n")
+        for model, res in sorted(models.items()):
+            lines.append(f"### {model.replace('_', ' ').title()}\n")
+            method_rows = _iter_methods(res)
+            if not method_rows:
+                continue
+
+            for method_name, method_results in method_rows:
+                method_label = "Single Split" if method_name == "single_split" else "K-Fold CV"
+                lines.append(f"#### {method_label}\n")
+
+                if "cv_metrics" in method_results:
+                    cv_metrics = method_results.get("cv_metrics", {})
+                    gf = cv_metrics.get("group_fairness", {})
+                    if gf:
+                        lines.append("**CV Fairness - Group Fairness**\n")
+                        lines.append("| Attribute | Metric | Max Difference | Fair? |")
+                        lines.append("|-----------|--------|---------------|-------|")
+                        for attr, attr_metrics in sorted(gf.items()):
+                            for metric_name, md in sorted(attr_metrics.items()):
+                                fair = md.get("is_fair", False)
+                                diff = md.get("max_difference") or md.get("tpr_max_difference", "?")
+                                flag = "✓" if fair else "✗"
+                                if isinstance(diff, float):
+                                    diff = f"{diff:.3f}"
+                                lines.append(f"| {attr} | {metric_name} | {diff} | {flag} |")
+                        lines.append("")
+
+                    calib = cv_metrics.get("calibration", {})
+                    for attr, cd in sorted(calib.items()):
+                        fair = cd.get("is_fair", False)
+                        flag = "✓" if fair else "✗"
+                        ece = cd.get("max_ece_difference", "?")
+                        if isinstance(ece, float):
+                            ece = f"{ece:.4f}"
+                        lines.append(f"**CV Calibration ({attr}):** max ECE diff = {ece} {flag}\n")
+                    continue
+
+                for split in ("test_metrics", "train_metrics"):
+                    label = "Test" if split == "test_metrics" else "Train"
+                    metrics = method_results.get(split, {})
+                    gf = metrics.get("group_fairness", {})
+                    if not gf:
+                        continue
+                    lines.append(f"**{label} Set - Group Fairness**\n")
+                    lines.append("| Attribute | Metric | Max Difference | Fair? |")
+                    lines.append("|-----------|--------|---------------|-------|")
+                    for attr, attr_metrics in sorted(gf.items()):
+                        for metric_name, md in sorted(attr_metrics.items()):
+                            fair = md.get("is_fair", False)
+                            diff = md.get("max_difference") or md.get("tpr_max_difference", "?")
+                            flag = "✓" if fair else "✗"
+                            if isinstance(diff, float):
+                                diff = f"{diff:.3f}"
+                            lines.append(f"| {attr} | {metric_name} | {diff} | {flag} |")
+                    lines.append("")
+
+                    calib = metrics.get("calibration", {})
+                    for attr, cd in sorted(calib.items()):
+                        fair = cd.get("is_fair", False)
+                        flag = "✓" if fair else "✗"
+                        ece = cd.get("max_ece_difference", "?")
+                        if isinstance(ece, float):
+                            ece = f"{ece:.4f}"
+                        lines.append(
+                            f"**{label} Calibration ({attr}):** max ECE diff = {ece} {flag}\n"
+                        )
+    return "\n".join(lines)
 
 
 def decode_sensitive_attributes(df: pd.DataFrame) -> pd.DataFrame:
@@ -90,9 +188,7 @@ def assess_dataset_fairness(
     Returns:
         Dictionary with assessment results
     """
-    logging.info(f"\n{'='*60}")
-    logging.info(f"Assessing: {dataset_name}")
-    logging.info(f"{'='*60}")
+    logging.info("[DATASET] Assessing fairness dataset_model=%s", dataset_name)
 
     # Load predictions
     train_df = pd.read_csv(train_file)
@@ -108,7 +204,7 @@ def assess_dataset_fairness(
 
     # Check if decoding worked
     if "age_group_cat" in train_df.columns and "sex_cat" in train_df.columns:
-        logging.info("\n--- Decoded Sensitive Attributes ---")
+        logging.info("Decoded sensitive attributes:")
         logging.info(f"Age groups: {train_df['age_group_cat'].value_counts().to_dict()}")
         logging.info(f"Sex: {train_df['sex_cat'].value_counts().to_dict()}")
 
@@ -139,7 +235,7 @@ def assess_dataset_fairness(
         feature_cols = None
 
     # Calculate metrics for train set
-    logging.info("\n--- Train Set Fairness ---")
+    logging.info("Train split fairness metrics:")
     train_metrics = metrics_calculator.calculate_all_metrics(train_df, feature_cols)
     results["train_metrics"] = train_metrics
 
@@ -147,7 +243,7 @@ def assess_dataset_fairness(
     log_fairness_metrics(train_metrics, "Train")
 
     # Calculate metrics for test set
-    logging.info("\n--- Test Set Fairness ---")
+    logging.info("Test split fairness metrics:")
     test_metrics = metrics_calculator.calculate_all_metrics(test_df, feature_cols)
     results["test_metrics"] = test_metrics
 
@@ -157,20 +253,7 @@ def assess_dataset_fairness(
     # Compare train vs test
     results["comparison"] = compare_fairness(train_metrics, test_metrics)
 
-    # Save results
-    output_file = output_dir / f"{dataset_name}_fairness_assessment.json"
-    with open(output_file, "w") as f:
-        # Convert numpy types for JSON serialization
-        json.dump(
-            results,
-            f,
-            indent=2,
-            default=lambda o: float(o) if isinstance(o, (np.integer, np.floating)) else str(o),
-        )
-
-    logging.info(f"\n[SUCCESS] Fairness assessment saved to: {output_file}")
-
-    # Create summary table
+    # Create summary table (renamed: _fairness_summary.csv → _summary.csv)
     summary_train = summarize_fairness_results(train_metrics)
     summary_test = summarize_fairness_results(test_metrics)
 
@@ -178,7 +261,7 @@ def assess_dataset_fairness(
     summary_test["split"] = "test"
     summary = pd.concat([summary_train, summary_test], ignore_index=True)
 
-    summary_file = output_dir / f"{dataset_name}_fairness_summary.csv"
+    summary_file = output_dir / f"{dataset_name}_summary.csv"
     summary.to_csv(summary_file, index=False)
 
     logging.info(f"[SUCCESS] Summary table saved to: {summary_file}")
@@ -186,41 +269,97 @@ def assess_dataset_fairness(
     return results
 
 
+def assess_cv_fairness(
+    dataset_name: str,
+    cv_file: Path,
+    output_dir: Path,
+    metrics_calculator: FairnessMetrics,
+) -> Dict:
+    """Assess fairness for CV out-of-fold predictions."""
+    logging.info("[DATASET] Assessing CV fairness dataset_model=%s", dataset_name)
+
+    cv_df = pd.read_csv(cv_file)
+    logging.info("Loaded CV predictions: %d samples", len(cv_df))
+
+    cv_df = decode_sensitive_attributes(cv_df)
+    if "age_group_cat" in cv_df.columns and "sex_cat" in cv_df.columns:
+        metrics_calculator.sensitive_attributes = ["age_group_cat", "sex_cat"]
+
+    exclude_cols = [
+        "fold",
+        "sample_idx",
+        "y_true",
+        "y_pred",
+        "y_proba",
+        "threshold",
+        "age_group",
+        "sex",
+        "ethnicity",
+        "group_cluster",
+        "confidence",
+        "near_threshold",
+        "age_group_cat",
+        "sex_cat",
+    ]
+    feature_cols = [col for col in cv_df.columns if col not in exclude_cols]
+    if not feature_cols:
+        feature_cols = None
+
+    cv_metrics = metrics_calculator.calculate_all_metrics(cv_df, feature_cols)
+    log_fairness_metrics(cv_metrics, "CV")
+
+    summary = summarize_fairness_results(cv_metrics)
+    summary["split"] = "cv"
+    summary_file = output_dir / f"{dataset_name}_cv_summary.csv"
+    summary.to_csv(summary_file, index=False)
+    logging.info(f"[SUCCESS] CV summary table saved to: {summary_file}")
+
+    n_folds = int(cv_df["fold"].nunique()) if "fold" in cv_df.columns else None
+    return {
+        "dataset": dataset_name,
+        "cv_metrics": cv_metrics,
+        "n_samples": len(cv_df),
+        "n_folds": n_folds,
+    }
+
+
 def log_fairness_metrics(metrics: Dict, split_name: str):
     """Log fairness metrics in a readable format."""
 
     # Group fairness
     for attr, attr_metrics in metrics.get("group_fairness", {}).items():
-        logging.info(f"\n  {attr.upper()} - Group Fairness:")
+        logging.info(f"  {split_name} {attr.upper()} group fairness:")
 
         for metric_name, metric_data in attr_metrics.items():
-            is_fair = "[SUCCESS]" if metric_data.get("is_fair", False) else "[ERROR]"
+            fair = metric_data.get("is_fair", False)
+            tag = "[SUCCESS]" if fair else "[FAIL]"
+            log = logging.info if fair else logging.warning
 
             if metric_name == "demographic_parity":
                 diff = metric_data["max_difference"]
-                logging.info(f"    {is_fair} Demographic Parity: {diff:.3f} max difference")
+                log(f"    {tag} Demographic Parity: {diff:.3f} max difference")
 
             elif metric_name == "equalized_odds":
                 tpr_diff = metric_data["tpr_max_difference"]
                 fpr_diff = metric_data["fpr_max_difference"]
-                logging.info(
-                    f"    {is_fair} Equalized Odds: TPR diff={tpr_diff:.3f}, FPR diff={fpr_diff:.3f}"
-                )
+                log(f"    {tag} Equalized Odds: TPR diff={tpr_diff:.3f}, FPR diff={fpr_diff:.3f}")
 
             elif metric_name == "equal_opportunity":
                 diff = metric_data["max_difference"]
-                logging.info(f"    {is_fair} Equal Opportunity: {diff:.3f} TPR difference")
+                log(f"    {tag} Equal Opportunity: {diff:.3f} TPR difference")
 
             elif metric_name == "predictive_parity":
                 diff = metric_data["max_difference"]
-                logging.info(f"    {is_fair} Predictive Parity: {diff:.3f} precision difference")
+                log(f"    {tag} Predictive Parity: {diff:.3f} precision difference")
 
     # Calibration
     for attr, calib_data in metrics.get("calibration", {}).items():
-        logging.info(f"\n  {attr.upper()} - Calibration:")
-        is_fair = "[SUCCESS]" if calib_data.get("is_fair", False) else "[ERROR]"
+        logging.info(f"  {split_name} {attr.upper()} calibration:")
+        fair = calib_data.get("is_fair", False)
+        tag = "[SUCCESS]" if fair else "[FAIL]"
+        log = logging.info if fair else logging.warning
         max_ece_diff = calib_data["max_ece_difference"]
-        logging.info(f"    {is_fair} Max ECE difference: {max_ece_diff:.4f}")
+        log(f"    {tag} Max ECE difference: {max_ece_diff:.4f}")
 
         for group, group_calib in calib_data["group_calibration"].items():
             logging.info(f"      {group}: ECE={group_calib['ece']:.4f}")
@@ -228,7 +367,7 @@ def log_fairness_metrics(metrics: Dict, split_name: str):
     # Individual fairness
     if "individual_fairness" in metrics and metrics["individual_fairness"]:
         ind_fair = metrics["individual_fairness"]
-        logging.info("\n  Individual Fairness (k-NN consistency):")
+        logging.info(f"  {split_name} individual fairness (k-NN consistency):")
         logging.info(f"    Mean consistency: {ind_fair['mean_consistency']:.3f}")
         logging.info(f"    Median consistency: {ind_fair['median_consistency']:.3f}")
 
@@ -299,15 +438,15 @@ def main():
     pipeline = args.pipeline
 
     project_root = Path(__file__).parent.parent.parent
-    pipeline_cfg = load_pipeline_config(project_root, pipeline)
     run_id = os.getenv("RUN_ID")
-    if run_id:
-        baseline_root = project_root / f"output/{pipeline}/runs/{run_id}/baseline"
-        experiments_dir = baseline_root / "results"
-        results_dir = baseline_root / "fairness"
-    else:
-        experiments_dir = project_root / pipeline_cfg["paths"]["experiments_dir"]
-        results_dir = project_root / pipeline_cfg["paths"]["results_fairness_dir"]
+    if not run_id:
+        raise RuntimeError(
+            "RUN_ID is not set. assess_predictions.py must be called from the pipeline "
+            "with RUN_ID exported."
+        )
+    baseline_root = project_root / f"output/{pipeline}/runs/{run_id}/baseline"
+    predictions_dir = baseline_root / "results" / "predictions"
+    results_dir = baseline_root / "prediction_fairness"
     # Setup
     setup_phase_logging(
         project_root,
@@ -317,13 +456,20 @@ def main():
         stage_name="assess",
     )
     logging.info("[PHASE] Fairness assessment started")
+    logging.info(
+        "Run context: pipeline=%s run_id=%s predictions_dir=%s output_dir=%s",
+        pipeline,
+        run_id,
+        predictions_dir,
+        results_dir,
+    )
     results_dir.mkdir(parents=True, exist_ok=True)
 
     # Initialize fairness calculator
     metrics_calculator = FairnessMetrics(sensitive_attributes=["age_group_cat", "sex_cat"])
 
-    # Find all prediction files
-    train_files = sorted(experiments_dir.glob("*_train_predictions.csv"))
+    # Find all prediction files (new path: results/predictions/{ds}_{m}_train.csv)
+    train_files = sorted(predictions_dir.glob("*_train.csv"))
     if args.datasets:
         selected = [d.strip() for d in args.datasets]
         train_files = [
@@ -334,52 +480,83 @@ def main():
         train_files = [
             p
             for p in train_files
-            if any(f"_{model}_train_predictions.csv" in p.name for model in selected_models)
+            if any(f"_{model}_train.csv" in p.name for model in selected_models)
         ]
 
     if not train_files:
-        logging.error(f"No prediction files found in {experiments_dir}")
-        logging.error("Please run baseline training first (Phase 3)")
+        logging.error(f"No prediction files found in {predictions_dir}")
+        logging.error("Please run baseline training first (Phase 5)")
         return
 
-    logging.info(f"Found {len(train_files)} datasets to assess")
+    logging.info(f"Found {len(train_files)} prediction pairs to assess")
 
-    # Process each dataset
-    all_results = {}
+    # Process each dataset — build nested {dataset: {model: {method: results}}} structure
+    nested_results: dict = {}
 
     for train_file in train_files:
-        dataset_name = train_file.stem.replace("_train_predictions", "")
-        test_file = experiments_dir / f"{dataset_name}_test_predictions.csv"
+        combined_name = train_file.stem.replace("_train", "")
+        test_file = predictions_dir / f"{combined_name}_test.csv"
 
         if not test_file.exists():
-            logging.warning(f"Test file not found for {dataset_name}, skipping")
+            logging.warning(f"Test file not found for {combined_name}, skipping")
             continue
+
+        dataset, model = _split_dataset_model(combined_name)
 
         try:
             results = assess_dataset_fairness(
-                dataset_name, train_file, test_file, results_dir, metrics_calculator
+                combined_name, train_file, test_file, results_dir, metrics_calculator
             )
-            all_results[dataset_name] = results
+            nested_results.setdefault(dataset, {}).setdefault(model, {})["single_split"] = results
         except Exception as e:
-            logging.exception(f"[ERROR] Failed to assess {dataset_name}: {e}")
+            logging.exception(f"Failed to assess {combined_name}: {e}")
             continue
 
-    # Save combined results
-    combined_file = results_dir / "post_prediction_fairness_report.json"
+    # Process CV prediction files: results/predictions/{ds}_{model}_cv.csv
+    cv_files = sorted(predictions_dir.glob("*_cv.csv"))
+    if args.datasets:
+        selected = [d.strip() for d in args.datasets]
+        cv_files = [
+            p for p in cv_files if any(p.name.startswith(f"{dataset}_") for dataset in selected)
+        ]
+    if args.model_types:
+        selected_models = [m.strip().lower() for m in args.model_types]
+        cv_files = [
+            p for p in cv_files if any(f"_{model}_cv.csv" in p.name for model in selected_models)
+        ]
+
+    for cv_file in cv_files:
+        combined_name = cv_file.stem.replace("_cv", "")
+        dataset, model = _split_dataset_model(combined_name)
+        try:
+            cv_results = assess_cv_fairness(combined_name, cv_file, results_dir, metrics_calculator)
+            nested_results.setdefault(dataset, {}).setdefault(model, {})["kfold_cv"] = cv_results
+        except Exception as e:
+            logging.exception(f"Failed to assess CV file {combined_name}: {e}")
+            continue
+
+    # Save combined report
+    combined_file = results_dir / "fairness_report.json"
     with open(combined_file, "w") as f:
         json.dump(
-            all_results,
+            nested_results,
             f,
             indent=2,
             default=lambda o: float(o) if isinstance(o, (np.integer, np.floating)) else str(o),
         )
 
-    logging.info(f"\n{'='*60}")
+    # Save human-readable markdown interpretation
+    md_file = results_dir / "fairness_report.md"
+    md_file.write_text(_render_fairness_md(nested_results))
+
     logging.info("[PHASE] Fairness assessment complete")
-    logging.info(f"{'='*60}")
+    logging.info(
+        "Fairness assessment summary: datasets=%d models=%d",
+        len(nested_results),
+        sum(len(v) for v in nested_results.values()),
+    )
     logging.info(f"Results saved to: {results_dir}")
     logging.info(f"Combined report: {combined_file}")
-    logging.info("\nNext step: Create visualization notebook (Phase 5)")
 
 
 if __name__ == "__main__":

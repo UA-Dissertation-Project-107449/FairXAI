@@ -62,6 +62,7 @@ def run_hpo(
     n_iter: int = 20,
     n_jobs: int = -1,
     recall_hard_floor: float = 0.60,
+    max_rows_for_rbf_svm: Optional[int] = None,
     random_state: int = 42,
 ) -> Dict[str, Any]:
     """Run hyperparameter optimisation for one model × dataset pair.
@@ -81,6 +82,8 @@ def run_hpo(
         n_iter: Number of parameter settings sampled when ``search='random'``.
         n_jobs: Parallelism for the search (``-1`` = all cores).
         recall_hard_floor: After search, warn if best CV recall < this value.
+        max_rows_for_rbf_svm: Maximum train rows to keep ``kernel='rbf'`` for
+            SVM grid search. When exceeded, RBF is removed from the grid.
         random_state: Seed for ``RandomizedSearchCV``.
 
     Returns:
@@ -96,7 +99,10 @@ def run_hpo(
     estimator = _sklearn_estimator(model_type, base)
 
     # Guard: skip RBF SVM on large datasets
-    if model_type == "svm" and len(X_train) > _RBF_SVM_MAX_ROWS:
+    rbf_threshold = int(max_rows_for_rbf_svm or _RBF_SVM_MAX_ROWS)
+    if rbf_threshold <= 0:
+        rbf_threshold = _RBF_SVM_MAX_ROWS
+    if model_type == "svm" and len(X_train) > rbf_threshold:
         filtered = {
             k: [v for v in vals if not (k == "kernel" and v == "rbf")]
             for k, vals in param_grid.items()
@@ -104,7 +110,7 @@ def run_hpo(
         if filtered != param_grid:
             logger.warning(
                 f"HPO: RBF kernel removed from SVM grid (n_train={len(X_train)} > "
-                f"{_RBF_SVM_MAX_ROWS}). Only linear kernel will be searched."
+                f"{rbf_threshold}). Only linear kernel will be searched."
             )
         param_grid = filtered
 
@@ -174,9 +180,38 @@ def load_hpo_params(hpo_dir: Path, dataset: str, model_type: str) -> Optional[Di
 
     Returns ``None`` if no HPO file exists for this dataset × model_type pair.
     """
-    path = hpo_dir / f"best_params_{dataset}_{model_type}.json"
-    if not path.exists():
-        return None
-    with open(path) as f:
-        data = json.load(f)
-    return data.get("best_params")
+    filename = f"best_params_{dataset}_{model_type}.json"
+
+    def _read_params(path: Path) -> Optional[Dict[str, Any]]:
+        if not path.exists():
+            return None
+        with open(path) as f:
+            data = json.load(f)
+        return data.get("best_params")
+
+    # Legacy flat layout: studies/hpo/best_params_*.json
+    direct = _read_params(hpo_dir / filename)
+    if direct is not None:
+        return direct
+
+    # Run-scoped layout: studies/hpo/<study_id>/best_params_*.json
+    latest_txt = hpo_dir / "latest.txt"
+    if latest_txt.exists():
+        study_id = latest_txt.read_text(encoding="utf-8").strip()
+        if study_id:
+            latest = _read_params(hpo_dir / study_id / filename)
+            if latest is not None:
+                return latest
+
+    if hpo_dir.exists() and hpo_dir.is_dir():
+        candidates = sorted(
+            [p for p in hpo_dir.iterdir() if p.is_dir()],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for candidate in candidates:
+            params = _read_params(candidate / filename)
+            if params is not None:
+                return params
+
+    return None

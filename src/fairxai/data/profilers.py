@@ -8,6 +8,25 @@ import pandas as pd
 from ..profiling import compute_complexity_metrics
 from .schemas import available_sensitive, preferred_sensitive
 
+# Columns present in raw/standardized files but absent from the model feature
+# set.  They are redundant aliases (sex_extended == sex, sex_bin == numeric sex,
+# age_raw == continuous age before binning) and inflate feature-count-sensitive
+# complexity metrics (N3, L1, L2) if left in.
+_COMPLEXITY_EXCLUDE_COLS: list[str] = [
+    "sex_extended",
+    "sex_bin",
+    "age_raw",
+    # pipeline metadata columns
+    "_dataset_source",
+    "_dataset_file",
+    # raw-name aliases that may survive standardization
+    "age",
+    "Age",
+    "Sex",
+    "gender",
+    "id",
+]
+
 
 class DataProfiler:
     """Profile datasets for fairness assessment before modeling."""
@@ -66,7 +85,9 @@ class DataProfiler:
             "representation_balance": self._representation_balance(df),
             "label_imbalance_by_group": self._label_imbalance_by_group(df, target),
             "missing_value_analysis": self._missing_value_analysis(df),
-            "complexity_metrics": compute_complexity_metrics(df, target=target),
+            "complexity_metrics": compute_complexity_metrics(
+                df, target=target, exclude_cols=_COMPLEXITY_EXCLUDE_COLS
+            ),
             "group_complexity_metrics": self._group_complexity_metrics(
                 subgroup_df,
                 target=target,
@@ -270,7 +291,9 @@ class DataProfiler:
                     }
                     continue
 
-                metrics = compute_complexity_metrics(group_df, target=target)
+                metrics = compute_complexity_metrics(
+                    group_df, target=target, exclude_cols=_COMPLEXITY_EXCLUDE_COLS
+                )
                 group_result[key] = {
                     "n_samples": int(n_samples),
                     "status": "ok" if metrics else "unavailable",
@@ -305,7 +328,9 @@ class DataProfiler:
                         "complexity_metrics": {},
                     }
                     continue
-                metrics = compute_complexity_metrics(group_df, target=target)
+                metrics = compute_complexity_metrics(
+                    group_df, target=target, exclude_cols=_COMPLEXITY_EXCLUDE_COLS
+                )
                 pair_groups[subgroup_key] = {
                     "n_samples": int(n_samples),
                     "status": "ok" if metrics else "unavailable",

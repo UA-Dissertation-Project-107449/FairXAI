@@ -42,9 +42,11 @@ class SklearnClassifierWrapper:
 
         self.training_metrics = self._calculate_metrics(y_train, y_train_pred, y_train_proba)
 
-        logging.info("✓ Training complete")
-        logging.info(f"  Train Accuracy: {self.training_metrics['accuracy']:.4f}")
-        logging.info(f"  Train AUC-ROC: {self.training_metrics['auc_roc']:.4f}")
+        logging.info(
+            f"[SUCCESS] {self.model_name} training complete: "
+            f"train_accuracy={self.training_metrics['accuracy']:.4f} "
+            f"train_auc_roc={self.training_metrics['auc_roc']:.4f}"
+        )
 
         return self.training_metrics
 
@@ -130,8 +132,10 @@ class SklearnClassifierWrapper:
                 }
             ).sort_values("abs_coefficient", ascending=False)
 
-        logging.warning(
-            f"{self.model_name} does not expose direct feature importance coefficients."
+        logging.info(
+            "%s does not expose direct feature importance coefficients; "
+            "returning NaN importances.",
+            self.model_name,
         )
         return pd.DataFrame(
             {
@@ -150,7 +154,7 @@ class SklearnClassifierWrapper:
             },
             filepath,
         )
-        logging.info(f"✓ Model saved to: {filepath}")
+        logging.info(f"[SUCCESS] Model saved to: {filepath}")
 
     def load(self, filepath: str):
         data = joblib.load(filepath)
@@ -158,4 +162,4 @@ class SklearnClassifierWrapper:
         self.feature_names = data.get("feature_names")
         self.training_metrics = data.get("training_metrics", {})
         self.model_name = data.get("model_name", self.model_name)
-        logging.info(f"✓ Model loaded from: {filepath}")
+        logging.info(f"[SUCCESS] Model loaded from: {filepath}")

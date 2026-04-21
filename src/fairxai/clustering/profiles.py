@@ -111,7 +111,7 @@ class ClusterProfiler:
             lines.append("")
 
         output_file.write_text("\n".join(lines))
-        logger.info("[SUCCESS] subgroup_profiles.md → %s", output_file)
+        logger.info("[SUCCESS] subgroup_profiles saved to %s", output_file)
         return output_file
 
     # ------------------------------------------------------------------

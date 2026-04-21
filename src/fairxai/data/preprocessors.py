@@ -90,11 +90,11 @@ class CardiacPreprocessor:
         missing_analysis = self.analyze_missing_values(df)
 
         if missing_analysis["total_missing"] == 0:
-            logging.info("✓ No missing values found")
+            logging.info("No missing values found")
             return df_processed, actions
 
         if strategy == "analyze_only":
-            logging.warning(f"⚠️  Found {missing_analysis['total_missing']} missing values")
+            logging.warning(f"Found {missing_analysis['total_missing']} missing values")
             for col, info in missing_analysis["missing_by_column"].items():
                 logging.warning(
                     f"  {col}: {info['count']} ({info['percentage']:.1f}%) - Suggested: {info['action']}"
@@ -250,7 +250,7 @@ class CardiacPreprocessor:
             X_train_scaled[numerical_cols] = scaler.fit_transform(X_train[numerical_cols])
             X_test_scaled[numerical_cols] = scaler.transform(X_test[numerical_cols])
             self.scalers["standard"] = scaler
-            logging.info(f"✓ Standardized {len(numerical_cols)} numerical features")
+            logging.info(f"Standardized {len(numerical_cols)} numerical features")
 
         return X_train_scaled, X_test_scaled
 
@@ -260,6 +260,7 @@ class CardiacPreprocessor:
         target: str = "heart_disease",
         test_size: float = 0.3,
         random_state: int = 42,
+        context_label: str | None = None,
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Perform stratified train/test split.
@@ -271,6 +272,7 @@ class CardiacPreprocessor:
             target: Target column name
             test_size: Fraction for test set
             random_state: Random seed
+            context_label: Optional context shown in warnings (e.g., dataset/binning)
 
         Returns:
             Tuple of (train_df, test_df)
@@ -291,10 +293,22 @@ class CardiacPreprocessor:
         strat_counts = df["_strat_key"].value_counts()
         valid_strats = strat_counts[strat_counts >= 2].index
         df_valid = df[df["_strat_key"].isin(valid_strats)].copy()
+        context = f"[{context_label}] " if context_label else ""
+
+        def _format_index_preview(indices: list[int], limit: int = 10) -> str:
+            head = indices[:limit]
+            suffix = "..." if len(indices) > limit else ""
+            return f"{head}{suffix}"
 
         if len(df_valid) < len(df):
             dropped = len(df) - len(df_valid)
-            logging.warning(f"⚠️  Dropped {dropped} samples with rare group combinations")
+            dropped_indices = sorted(df.index.difference(df_valid.index).tolist())
+            logging.warning(
+                "%sDropped %d samples with rare group combinations; dropped_row_indices=%s",
+                context,
+                dropped,
+                _format_index_preview(dropped_indices),
+            )
 
             # Fallback: if too many dropped, retry with fewer stratification columns
             if len(df_valid) < 0.9 * len(df):
@@ -314,11 +328,20 @@ class CardiacPreprocessor:
                 valid_strats = strat_counts[strat_counts >= 2].index
                 df_valid = df[df["_strat_key"].isin(valid_strats)].copy()
                 dropped = len(df) - len(df_valid)
-                logging.warning(f"⚠️  Fallback stratification dropped {dropped} samples")
+                dropped_indices = sorted(df.index.difference(df_valid.index).tolist())
+                logging.warning(
+                    "%sFallback stratification dropped %d samples; dropped_row_indices=%s",
+                    context,
+                    dropped,
+                    _format_index_preview(dropped_indices),
+                )
 
         # Perform stratified split (fallback to unstratified if no valid groups)
         if df_valid.empty or df_valid["_strat_key"].nunique() < 2:
-            logging.warning("⚠️  Stratified split unavailable; falling back to random split")
+            logging.warning(
+                "%sStratified split unavailable; falling back to random split",
+                context,
+            )
             train_df, test_df = train_test_split(
                 df, test_size=test_size, random_state=random_state, shuffle=True
             )

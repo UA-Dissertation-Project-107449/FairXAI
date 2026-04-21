@@ -77,6 +77,13 @@ def main():
 
     # Setup
     logging.info("[PHASE] Data profiling started")
+    logging.info(
+        "Run context: pipeline=%s run_id=%s data_raw=%s output_dir=%s",
+        pipeline,
+        run_id or "none",
+        data_raw,
+        results_profiling,
+    )
     results_profiling.mkdir(parents=True, exist_ok=True)
 
     # Initialize profiler
@@ -98,7 +105,7 @@ def main():
         logging.error("Please run scripts/common/load_data.py --pipeline %s first." % pipeline)
         return
 
-    logging.info(f"Found {len(dataset_files)} standardized datasets")
+    logging.info(f"Found {len(dataset_files)} standardized dataset files")
     target_col = pipeline_cfg.get("training", {}).get("target", "heart_disease")
 
     # Profile each dataset
@@ -106,9 +113,7 @@ def main():
 
     for filepath in dataset_files:
         dataset_name = filepath.stem.replace("_standardized", "")
-        logging.info(f"\n{'='*60}")
-        logging.info(f"Profiling: {dataset_name}")
-        logging.info(f"{'='*60}")
+        logging.info("[DATASET] Profiling dataset=%s", dataset_name)
 
         # Load dataset
         df = pd.read_csv(filepath)
@@ -119,52 +124,50 @@ def main():
         all_profiles.append(profile)
 
         # Log key findings
-        logging.info("\n--- Basic Statistics ---")
+        logging.info("Basic statistics:")
         logging.info(f"  Samples: {profile['basic_stats']['n_samples']}")
         logging.info(f"  Features: {profile['basic_stats']['n_features']}")
         logging.info(f"  Disease prevalence: {profile['basic_stats']['target_prevalence']:.2%}")
 
-        logging.info("\n--- Sensitive Attribute Distribution ---")
+        logging.info("Sensitive attribute distribution:")
         for attr, dist in profile["sensitive_attr_distribution"].items():
             logging.info(f"  {attr}:")
             for value, prop in dist["proportions"].items():
                 logging.info(f"    {value}: {prop:.2%} (n={dist['counts'][value]})")
 
-        logging.info("\n--- Representation Balance ---")
+        logging.info("Representation balance:")
         for attr, balance in profile["representation_balance"].items():
             cv = balance["coefficient_of_variation"]
             ratio = balance["size_ratio"]
             logging.info(f"  {attr}:")
-            logging.info(f"    CV: {cv:.3f} (lower is more balanced)")
+            logging.info(f"    CV: {cv:.3f} (0 means perfectly balanced)")
             logging.info(f"    Size ratio (max/min): {ratio:.2f}x")
 
-        logging.info("\n--- Label Imbalance by Group (Statistical Parity) ---")
+        logging.info("Label imbalance by group (statistical parity):")
         for attr, imbalance in profile["label_imbalance_by_group"].items():
             logging.info(f"  {attr}:")
             for group, rate in imbalance["positive_rates"].items():
                 logging.info(f"    {group}: {rate:.2%} disease prevalence")
 
             spd = imbalance["statistical_parity_difference"]
-            logging.info(f"    ⚠️  Max difference: {spd['max_difference']:.2%}")
+            logging.info(f"Max difference: {spd['max_difference']:.2%}")
             if spd["max_ratio"]:
-                logging.info(f"    ⚠️  Max ratio: {spd['max_ratio']:.2f}x")
+                logging.info(f"Max ratio: {spd['max_ratio']:.2f}x")
 
-        logging.info("\n--- Missing Values ---")
+        logging.info("Missing values:")
         if profile["missing_value_analysis"]["total_missing"] > 0:
-            logging.warning(
-                f"  ⚠️  Total missing: {profile['missing_value_analysis']['total_missing']}"
-            )
+            logging.warning(f"Total missing: {profile['missing_value_analysis']['total_missing']}")
             for col, count in profile["missing_value_analysis"]["columns_with_missing"].items():
                 logging.warning(f"    {col}: {count} missing")
         else:
-            logging.info("  [SUCCESS] No missing values")
+            logging.info("[SUCCESS] No missing values")
 
         # Save individual profile
         profile_file = results_profiling / f"{dataset_name}_data_profile.json"
         with open(profile_file, "w") as f:
             # Convert numpy types to native Python for JSON serialization
             json.dump(profile, f, indent=2, default=str)
-        logging.info(f"\n[SUCCESS] Profile saved to: {profile_file}")
+        logging.info(f"[SUCCESS] Profile saved to: {profile_file}")
 
         complexity = profile.get("complexity_metrics")
         if complexity:
@@ -174,17 +177,15 @@ def main():
             logging.info(f"[SUCCESS] Complexity metrics saved to: {complexity_file}")
 
     # Compare datasets
-    logging.info(f"\n{'='*60}")
-    logging.info("CROSS-DATASET COMPARISON")
-    logging.info(f"{'='*60}")
+    logging.info("[PHASE] Cross-dataset comparison")
 
     comparison = compare_datasets(all_profiles)
     logging.info(f"Total datasets: {comparison['n_datasets']}")
     logging.info(f"Total samples: {comparison['total_samples']}")
-    logging.info("\nSample sizes:")
+    logging.info("Sample sizes:")
     for name, size in comparison["sample_sizes"].items():
         logging.info(f"  {name}: {size}")
-    logging.info("\nDisease prevalence:")
+    logging.info("Disease prevalence:")
     for name, prev in comparison["target_prevalence"].items():
         logging.info(f"  {name}: {prev:.2%}")
 
@@ -192,16 +193,14 @@ def main():
     comparison_file = results_profiling / "dataset_comparison.json"
     with open(comparison_file, "w") as f:
         json.dump(comparison, f, indent=2)
-    logging.info(f"\n[SUCCESS] Comparison saved to: {comparison_file}")
+    logging.info(f"[SUCCESS] Comparison saved to: {comparison_file}")
 
     # Generate summary report
-    logging.info(f"\n{'='*60}")
-    logging.info("PRE-PROCESSING FAIRNESS ASSESSMENT SUMMARY")
-    logging.info(f"{'='*60}")
+    logging.info("[PHASE] Pre-processing fairness assessment summary")
 
     for profile in all_profiles:
         dataset_name = profile["dataset_name"]
-        logging.info(f"\n{dataset_name.upper()}:")
+        logging.info("[DATASET] Summary dataset=%s", dataset_name)
 
         # Check for fairness issues
         issues = []
@@ -210,7 +209,7 @@ def main():
         for attr, balance in profile["representation_balance"].items():
             if balance["size_ratio"] and balance["size_ratio"] > 3.0:
                 issues.append(
-                    f"[ERROR] High representation imbalance in {attr} (ratio: {balance['size_ratio']:.1f}x)"
+                    f"High representation imbalance in {attr} (ratio: {balance['size_ratio']:.1f}x)"
                 )
 
         # Check label imbalance
@@ -218,19 +217,22 @@ def main():
             spd = imbalance["statistical_parity_difference"]
             if spd["max_difference"] > 0.15:  # >15% difference
                 issues.append(
-                    f"[ERROR] Significant statistical parity violation in {attr} (diff: {spd['max_difference']:.1%})"
+                    f"Significant statistical parity violation in {attr} (diff: {spd['max_difference']:.1%})"
                 )
 
         if issues:
-            logging.warning("  Potential fairness issues detected:")
+            logging.warning(
+                "  Potential fairness issues detected for dataset=%s (%d)",
+                dataset_name,
+                len(issues),
+            )
             for issue in issues:
-                logging.warning(f"    {issue}")
+                logging.info("    - %s", issue)
         else:
-            logging.info("  [SUCCESS] No major fairness issues detected in raw data")
+            logging.info("[SUCCESS] No major fairness issues detected in raw data")
 
-    logging.info(f"\n{'='*60}")
     logging.info("[PHASE] Data profiling complete")
-    logging.info(f"{'='*60}")
+    logging.info("Profiling summary: datasets_profiled=%d", len(all_profiles))
     logging.info(f"Profiles saved to: {results_profiling}")
 
 

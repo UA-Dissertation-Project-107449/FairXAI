@@ -64,7 +64,23 @@ def load_dataset(
     Returns:
         Tuple of (X_train, y_train, sensitive_train, X_test, y_test, sensitive_test)
     """
-    logging.info(f"\nLoading dataset: {dataset_name}")
+
+    def _drop_duplicate_alias_columns(df: pd.DataFrame, label: str) -> pd.DataFrame:
+        """Drop duplicate Pandas-suffixed aliases like ``col.1`` when ``col`` exists."""
+        duplicate_aliases = []
+        for col in df.columns:
+            if "." not in col:
+                continue
+            base, suffix = col.rsplit(".", 1)
+            if suffix.isdigit() and base in df.columns:
+                duplicate_aliases.append(col)
+
+        if duplicate_aliases:
+            logging.info("  %s: dropping duplicate alias columns %s", label, duplicate_aliases)
+            df = df.drop(columns=duplicate_aliases)
+        return df
+
+    logging.info(f"[DATASET] Loading dataset: {dataset_name}")
 
     train_scaled = data_dir / f"{dataset_name}_train_scaled.csv"
     test_scaled = data_dir / f"{dataset_name}_test_scaled.csv"
@@ -87,6 +103,11 @@ def load_dataset(
         test_df = pd.read_csv(test_raw)
         train_raw_df = train_df
         test_raw_df = test_df
+
+    train_df = _drop_duplicate_alias_columns(train_df, "train")
+    test_df = _drop_duplicate_alias_columns(test_df, "test")
+    train_raw_df = _drop_duplicate_alias_columns(train_raw_df, "train_raw")
+    test_raw_df = _drop_duplicate_alias_columns(test_raw_df, "test_raw")
 
     logging.info(f"  Train: {len(train_df)} samples")
     logging.info(f"  Test: {len(test_df)} samples")
@@ -149,9 +170,7 @@ def train_baseline(
     X_train, y_train, X_test, y_test, sensitive_test, dataset_name, model_params=None
 ):
     """Train baseline model without mitigation."""
-    logging.info(f"\n{'='*60}")
-    logging.info(f"Training Baseline: {dataset_name}")
-    logging.info(f"{'='*60}")
+    logging.info(f"[BASELINE] Training baseline model for dataset={dataset_name}")
 
     model = BaselineLogisticRegression(**(model_params or {}))
     model.train(X_train, y_train)
@@ -216,9 +235,12 @@ def apply_mitigation_techniques(
     for technique_name, config in techniques_config.items():
         stage = config["stage"]
 
-        logging.info(f"\n{'='*60}")
-        logging.info(f"Testing: {technique_name} ({stage})")
-        logging.info(f"{'='*60}")
+        logging.info(
+            "[MITIGATION] Testing technique=%s stage=%s dataset=%s",
+            technique_name,
+            stage,
+            dataset_name,
+        )
 
         try:
             sensitive_attr = next((c for c in sensitive_test.columns), None)
@@ -294,12 +316,17 @@ def apply_mitigation_techniques(
                 }
             )
 
-            logging.info(f"[SUCCESS] {technique_name} complete")
+            logging.info(
+                "[SUCCESS] Mitigation complete dataset=%s technique=%s stage=%s",
+                dataset_name,
+                technique_name,
+                stage,
+            )
             logging.info(f"  Accuracy: {result['test_metrics']['accuracy']:.3f}")
             logging.info(f"  Recall: {result['test_metrics']['recall']:.3f}")
 
         except Exception as e:
-            logging.error(f"[ERROR] Failed to apply {technique_name}: {e}")
+            logging.error(f"Failed to apply {technique_name}: {e}")
             logging.exception(e)
 
     return results
@@ -315,9 +342,22 @@ def create_comparison_table(all_results):
         metrics = result["test_metrics"]
 
         # Extract key fairness metrics
+        # FairnessMetrics.calculate_all_metrics() returns:
+        #   {"group_fairness": {attr: {"demographic_parity": {...}, "equalized_odds": {...}}},
+        #    "individual_fairness": {...}}
         fairness = result.get("fairness", {})
-        demographic_parity = fairness.get("demographic_parity", {})
-        equalized_odds = fairness.get("equalized_odds", {})
+        group_fairness = fairness.get("group_fairness", {})
+        # Flatten per-attribute metrics into combined dicts keyed by attr
+        demographic_parity = {
+            attr: metrics.get("demographic_parity", {})
+            for attr, metrics in group_fairness.items()
+            if "demographic_parity" in metrics
+        }
+        equalized_odds = {
+            attr: metrics.get("equalized_odds", {})
+            for attr, metrics in group_fairness.items()
+            if "equalized_odds" in metrics
+        }
 
         row = {
             "dataset": result["dataset"],
@@ -344,8 +384,12 @@ def create_comparison_table(all_results):
         if equalized_odds:
             for attr, eo_metrics in equalized_odds.items():
                 if isinstance(eo_metrics, dict):
-                    tpr_diff = eo_metrics.get("tpr_difference", np.nan)
-                    fpr_diff = eo_metrics.get("fpr_difference", np.nan)
+                    tpr_diff = eo_metrics.get(
+                        "tpr_max_difference", eo_metrics.get("tpr_difference", np.nan)
+                    )
+                    fpr_diff = eo_metrics.get(
+                        "fpr_max_difference", eo_metrics.get("fpr_difference", np.nan)
+                    )
                     row[f"eq_odds_{attr}_tpr_diff"] = tpr_diff
                     row[f"eq_odds_{attr}_fpr_diff"] = fpr_diff
                     if pd.notna(tpr_diff):
@@ -376,6 +420,44 @@ def create_comparison_table(all_results):
     df["fairness_gain_pct"] = df["fairness_gain"] / df["baseline_fairness_gap"]
 
     return df
+
+
+def _write_mitigation_report(df: "pd.DataFrame", report_file: "Path") -> None:
+    """Write a human-readable markdown summary of mitigation results."""
+    from pathlib import Path
+
+    lines = ["# Mitigation Comparison Report\n"]
+    for dataset in sorted(df["dataset"].unique() if "dataset" in df.columns else []):
+        lines.append(f"## {dataset}\n")
+        sub = df[df["dataset"] == dataset] if "dataset" in df.columns else df
+        # Best by accuracy
+        if "accuracy" in sub.columns and not sub["accuracy"].isna().all():
+            best_acc = sub.loc[sub["accuracy"].idxmax()]
+            lines.append(
+                f"**Best accuracy:** `{best_acc.get('technique', '?')}` — "
+                f"{best_acc['accuracy']:.3f}\n"
+            )
+        # Best fairness (lowest fairness gap if column exists)
+        gap_col = next(
+            (c for c in ("fairness_gap", "demographic_parity_gap") if c in sub.columns), None
+        )
+        if gap_col and not sub[gap_col].isna().all():
+            best_idx = sub[gap_col].abs().idxmin()
+            if pd.notna(best_idx):
+                best_fair = sub.loc[best_idx]
+                lines.append(
+                    f"**Best fairness:** `{best_fair.get('technique', '?')}` — "
+                    f"{gap_col}={best_fair[gap_col]:.3f}\n"
+                )
+        # Summary table: top 5 by accuracy
+        if "accuracy" in sub.columns:
+            top5 = sub.nlargest(5, "accuracy")
+            show_cols = [
+                c for c in ("technique", "accuracy", "recall", gap_col) if c and c in sub.columns
+            ]
+            lines.append(top5[show_cols].round(3).to_markdown(index=False))
+            lines.append("")
+    Path(report_file).write_text("\n".join(lines))
 
 
 def run_analysis(
@@ -444,9 +526,7 @@ def run_analysis(
     if run_id:
         run_dir = get_run_root(base_output, run_id)
         run_dir.mkdir(parents=True, exist_ok=True)
-        output_dir = (
-            Path(output_dir) if output_dir else run_dir / "experiments" / run_mode / "mitigation"
-        )
+        output_dir = Path(output_dir) if output_dir else run_dir / "experiments" / "mitigation"
     else:
         latest_dir = base_output / "latest_run"
         if run_mode == "partial":
@@ -480,6 +560,12 @@ def run_analysis(
 
     # Data directory
     data_dir = project_root / pipeline_cfg["paths"]["processed_dir"]
+    logging.info(
+        "Run context: pipeline=%s run_id=%s processed_dir=%s",
+        pipeline,
+        run_id or "none",
+        data_dir,
+    )
 
     # Techniques to test (from config)
     techniques = experiment_cfg["mitigation_strategies"]
@@ -496,16 +582,14 @@ def run_analysis(
         "threshold_optimizer": techniques["threshold_optimizer"],
     }
 
-    logging.info(f"\nTechniques to test: {list(implemented.keys())}")
+    logging.info(f"Techniques to test: {list(implemented.keys())}")
 
     # Process each dataset
     all_results = []
     baseline_results = []
 
     for dataset_name in datasets:
-        logging.info(f"\n{'='*80}")
-        logging.info(f"PROCESSING: {dataset_name.upper()}")
-        logging.info(f"{'='*80}")
+        logging.info("[DATASET] Processing dataset=%s", dataset_name)
 
         try:
             # Load data
@@ -557,55 +641,50 @@ def run_analysis(
         return
 
     # Summary statistics
-    logging.info(f"\n{'='*80}")
-    logging.info("PROCESSING SUMMARY")
-    logging.info(f"{'='*80}")
+    logging.info("Processing summary:")
     logging.info(f"Datasets processed: {len(set(r['dataset'] for r in all_results))}")
     logging.info(f"Techniques tested: {len(set(r['technique'] for r in all_results))}")
     logging.info(f"Total results: {len(all_results)}")
 
     # Create comparison table
-    logging.info(f"\n{'='*80}")
-    logging.info("GENERATING COMPARISON REPORT")
-    logging.info(f"{'='*80}")
+    logging.info("[PHASE] Generating comparison report")
 
     comparison_df = create_comparison_table(all_results)
     if comparison_df.empty:
         logging.error("No comparison data available")
         return
 
-    # Save results
-    csv_file = output_dir / f"mitigation_comparison_{timestamp}.csv"
-    json_file = output_dir / f"mitigation_comparison_{timestamp}.json"
+    # Save results (no timestamp — run is already scoped by run_id)
+    csv_file = output_dir / "summary.csv"
+    json_file = output_dir / "results.json"
 
     comparison_df.to_csv(csv_file, index=False)
-    logging.info(f"\n[SUCCESS] Saved CSV: {csv_file}")
+    logging.info(f"[SUCCESS] Saved CSV: {csv_file}")
 
     with open(json_file, "w") as f:
         json.dump(all_results, f, indent=2, default=str)
     logging.info(f"[SUCCESS] Saved JSON: {json_file}")
 
+    # Generate human-readable markdown report
+    report_file = output_dir / "report.md"
+    _write_mitigation_report(comparison_df, report_file)
+    logging.info(f"[SUCCESS] Saved report: {report_file}")
+
     # Print summary
-    logging.info(f"\n{'='*80}")
-    logging.info("RESULTS SUMMARY")
-    logging.info(f"{'='*80}")
-    logging.info("\n" + comparison_df.round(3).to_string(index=False))
+    logging.info("Results summary: rows=%d", len(comparison_df))
+    logging.debug("Comparison table:\n%s", comparison_df.round(3).to_string(index=False))
 
     # Clinical constraint check (recall >= 0.70)
     meets_clinical = comparison_df[comparison_df["recall"] >= 0.70]
-    logging.info(
-        f"\n\nTechniques meeting clinical constraint (recall ≥ 0.70): {len(meets_clinical)}"
-    )
+    logging.info(f"Techniques meeting clinical constraint (recall >= 0.70): {len(meets_clinical)}")
     if len(meets_clinical) > 0:
-        logging.info(
-            "\n"
-            + meets_clinical[["dataset", "technique", "recall", "accuracy"]].to_string(index=False)
+        logging.debug(
+            "Clinical-constraint rows:\n%s",
+            meets_clinical[["dataset", "technique", "recall", "accuracy"]].to_string(index=False),
         )
 
-    logging.info(f"\n{'='*80}")
-    logging.info("EXPERIMENT COMPLETE")
-    logging.info(f"{'='*80}")
     logging.info("[PHASE] Mitigation comparison complete")
+    logging.info("Output directory: %s", output_dir)
 
     if run_id:
         update_latest_pointer(base_output, run_dir, logger)

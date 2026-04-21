@@ -8,7 +8,7 @@
 #
 # Usage
 # -----
-# python scripts/experiments/run_feature_selection_study.py --pipeline cardiac
+# python scripts/studies/run_feature_selection_study.py --pipeline cardiac
 #
 # Datasets: small datasets only (fast comparison, no cardio70k).
 # Models:   all four, but logistic_regression is the primary reference (most interpretable).
@@ -43,4 +43,4 @@ cv_folds: 5
 random_seed: 42
 
 # Output relative to project root
-output_dir: output/cardiac/feature_selection_study
+output_dir: output/cardiac/studies/feature_selection

@@ -179,7 +179,7 @@ comparison:
   by_sensitive_attribute: true
 
 output:
-  results_dir: "output/cardiac/experiments/full/latest_run/mitigation"
+  results_dir: "output/cardiac/experiments/mitigation"
   artifacts:
     - comparison_table_csv
     - pareto_frontier_png

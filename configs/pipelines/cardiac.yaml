@@ -4,10 +4,6 @@ paths:
   external_dir: data/external/cardiac
   raw_dir: data/raw/cardiac
   processed_dir: data/processed/cardiac
-  experiments_dir: output/cardiac/baseline/latest_run/results
-  models_dir: output/cardiac/baseline/latest_run/models
-  results_fairness_dir: output/cardiac/baseline/latest_run/fairness
-  results_binning_dir: output/cardiac/experiments/full/latest_run/binning
 
 runtime:
   datasets: [cleveland]
@@ -20,12 +16,16 @@ split:
 training:
   model: logistic_regression   # default model for single-model runs
   model_types: [logistic_regression, random_forest, svm, xgboost]
+  training_methods: [single_split, kfold_cv]
   # Base hyperparameters for each model type live in configs/models/<type>.yaml.
   thresholds: [0.3, 0.4, 0.5, 0.6, 0.7]
   # Feature selection mode (see src/fairxai/data/feature_selection.py).
   # exclude_sensitive = model-blind privacy baseline (standard deployment).
   # Override with --feature-selection-mode CLI flag for ablation studies.
   feature_selection_mode: exclude_sensitive
+  rfe_top_k: 10
+  use_hpo: false
+  cv_n_jobs: 1
 
 fairness:
   sensitive_attributes: [age_group, sex, ethnicity, group_cluster]
@@ -37,3 +37,18 @@ xai:
   cv_lime_instances: 3
   global_max_samples: 1000
   skip_shap_model_types: [svm]
+
+studies:
+  skip: false
+
+scheduling:
+  mode: auto_safe
+  max_cores: null
+  cpu_fraction: 0.75
+  parallel_studies: true
+  parallel_experiments: false
+  fs_jobs: 1
+  hpo_search_n_jobs: null
+  hpo_model_n_jobs: null
+  warn_rows_threshold: 50000
+  max_memory_fraction: 0.80

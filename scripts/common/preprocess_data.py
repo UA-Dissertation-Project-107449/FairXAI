@@ -236,12 +236,19 @@ def main():
         stage_name="preprocess",
     )
     if run_id:
-        results_fairness = project_root / f"output/{pipeline}/runs/{run_id}/profiling/fairness"
+        results_fairness = project_root / f"output/{pipeline}/runs/{run_id}/profiling/data_fairness"
     else:
-        results_fairness = project_root / f"output/{pipeline}/profiling/fairness"
+        results_fairness = project_root / f"output/{pipeline}/profiling/data_fairness"
 
     # Setup
     logging.info("[PHASE] Preprocessing started")
+    logging.info(
+        "Run context: pipeline=%s run_id=%s data_raw=%s data_processed=%s",
+        pipeline,
+        run_id or "none",
+        data_raw,
+        data_processed_base,
+    )
     results_fairness.mkdir(parents=True, exist_ok=True)
 
     # Configuration
@@ -288,16 +295,14 @@ def main():
         logging.error("Please run scripts/common/load_data.py --pipeline %s first." % pipeline)
         return
 
-    logging.info(f"\nFound {len(dataset_files)} datasets to preprocess")
+    logging.info(f"Found {len(dataset_files)} datasets to preprocess")
 
     target_col = pipeline_cfg.get("training", {}).get("target", "heart_disease")
 
     # Process each dataset with each binning strategy
     for binning_strategy in binning_strategies:
         if binning_strategy:
-            logging.info(f"\n{'#'*80}")
-            logging.info(f"# PROCESSING WITH BINNING STRATEGY: {binning_strategy}")
-            logging.info(f"{'#'*80}")
+            logging.info("[BINNING] Strategy=%s", binning_strategy)
 
         preprocessing_summary = {}
 
@@ -306,12 +311,12 @@ def main():
             subdir = f"{dataset_name}_{binning_strategy}" if binning_strategy else dataset_name
             data_processed = data_processed_base / subdir
             data_processed.mkdir(parents=True, exist_ok=True)
-            logging.info(f"\n{'='*60}")
-            logging.info(f"Preprocessing: {dataset_name}")
-            if binning_strategy:
-                logging.info(f"Binning: {binning_strategy}")
-            logging.info(f"Output directory: {data_processed}")
-            logging.info(f"{'='*60}")
+            logging.info(
+                "[DATASET] Preprocessing dataset=%s binning=%s output_dir=%s",
+                dataset_name,
+                binning_strategy or "default",
+                data_processed,
+            )
 
             # Load dataset
             df = pd.read_csv(filepath)
@@ -335,7 +340,7 @@ def main():
                     .reset_index(drop=True)
                 )
                 logging.info(
-                    f"  Subsampled {dataset_name}: {original_len} -> {len(df)} rows "
+                    f"  Subsampled {dataset_name}: from {original_len} to {len(df)} rows "
                     f"(stratified on '{target_col}')"
                 )
 
@@ -344,7 +349,7 @@ def main():
             if "age_raw" in df.columns and get_age_unit(dataset_name) == "days":
                 df["age_raw"] = (df["age_raw"] / 365.25).round(2)
                 logging.info(
-                    f"  age_raw normalized: days -> years for {dataset_name} "
+                    f"  age_raw normalized: days to years for {dataset_name} "
                     f"(range now {df['age_raw'].min():.1f}-{df['age_raw'].max():.1f} yrs)"
                 )
 
@@ -361,7 +366,7 @@ def main():
 
             # Apply age binning if specified
             if binning_strategy:
-                logging.info(f"\n--- Age Binning: {binning_strategy} ---")
+                logging.info("Age binning strategy: %s", binning_strategy)
                 if "age_raw" not in df.columns:
                     logging.error("'age_raw' column not found. Cannot apply binning.")
                     continue
@@ -383,13 +388,13 @@ def main():
                     logging.info(f"  {age_group}: {count} ({pct:.1f}%)")
 
             # Step 1: Analyze missing values
-            logging.info("\n--- Missing Value Analysis ---")
+            logging.info("Missing value analysis:")
             missing_analysis = preprocessor.analyze_missing_values(df)
 
             if missing_analysis["total_missing"] == 0:
                 logging.info("[SUCCESS] No missing values detected")
             else:
-                logging.warning(f"⚠️  Found {missing_analysis['total_missing']} missing values")
+                logging.warning(f"Found {missing_analysis['total_missing']} missing values")
                 for col, info in missing_analysis["missing_by_column"].items():
                     logging.warning(
                         f"  {col}: {info['count']} ({info['percentage']:.1f}%) - {info['action']}"
@@ -404,15 +409,19 @@ def main():
                 continue
 
             # Step 2: Stratified train/test split
-            logging.info("\n--- Stratified Train/Test Split ---")
+            logging.info("Stratified train/test split:")
             train_df, test_df = preprocessor.stratified_split(
-                df_clean, target=target_col, test_size=test_size, random_state=random_state
+                df_clean,
+                target=target_col,
+                test_size=test_size,
+                random_state=random_state,
+                context_label=f"dataset={dataset_name}, binning={binning_strategy or 'default'}",
             )
 
             # Verify split maintains distributions
             verification = preprocessor.verify_split_fairness(train_df, test_df, target=target_col)
 
-            logging.info("\n--- Split Verification ---")
+            logging.info("Split verification:")
             logging.info("Train target distribution:")
             for label, pct in verification["target_distribution"]["train"].items():
                 logging.info(f"  Class {label}: {pct:.2%}")
@@ -421,7 +430,7 @@ def main():
                 logging.info(f"  Class {label}: {pct:.2%}")
 
             # Step 3: Prepare features and scale
-            logging.info("\n--- Feature Preparation & Scaling ---")
+            logging.info("Feature preparation and scaling:")
 
             X_train, y_train, feature_names = preprocessor.prepare_features(
                 train_df, target=target_col
@@ -438,7 +447,7 @@ def main():
             )
 
             # Step 4: Save processed datasets
-            logging.info("\n--- Saving Processed Data ---")
+            logging.info("Saving processed data:")
 
             # Save as DataFrames with all columns
             train_processed = train_df.copy()
@@ -469,6 +478,19 @@ def main():
                 c for c in ["sex_extended", "sex_bin"] if c in test_df.columns
             ]
 
+            # Avoid duplicate column names in scaled outputs (which pandas later
+            # re-labels as ".1", ".2", ... and can trigger noisy warnings).
+            sens_cols_train = [
+                c
+                for c in dict.fromkeys(sens_cols_train)
+                if c not in X_train_scaled_df.columns and c != target_col
+            ]
+            sens_cols_test = [
+                c
+                for c in dict.fromkeys(sens_cols_test)
+                if c not in X_test_scaled_df.columns and c != target_col
+            ]
+
             train_scaled = pd.concat(
                 [
                     X_train_scaled_df.reset_index(drop=True),
@@ -491,7 +513,7 @@ def main():
             logging.info(f"[SUCCESS] Test scaled: {test_scaled_file}")
 
             # Step 5: Post-preprocessing fairness check
-            logging.info("\n--- Post-Preprocessing Fairness Assessment ---")
+            logging.info("Post-preprocessing fairness assessment:")
 
             train_profile = profiler.profile_dataset(
                 train_processed, target=target_col, dataset_name=f"{dataset_name}_train"
@@ -502,7 +524,7 @@ def main():
 
             # Log key fairness metrics
             for split_name, profile in [("Train", train_profile), ("Test", test_profile)]:
-                logging.info(f"\n{split_name} Set:")
+                logging.info(f"{split_name} set:")
                 logging.info(f"  Samples: {profile['basic_stats']['n_samples']}")
                 logging.info(
                     f"  Disease prevalence: {profile['basic_stats']['target_prevalence']:.2%}"
@@ -513,15 +535,15 @@ def main():
                     logging.info(f"  {attr} - Max parity difference: {spd['max_difference']:.2%}")
 
             # Save fairness profiles
-            train_fairness_file = results_fairness / f"{dataset_name}_train_fairness.json"
-            test_fairness_file = results_fairness / f"{dataset_name}_test_fairness.json"
+            train_fairness_file = results_fairness / f"{dataset_name}_train.json"
+            test_fairness_file = results_fairness / f"{dataset_name}_test.json"
 
             with open(train_fairness_file, "w") as f:
                 json.dump(train_profile, f, indent=2, default=str)
             with open(test_fairness_file, "w") as f:
                 json.dump(test_profile, f, indent=2, default=str)
 
-            logging.info("\n[SUCCESS] Fairness profiles saved")
+            logging.info("[SUCCESS] Fairness profiles saved")
 
             # Save preprocessing summary (stringify to avoid Interval keys)
             preprocessing_summary[dataset_name] = _stringify(
@@ -546,16 +568,20 @@ def main():
             summary_file = data_processed / "preprocessing_summary.json"
             with open(summary_file, "w") as f:
                 json.dump(preprocessing_summary, f, indent=2, default=str)
-
-                logging.info(f"\n{'='*60}")
-                logging.info(
-                    f"[SUCCESS] Preprocessing complete for {dataset_name} ({binning_strategy or 'default'})"
-                )
-                logging.info(f"{'='*60}")
+            logging.info(
+                "[SUCCESS] Dataset preprocessing complete: dataset=%s binning=%s",
+                dataset_name,
+                binning_strategy or "default",
+            )
             logging.info(f"Processed datasets saved to: {data_processed}")
             logging.info(f"Fairness assessments saved to: {results_fairness}")
 
-            logging.info("[PHASE] Preprocessing complete")
+    logging.info("[PHASE] Preprocessing complete")
+    logging.info(
+        "Preprocessing summary: datasets=%d binning_strategies=%d",
+        len(dataset_files),
+        len(binning_strategies),
+    )
 
 
 if __name__ == "__main__":

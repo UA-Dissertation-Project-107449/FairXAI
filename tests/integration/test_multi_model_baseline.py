@@ -56,7 +56,7 @@ def tiny_pipeline_config(tmp_path, tiny_cardiac_processed):
     cfg["paths"]["processed_dir"] = str(tiny_cardiac_processed.relative_to(tmp_path))
     cfg["paths"]["experiments_dir"] = "baseline/results"
     cfg["paths"]["models_dir"] = "baseline/models"
-    cfg["paths"]["results_fairness_dir"] = "baseline/fairness"
+    cfg["paths"]["results_fairness_dir"] = "baseline/prediction_fairness"
     cfg["paths"]["results_binning_dir"] = "binning"
     cfg["runtime"]["schema_mapping_json"] = str(schema_path.relative_to(tmp_path))
 
@@ -94,6 +94,8 @@ def test_all_four_models_produce_prediction_csvs(tiny_pipeline_config, model_sub
         str(tiny_pipeline_config),
         "--pipeline",
         "cardiac",
+        "--output-dir",
+        str(tiny_pipeline_config / "baseline"),
         "--model-types",
         *model_subset,
     ]
@@ -117,6 +119,7 @@ def test_all_four_models_produce_prediction_csvs(tiny_pipeline_config, model_sub
         f"STDERR:\n{result.stderr[-3000:]}"
     )
 
+    predictions_dir = results_dir / "predictions"
     required_cols = {
         "y_true",
         "y_pred",
@@ -128,8 +131,8 @@ def test_all_four_models_produce_prediction_csvs(tiny_pipeline_config, model_sub
         "sex",
     }
     for model_type in model_subset:
-        train_csv = results_dir / f"cleveland_{model_type}_train_predictions.csv"
-        test_csv = results_dir / f"cleveland_{model_type}_test_predictions.csv"
+        train_csv = predictions_dir / f"cleveland_{model_type}_train.csv"
+        test_csv = predictions_dir / f"cleveland_{model_type}_test.csv"
         assert train_csv.exists(), f"Missing train predictions for {model_type}"
         assert test_csv.exists(), f"Missing test predictions for {model_type}"
 

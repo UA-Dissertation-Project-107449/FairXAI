@@ -126,8 +126,8 @@ class TestPerGroupComparison:
         sample_baseline_fairness_json,
         minimal_fairness_metrics_dict,
     ):
-        """_build_per_group_comparison writes per_group_comparison.csv when baseline JSON exists."""
-        output_dir = tmp_run_root / "experiments" / "full" / "comparisons"
+        """_build_per_group_comparison writes per_group.csv when baseline JSON exists."""
+        output_dir = tmp_run_root / "experiments" / "comparisons" / "data"
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Minimal df_success with one experiment
@@ -154,10 +154,10 @@ class TestPerGroupComparison:
 
         _build_per_group_comparison(df_success, mock_versioning, tmp_run_root, output_dir)
 
-        pg_csv = output_dir / "per_group_comparison.csv"
-        assert pg_csv.exists(), "per_group_comparison.csv was not created"
+        pg_csv = output_dir / "per_group.csv"
+        assert pg_csv.exists(), "per_group.csv was not created"
         result = pd.read_csv(pg_csv)
-        assert len(result) > 0, "per_group_comparison.csv is empty"
+        assert len(result) > 0, "per_group.csv is empty"
         required_cols = {
             "dataset",
             "model_type",

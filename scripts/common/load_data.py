@@ -84,6 +84,13 @@ def main():
 
     # Setup
     logging.info("[PHASE] Data loading started")
+    logging.info(
+        "Run context: pipeline=%s run_id=%s data_external=%s data_raw=%s",
+        pipeline,
+        run_id or "none",
+        data_external,
+        data_raw,
+    )
     data_raw.mkdir(parents=True, exist_ok=True)
     results_profiling.mkdir(parents=True, exist_ok=True)
 
@@ -101,12 +108,12 @@ def main():
                 datasets[dataset_name] = loader.load_dataset(dataset_name, str(data_external))
                 logging.info(f"[SUCCESS] Loaded {dataset_name}: {len(datasets[dataset_name])} rows")
             except Exception as e:
-                logging.error(f"[ERROR] Failed to load {dataset_name}: {e}")
+                logging.error(f"Failed to load {dataset_name}: {e}")
     else:
         datasets = loader.load_all_cardiac_datasets(str(data_external))
 
     if not datasets:
-        logging.error("[ERROR] No datasets loaded. Exiting.")
+        logging.error("No datasets loaded. Exiting.")
         return
 
     # Process each dataset
@@ -114,7 +121,7 @@ def main():
     standardized_datasets = {}
 
     for dataset_name, df_raw in datasets.items():
-        logging.info(f"\n--- Processing: {dataset_name} ---")
+        logging.info("[DATASET] Processing dataset=%s", dataset_name)
 
         # Generate raw summary
         summary = get_dataset_summary(df_raw, dataset_name)
@@ -143,14 +150,14 @@ def main():
             logging.info(f"  Heart disease: {df_raw['heart_disease'].value_counts().to_dict()}")
 
         except Exception as e:
-            logging.error(f"[ERROR] Failed to verify/save {dataset_name}: {e}")
+            logging.error(f"Failed to verify/save {dataset_name}: {e}")
             continue
 
     # Save summaries
     summary_file = results_profiling / "dataset_summaries.json"
     with open(summary_file, "w") as f:
         json.dump(summaries, f, indent=2)
-    logging.info(f"\n[SUCCESS] Dataset summaries saved to: {summary_file}")
+    logging.info(f"[SUCCESS] Dataset summaries saved to: {summary_file}")
 
     # Generate combined report
     report = {
@@ -175,6 +182,11 @@ def main():
     logging.info(f"[SUCCESS] Loading report saved to: {report_file}")
 
     logging.info("[PHASE] Data loading complete")
+    logging.info(
+        "Data loading summary: loaded=%d standardized=%d",
+        len(datasets),
+        len(standardized_datasets),
+    )
     logging.info(f"Standardized datasets saved to: {data_raw}")
     logging.info(f"Profiling results saved to: {results_profiling}")
 

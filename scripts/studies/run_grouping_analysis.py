@@ -1,30 +1,39 @@
 #!/usr/bin/env python3
 """
-Run clustering and similarity subgroup discovery (stage 4b).
+Run clustering and similarity subgroup discovery (standalone study).
 
 Discovers latent patient subgroups via unsupervised clustering and evaluates
 per-cluster fairness.  Writes ``group_cluster`` back to the processed CSV so
-downstream stages (train, assess) treat clusters as a sensitive attribute.
+subsequent pipeline runs treat clusters as a sensitive attribute.
+
+Output: output/<pipeline>/studies/grouping/<study_id>/
 
 Usage:
-    python scripts/experiments/run_grouping_analysis.py --run-id latest
-    python scripts/experiments/run_grouping_analysis.py --run-id 2026-04-10_run_01 \\
+    python scripts/studies/run_grouping_analysis.py
+    python scripts/studies/run_grouping_analysis.py \\
         --datasets cleveland --methods kmeans hierarchical
-    RUN_GROUPING=false bash scripts/cardiac/cardiac_pipeline.sh  # skip entirely
+    # Optionally load baseline predictions for per-cluster fairness:
+    python scripts/studies/run_grouping_analysis.py --run-id <pipeline_run_id>
 """
 
 import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
 # Add src to path (matches pattern used in other scripts)
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-from fairxai.cli.runner_base import get_project_root, setup_phase_logging
-from fairxai.cli.runner_utils import get_run_root, resolve_run_id
+from fairxai.cli.runner_base import get_project_root, setup_study_logging
+from fairxai.cli.runner_utils import (
+    get_run_root,
+    get_study_root,
+    resolve_run_id,
+    update_output_study_pointer,
+)
 from fairxai.clustering import (
     ClusteringEngine,
     ClusteringError,
@@ -46,22 +55,30 @@ _CLUSTERING_CONFIG = _ROOT / "configs" / "experiments" / "clustering.yaml"
 
 
 def _resolve_datasets(cli_datasets: list[str], config: dict) -> list[str]:
-    """Flag → config → discover from processed dir."""
+    """Flag to config to discover from processed dir."""
     if cli_datasets:
         return cli_datasets
     from_config = (config.get("data", {}) or {}).get("datasets", [])
     if from_config:
         return list(from_config)
-    # Auto-discover: any *_processed.csv in processed dir
-    found = [p.stem.replace("_processed", "") for p in _PROCESSED_DIR.glob("*_processed.csv")]
+    # Auto-discover: processed files + split files in both flat and sub-dir layouts.
+    found = {p.stem.replace("_processed", "") for p in _PROCESSED_DIR.glob("*_processed.csv")}
+    found |= {p.stem.replace("_train", "") for p in _PROCESSED_DIR.glob("*_train.csv")}
+    for dataset_dir in _PROCESSED_DIR.iterdir():
+        if not dataset_dir.is_dir():
+            continue
+        candidate = dataset_dir / f"{dataset_dir.name}_train.csv"
+        if candidate.exists():
+            found.add(dataset_dir.name)
     if found:
-        logger.info("Auto-discovered datasets: %s", found)
-        return found
+        discovered = sorted(found)
+        logger.info("Auto-discovered datasets: %s", discovered)
+        return discovered
     return []
 
 
 def _resolve_methods(cli_methods: list[str], config: dict) -> list[str]:
-    """Flag → config keys → all four."""
+    """Flag to config keys to all four."""
     if cli_methods:
         return [m.lower() for m in cli_methods]
     from_config = list((config.get("clustering_methods", {}) or {}).keys())
@@ -69,21 +86,131 @@ def _resolve_methods(cli_methods: list[str], config: dict) -> list[str]:
 
 
 def _load_predictions(run_root: Path, dataset: str) -> pd.DataFrame | None:
-    """Try to load any baseline prediction CSV for this dataset."""
+    """Load baseline predictions for one model, preferring train+test pair files."""
     results_dir = run_root / "baseline" / "results"
     if not results_dir.exists():
         return None
-    candidates = sorted(results_dir.glob(f"{dataset}_*_predictions.csv"))
-    if not candidates:
-        return None
-    return pd.read_csv(candidates[0])
+
+    def _model_key(path: Path, split_suffix: str) -> str | None:
+        stem = path.stem
+        prefix = f"{dataset}_"
+        if not stem.startswith(prefix) or not stem.endswith(split_suffix):
+            return None
+        return stem[len(prefix) : -len(split_suffix)]
+
+    train_files = sorted(results_dir.glob(f"{dataset}_*_train_predictions.csv"))
+    test_files = sorted(results_dir.glob(f"{dataset}_*_test_predictions.csv"))
+
+    train_by_model = {
+        model: path
+        for path in train_files
+        if (model := _model_key(path, "_train_predictions")) is not None
+    }
+    test_by_model = {
+        model: path
+        for path in test_files
+        if (model := _model_key(path, "_test_predictions")) is not None
+    }
+
+    common_models = sorted(set(train_by_model) & set(test_by_model))
+    if common_models:
+        model = common_models[0]
+        train_df = pd.read_csv(train_by_model[model])
+        test_df = pd.read_csv(test_by_model[model])
+        logger.info(
+            "  Loaded baseline predictions for model=%s (train=%d, test=%d)",
+            model,
+            len(train_df),
+            len(test_df),
+        )
+        return pd.concat([train_df, test_df], ignore_index=True)
+
+    merged_candidates = [
+        p
+        for p in sorted(results_dir.glob(f"{dataset}_*_predictions.csv"))
+        if "_train_predictions" not in p.name and "_test_predictions" not in p.name
+    ]
+    if merged_candidates:
+        logger.info("  Loaded merged prediction file: %s", merged_candidates[0].name)
+        return pd.read_csv(merged_candidates[0])
+
+    return None
+
+
+def _load_grouping_dataframe(dataset: str) -> tuple[pd.DataFrame, Path, dict[str, Any]]:
+    """Resolve grouping input from processed file or from train/test split files."""
+    processed_path = _PROCESSED_DIR / f"{dataset}_processed.csv"
+    if processed_path.exists():
+        logger.info("  Using processed input: %s", processed_path)
+        return pd.read_csv(processed_path), processed_path, {"source": "processed"}
+
+    split_candidates = [
+        (
+            _PROCESSED_DIR / dataset / f"{dataset}_train.csv",
+            _PROCESSED_DIR / dataset / f"{dataset}_test.csv",
+        ),
+        (
+            _PROCESSED_DIR / f"{dataset}_train.csv",
+            _PROCESSED_DIR / f"{dataset}_test.csv",
+        ),
+    ]
+
+    for train_path, test_path in split_candidates:
+        if not train_path.exists() or not test_path.exists():
+            continue
+        train_df = pd.read_csv(train_path)
+        test_df = pd.read_csv(test_path)
+        logger.info(
+            "  Using split inputs: train=%s, test=%s",
+            train_path,
+            test_path,
+        )
+        merged_df = pd.concat([train_df, test_df], ignore_index=True)
+        return (
+            merged_df,
+            processed_path,
+            {
+                "source": "splits",
+                "train_path": train_path,
+                "test_path": test_path,
+                "train_rows": len(train_df),
+            },
+        )
+
+    raise FileNotFoundError(
+        f"No processed or split files found for dataset '{dataset}' under {_PROCESSED_DIR}"
+    )
+
+
+def _persist_group_cluster(
+    df: pd.DataFrame,
+    processed_path: Path,
+    source_meta: dict[str, Any],
+) -> None:
+    """Persist group_cluster to canonical processed file and source split files when relevant."""
+    processed_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(processed_path, index=False)
+    logger.info("[SUCCESS] group_cluster written to %s", processed_path.name)
+
+    if source_meta.get("source") != "splits":
+        return
+
+    train_path = source_meta["train_path"]
+    test_path = source_meta["test_path"]
+    train_rows = int(source_meta["train_rows"])
+
+    df.iloc[:train_rows].to_csv(train_path, index=False)
+    df.iloc[train_rows:].to_csv(test_path, index=False)
+    logger.info(
+        "[SUCCESS] group_cluster updated split files: %s and %s", train_path.name, test_path.name
+    )
 
 
 def _report(label: str, result) -> None:
     if result is not None:
         logger.info("[SUCCESS] %s", label)
     else:
-        logger.warning("[WARNING] %s: skipped (no output produced)", label)
+        logger.info("[INFO] %s: skipped (no output produced)", label)
 
 
 # ------------------------------------------------------------------
@@ -98,15 +225,14 @@ def run_dataset(
     config: dict,
     methods: list[str],
 ) -> None:
-    logger.info("[PHASE] grouping — dataset: %s", dataset)
+    logger.info("[DATASET] grouping dataset=%s", dataset)
 
-    # Load processed CSV
-    processed_path = _PROCESSED_DIR / f"{dataset}_processed.csv"
-    if not processed_path.exists():
-        logger.warning("[WARNING] %s_processed.csv not found, skipping dataset", dataset)
+    try:
+        df, processed_path, source_meta = _load_grouping_dataframe(dataset)
+    except FileNotFoundError as exc:
+        logger.warning("[WARNING] %s", exc)
         return
 
-    df = pd.read_csv(processed_path)
     logger.info("  Loaded %d samples from %s", len(df), processed_path.name)
 
     ds_out = output_dir / dataset
@@ -119,7 +245,7 @@ def run_dataset(
         .get("exclude", ["heart_disease", "age_group", "sex", "ethnicity", "group_cluster"])
     )
 
-    # Build method config — restrict to requested methods
+    # Build method config - restrict to requested methods
     method_cfg = {
         k: v for k, v in (config.get("clustering_methods", {}) or {}).items() if k in methods
     }
@@ -134,15 +260,14 @@ def run_dataset(
         # Write cluster_assignments.csv
         assignments = cluster_result.to_assignments_df()
         assignments.to_csv(ds_out / "cluster_assignments.csv")
-        logger.info("[SUCCESS] cluster_assignments.csv — %d clusters", cluster_result.n_clusters)
+        logger.info("[SUCCESS] cluster_assignments.csv clusters=%d", cluster_result.n_clusters)
 
-        # Write group_cluster back into processed CSV
+        # Persist group_cluster to canonical processed CSV and split sources.
         df["group_cluster"] = cluster_result.group_cluster.values
-        df.to_csv(processed_path, index=False)
-        logger.info("[SUCCESS] group_cluster written back to %s", processed_path.name)
+        _persist_group_cluster(df, processed_path, source_meta)
 
     except ClusteringError as exc:
-        logger.error("[ERROR] clustering failed for %s: %s", dataset, exc)
+        logger.error("clustering failed for %s: %s", dataset, exc)
         return  # Can't proceed without cluster labels
 
     # -- 2. Per-cluster fairness (requires predictions) ----------------
@@ -173,11 +298,11 @@ def run_dataset(
         fairness_df.to_csv(ds_out / "fairness_by_cluster.csv", index=False)
 
         corr_df = fpc.cramers_v_matrix(merged, cluster_col="group_cluster")
-        _report("correlation_matrix (Cramér's V)", corr_df if not corr_df.empty else None)
+        _report("correlation_matrix (Cramers V)", corr_df if not corr_df.empty else None)
         corr_df.to_csv(ds_out / "correlation_matrix.csv", index=False)
     else:
-        logger.warning(
-            "[WARNING] cluster fairness: no prediction CSV found for %s "
+        logger.info(
+            "[INFO] cluster fairness: no compatible prediction CSV found for %s "
             "(run stage 5 first). Skipping per-cluster metrics.",
             dataset,
         )
@@ -233,11 +358,11 @@ def run_dataset(
         )
         _report("violation_density_map", map_result.output_file)
     else:
-        logger.warning(
-            "[WARNING] similarity: no %r column found (run stage 5 first). Skipping.", pred_col
+        logger.info(
+            "[INFO] similarity: no %r column found (run stage 5 first). Skipping.", pred_col
         )
 
-    logger.info("[SUCCESS] grouping complete — %s", ds_out)
+    logger.info("[SUCCESS] grouping complete: output_dir=%s", ds_out)
 
 
 # ------------------------------------------------------------------
@@ -246,8 +371,19 @@ def run_dataset(
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Grouping & similarity subgroup discovery (stage 4b)")
-    p.add_argument("--run-id", default=None, help="Run ID or 'latest'")
+    p = argparse.ArgumentParser(
+        description="Grouping & similarity subgroup discovery (standalone study)"
+    )
+    p.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional: pipeline run ID to load baseline predictions for per-cluster fairness",
+    )
+    p.add_argument(
+        "--pipeline",
+        default="cardiac",
+        help="Pipeline name (default: cardiac)",
+    )
     p.add_argument(
         "--datasets",
         nargs="+",
@@ -261,6 +397,11 @@ def parse_args() -> argparse.Namespace:
         help="Clustering methods to use: kmeans hierarchical dbscan gaussian_mixture",
     )
     p.add_argument("--config", default=None, help="Path to clustering.yaml (optional override)")
+    p.add_argument(
+        "--study-id",
+        default=None,
+        help="Override auto-generated study ID (useful for tests and reproducible runs)",
+    )
     p.add_argument("-v", action="store_true", help="Verbose logging")
     p.add_argument("-vv", action="store_true", help="Debug logging")
     return p.parse_args()
@@ -269,8 +410,15 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     verbose = 2 if args.vv else (1 if args.v else 0)
-    setup_phase_logging(
-        _ROOT, "grouping", verbose=verbose, run_id=args.run_id, stage_name="grouping"
+    pipeline = args.pipeline
+    study_id = args.study_id if args.study_id else resolve_run_id()
+    setup_study_logging(
+        _ROOT,
+        "grouping",
+        study_id,
+        "grouping.log",
+        verbose=verbose,
+        log_subdir=pipeline,
     )
 
     # Load config
@@ -281,29 +429,41 @@ def main() -> None:
     else:
         config = load_yaml_config(str(config_path))
 
-    # Resolve run root
-    run_id = resolve_run_id(args.run_id)
-    run_root = get_run_root(_ROOT / "output" / "cardiac", run_id)
-    output_dir = run_root / "grouping"
+    # Study output dir (not tied to a pipeline run)
+    base_results = _ROOT / "output" / pipeline
+    output_dir = get_study_root(base_results, "grouping", study_id)
+
+    # Optionally resolve a pipeline run root to load baseline predictions
+    run_root: Path | None = None
+    if args.run_id:
+        run_root = get_run_root(base_results, args.run_id)
 
     datasets = _resolve_datasets(args.datasets or [], config)
     methods = _resolve_methods(args.methods or [], config)
 
     if not datasets:
-        logger.error("[ERROR] No datasets found. Pass --datasets or ensure processed CSVs exist.")
+        logger.error("No datasets found. Pass --datasets or ensure processed CSVs exist.")
         sys.exit(1)
 
+    logger.info("[PHASE] grouping study started")
     logger.info(
-        "[PHASE] grouping analysis — run_id=%s datasets=%s methods=%s", run_id, datasets, methods
+        "[RUN_CONTEXT] pipeline=%s study_id=%s datasets=%s methods=%s output_dir=%s run_root=%s",
+        pipeline,
+        study_id,
+        datasets,
+        methods,
+        output_dir,
+        run_root if run_root else "none",
     )
 
     for dataset in datasets:
         try:
-            run_dataset(dataset, run_root, output_dir, config, methods)
+            run_dataset(dataset, run_root or output_dir, output_dir, config, methods)
         except Exception as exc:
-            logger.error("[ERROR] dataset %s failed: %s", dataset, exc, exc_info=True)
+            logger.error("dataset %s failed: %s", dataset, exc, exc_info=True)
 
-    logger.info("[SUCCESS] done — artifacts in %s", output_dir)
+    update_output_study_pointer(base_results, "grouping", study_id)
+    logger.info("[SUCCESS] grouping study complete: output_dir=%s", output_dir)
 
 
 if __name__ == "__main__":

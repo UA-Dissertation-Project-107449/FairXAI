@@ -32,6 +32,11 @@ def test_prefect_help_lists_scope_flags() -> None:
     output = (result.stdout or "") + (result.stderr or "")
     assert "--datasets" in output
     assert "--model-types" in output
+    assert "--study-mode" in output
+    assert "--parallel-studies" in output
+    assert "--parallel-experiments" in output
+    assert "--max-cores" in output
+    assert "--hpo-search-n-jobs" in output
 
 
 def test_combinatorial_help_lists_scope_flags() -> None:
@@ -53,6 +58,14 @@ def test_bash_parser_accepts_scope_flags_before_stage_validation() -> None:
             "cleveland",
             "--model-types",
             "logistic_regression",
+            "--study-mode",
+            "auto_safe",
+            "--parallel-studies",
+            "--parallel-experiments",
+            "--max-cores",
+            "4",
+            "--hpo-search-n-jobs",
+            "2",
             "--go-until",
             "invalid_stage_name",
         ]
@@ -63,3 +76,8 @@ def test_bash_parser_accepts_scope_flags_before_stage_validation() -> None:
     assert "Unknown stage 'invalid_stage_name'" in combined
     assert "Unknown argument '--datasets'" not in combined
     assert "Unknown argument '--model-types'" not in combined
+    assert "Unknown argument '--study-mode'" not in combined
+    assert "Unknown argument '--parallel-studies'" not in combined
+    assert "Unknown argument '--parallel-experiments'" not in combined
+    assert "Unknown argument '--max-cores'" not in combined
+    assert "Unknown argument '--hpo-search-n-jobs'" not in combined

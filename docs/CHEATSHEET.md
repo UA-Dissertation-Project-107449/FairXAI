@@ -234,13 +234,14 @@ output/cardiac/runs/<run_id>/
 ├── baseline/
 │   ├── models/                # Trained model .pkl files (one per model type)
 │   ├── predictions/           # Prediction CSVs (one per model type)
-│   └── fairness/              # Stage-6 fairness assessment JSONs
+│   └── prediction_fairness/   # Stage-6 fairness assessment JSONs
 ├── grouping/                  # Cluster assignments + per-cluster fairness
-└── experiments/full/
+└── experiments/
     ├── attribute_binning/
     ├── mitigation/
-    ├── comparisons/           # full_comparison.csv, cross_model_summary.csv
-    │   └── pareto_<dataset>_<model>.png
+    ├── comparisons/
+    │   ├── data/              # full_comparison.csv, cross_model_summary.csv, …
+    │   └── plots/             # pareto_<dataset>_<model>.png, …
     └── dissertation_figures/  # Output of generate_dissertation_plots.py
 ```
 

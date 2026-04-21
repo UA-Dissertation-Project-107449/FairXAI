@@ -69,7 +69,7 @@ class CardiacDataLoader:
                 datasets[name] = self.load_dataset(name, data_dir)
                 logging.info(f"[SUCCESS] Loaded {name}: {len(datasets[name])} rows")
             except Exception as e:
-                logging.error(f"[ERROR] Failed to load {name}: {e}")
+                logging.error(f"Failed to load {name}: {e}")
         return datasets
 
     def _apply_sensitive_standardization(self, df: pd.DataFrame, dataset_name: str) -> pd.DataFrame:

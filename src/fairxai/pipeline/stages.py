@@ -1,7 +1,7 @@
 """
 Pipeline stage definitions, checkpoint management, and flow-control helpers.
 
-Stages are the 10 ordered phases of a cardiac (or future) pipeline.
+Stages are the ordered phases of a cardiac (or future) pipeline.
 The orchestrators (Prefect flow / bash script) use these to implement
 ``--resume-from`` and ``--go-until`` semantics without coupling the
 individual analysis scripts to any checkpoint logic.
@@ -9,7 +9,6 @@ individual analysis scripts to any checkpoint logic.
 
 from __future__ import annotations
 
-import glob as _glob
 import json
 import logging
 import os
@@ -17,7 +16,7 @@ import socket
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +85,20 @@ STAGES: tuple[PipelineStage, ...] = (
     ),
     PipelineStage(
         number=5,
+        name="hpo_study",
+        aliases=("hpo",),
+        description="Run hyperparameter optimisation study",
+        checkpoint_artifacts=(),
+    ),
+    PipelineStage(
+        number=6,
+        name="feature_selection_study",
+        aliases=("feature_selection", "fs_study"),
+        description="Run feature-selection ablation study",
+        checkpoint_artifacts=(),
+    ),
+    PipelineStage(
+        number=7,
         name="train",
         aliases=("baseline", "training"),
         description="Train baseline model(s)",
@@ -95,33 +108,36 @@ STAGES: tuple[PipelineStage, ...] = (
         checkpoint_artifacts=(),
     ),
     PipelineStage(
-        number=6,
+        number=8,
         name="assess",
         aliases=("fairness", "assessment"),
         description="Assess post-prediction fairness",
-        checkpoint_artifacts=("{run_root}/baseline/fairness/*_fairness_assessment.json",),
+        checkpoint_artifacts=(
+            "{run_root}/baseline/prediction_fairness/fairness_report.json",
+            "{run_root}/baseline/fairness/*_fairness_assessment.json",
+        ),
     ),
     PipelineStage(
-        number=7,
+        number=9,
         name="attribute_binning",
         description="Attribute binning strategy analysis",
         checkpoint_artifacts=(),
     ),
     PipelineStage(
-        number=8,
+        number=10,
         name="mitigation",
         description="Mitigation technique comparison",
         checkpoint_artifacts=(),
     ),
     PipelineStage(
-        number=9,
+        number=11,
         name="combinatorial",
         aliases=("combo",),
         description="Combinatorial experiments",
         checkpoint_artifacts=(),
     ),
     PipelineStage(
-        number=10,
+        number=12,
         name="compare",
         aliases=("comparison",),
         description="Experiment comparison & reporting",
@@ -242,41 +258,16 @@ def get_completed_stages(run_root: Path) -> List[PipelineStage]:
     return completed
 
 
-# ---------------------------------------------------------------------------
-# Artifact-based validation for resume
-# ---------------------------------------------------------------------------
-
-
-def _expand_artifact_globs(
-    patterns: Sequence[str],
-    project_root: Path,
-    run_root: Path,
-) -> List[Path]:
-    """Expand glob patterns, substituting ``{run_root}``."""
-    found: list[Path] = []
-    for pattern in patterns:
-        resolved = pattern.replace("{run_root}", str(run_root))
-        # If substitution produced an absolute path, glob it directly;
-        # otherwise treat it as relative to the project root.
-        if os.path.isabs(resolved):
-            found.extend(Path(p) for p in _glob.glob(resolved))
-        else:
-            found.extend(project_root.glob(resolved))
-    return found
-
-
 def validate_prior_stages(
     run_root: Path,
     resume_from: PipelineStage,
-    project_root: Path,
+    _project_root: Path,
 ) -> None:
     """
-    Validate that every stage *before* ``resume_from`` has completed.
+    Validate that every stage *before* ``resume_from`` has a checkpoint marker.
 
-    Checks:
-      1. A checkpoint marker exists for each prior stage.
-      2. If the stage declares ``checkpoint_artifacts``, at least one file
-         matches each glob pattern.
+    Resume validation is marker-based by design. Artifact layouts can evolve
+    over time, but checkpoint markers provide a stable, stage-level contract.
 
     Raises ``RuntimeError`` with a detailed message on validation failure.
     """
@@ -289,23 +280,12 @@ def validate_prior_stages(
     completed_nums = {s.number for s in completed}
 
     for stage in prior:
-        # 1. Checkpoint marker
         if stage.number not in completed_nums:
             errors.append(
                 f"  Stage {stage.number} ({stage.name}): "
                 f"no completion marker at "
                 f"{_checkpoints_dir(run_root) / stage.marker_filename}"
             )
-
-        # 2. Artifact globs (if declared)
-        if stage.checkpoint_artifacts:
-            matches = _expand_artifact_globs(stage.checkpoint_artifacts, project_root, run_root)
-            if not matches:
-                patterns_str = ", ".join(stage.checkpoint_artifacts)
-                errors.append(
-                    f"  Stage {stage.number} ({stage.name}): "
-                    f"no artifacts matching [{patterns_str}]"
-                )
 
     if errors:
         detail = "\n".join(errors)
@@ -314,5 +294,5 @@ def validate_prior_stages(
             f"The following prior stages failed validation:\n{detail}\n\n"
             f"Run root: {run_root}\n"
             f"Hint: re-run the full pipeline or an earlier --resume-from to "
-            f"generate the missing artefacts."
+            f"generate the missing checkpoint markers."
         )

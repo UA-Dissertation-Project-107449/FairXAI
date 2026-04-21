@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 _ROOT = Path(__file__).resolve().parents[2]
-_SCRIPT = _ROOT / "scripts" / "experiments" / "run_grouping_analysis.py"
+_SCRIPT = _ROOT / "scripts" / "studies" / "run_grouping_analysis.py"
 
 
 @pytest.fixture
@@ -46,9 +46,6 @@ def synthetic_processed_csv(tmp_path):
 @pytest.mark.integration
 def test_grouping_produces_cluster_assignments(synthetic_processed_csv, tmp_path):
     """run_grouping_analysis.py writes group_cluster back to processed CSV."""
-    run_root = tmp_path / "output" / "cardiac" / "runs" / "run_test"
-    run_root.mkdir(parents=True, exist_ok=True)
-
     env = {
         **__import__("os").environ,
         "PYTHONPATH": str(_ROOT / "src"),
@@ -57,7 +54,7 @@ def test_grouping_produces_cluster_assignments(synthetic_processed_csv, tmp_path
         [
             sys.executable,
             str(_SCRIPT),
-            "--run-id",
+            "--study-id",
             "run_test",
             "--datasets",
             "test_synthetic",
@@ -87,9 +84,9 @@ def test_grouping_produces_cluster_assignments(synthetic_processed_csv, tmp_path
 @pytest.mark.integration
 def test_grouping_produces_cluster_artifacts(synthetic_processed_csv):
     """run_grouping_analysis.py creates expected output files."""
-    # Script writes to _ROOT/output/cardiac/runs/run_test — not tmp_path
+    # Script writes to _ROOT/output/cardiac/studies/grouping/run_test — not tmp_path
     grouping_dir = (
-        _ROOT / "output" / "cardiac" / "runs" / "run_test" / "grouping" / "test_synthetic"
+        _ROOT / "output" / "cardiac" / "studies" / "grouping" / "run_test" / "test_synthetic"
     )
 
     env = {
@@ -100,7 +97,7 @@ def test_grouping_produces_cluster_artifacts(synthetic_processed_csv):
         [
             sys.executable,
             str(_SCRIPT),
-            "--run-id",
+            "--study-id",
             "run_test",
             "--datasets",
             "test_synthetic",
@@ -128,6 +125,6 @@ def test_grouping_produces_cluster_artifacts(synthetic_processed_csv):
         # Clean up output so reruns start fresh
         import shutil
 
-        run_dir = _ROOT / "output" / "cardiac" / "runs" / "run_test"
-        if run_dir.exists():
-            shutil.rmtree(run_dir)
+        study_dir = _ROOT / "output" / "cardiac" / "studies" / "grouping" / "run_test"
+        if study_dir.exists():
+            shutil.rmtree(study_dir)

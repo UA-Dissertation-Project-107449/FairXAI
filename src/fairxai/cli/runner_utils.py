@@ -18,11 +18,12 @@ def archive_latest_run(base_dir: Path, enabled: bool, logger: logging.Logger) ->
         return
     latest_dir = base_dir / "latest_run"
     archives_dir = base_dir / "archived_runs"
-    archives_dir.mkdir(parents=True, exist_ok=True)
 
     has_files = latest_dir.exists() and any(p.is_file() for p in latest_dir.rglob("*"))
     if not has_files:
         return
+
+    archives_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     archive_path = archives_dir / f"run_{timestamp}"
@@ -63,6 +64,46 @@ def resolve_run_id(explicit: Optional[str] = None) -> str:
 
 def get_run_root(base_results: Path, run_id: str) -> Path:
     return base_results / "runs" / _sanitize_run_id(run_id)
+
+
+def get_study_root(
+    base_results: Path,
+    study_type: str,
+    study_id: Optional[str] = None,
+) -> Path:
+    """Return the output directory for a standalone study.
+
+    ``base_results / "studies" / study_type``        — when *study_id* is omitted (flat, e.g. HPO).
+    ``base_results / "studies" / study_type / study_id`` — when *study_id* is provided.
+    """
+    root = base_results / "studies" / study_type
+    return root / _sanitize_run_id(study_id) if study_id else root
+
+
+def update_output_study_pointer(
+    base_results: Path,
+    study_type: str,
+    study_id: str,
+) -> None:
+    """Write ``studies/<study_type>/latest.txt`` — mirrors :func:`update_latest_pointer` for runs.
+
+    Creates the study-type directory if absent, then atomically updates the
+    ``latest.txt`` pointer to *study_id*.
+    """
+    study_root = get_study_root(base_results, study_type)
+    study_root.mkdir(parents=True, exist_ok=True)
+
+    lock_path = study_root / ".latest_study.lock"
+    fd = _acquire_lock(lock_path)
+    if fd is None:
+        logging.getLogger(__name__).warning(
+            "Could not acquire latest-study pointer lock for %s; skipping update.", study_type
+        )
+        return
+    try:
+        (study_root / "latest.txt").write_text(study_id)
+    finally:
+        _release_lock(lock_path, fd)
 
 
 def resolve_latest_run_dir(base_results: Path) -> Optional[Path]:
@@ -162,14 +203,30 @@ def update_latest_pointer(base_results: Path, run_dir: Path, logger: logging.Log
         _release_lock(lock_path, fd)
 
 
+def append_to_jsonl(jsonl_path: Path, record: Dict[str, Any]) -> None:
+    """Append a JSON record to a ``.jsonl`` file, thread-safe.
+
+    The file is created if absent.  A ``"timestamp"`` key is injected
+    automatically when not already present.
+    """
+    lock_path = jsonl_path.parent / f".{jsonl_path.name}.lock"
+    fd = _acquire_lock(lock_path)
+    if fd is None:
+        logging.getLogger(__name__).warning("Could not acquire lock for %s; skipping.", jsonl_path)
+        return
+    try:
+        record = dict(record)
+        record.setdefault("timestamp", datetime.now().isoformat())
+        with open(jsonl_path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, default=str) + "\n")
+    finally:
+        _release_lock(lock_path, fd)
+
+
 def append_run_history(base_results: Path, record: Dict[str, Any]) -> None:
     history_path = base_results / "run_history.jsonl"
     history_path.parent.mkdir(parents=True, exist_ok=True)
-    record = dict(record)
-    record.setdefault("timestamp", datetime.now().isoformat())
-    with open(history_path, "a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, default=str))
-        handle.write("\n")
+    append_to_jsonl(history_path, record)
 
 
 def update_log_latest_pointer(
@@ -181,9 +238,67 @@ def update_log_latest_pointer(
     """Point ``logs/{log_subdir}/latest_run`` at the current run's log dir.
 
     Re-uses the same atomic-symlink + .txt fallback logic as
-    :func:`update_latest_pointer`.
+    :func:`update_latest_pointer`.  Also appends an entry to
+    ``logs/{log_subdir}/runs.jsonl`` for quick run enumeration.
     """
     base_logs = project_root / "logs" / log_subdir
     run_log_dir = base_logs / "runs" / run_id
     run_log_dir.mkdir(parents=True, exist_ok=True)
     update_latest_pointer(base_logs, run_log_dir, logger)
+    append_to_jsonl(base_logs / "runs.jsonl", {"run_id": run_id})
+
+
+def update_study_pointer(
+    base_logs: Path,
+    study_type: str,
+    study_id: str,
+    logger: logging.Logger,
+) -> None:
+    """Update the latest-study pointer and append to ``studies.jsonl``.
+
+    Creates ``logs/{log_subdir}/studies/{study_type}/latest_study`` symlink
+    and ``latest_study.txt``, then appends a record to
+    ``logs/{log_subdir}/studies.jsonl``.
+
+    Parameters
+    ----------
+    base_logs : Path
+        Pipeline log root, e.g. ``logs/cardiac``.
+    study_type : str
+        Study category, e.g. ``"feature_selection"`` or ``"hpo"``.
+    study_id : str
+        Unique identifier for this study run.
+    logger : logging.Logger
+        Active logger for diagnostic messages.
+    """
+    study_type_dir = base_logs / "studies" / study_type
+    study_type_dir.mkdir(parents=True, exist_ok=True)
+    (study_type_dir / study_id).mkdir(parents=True, exist_ok=True)
+
+    lock_path = study_type_dir / ".latest_study.lock"
+    fd = _acquire_lock(lock_path)
+    if fd is None:
+        logger.warning("Could not acquire latest study pointer lock; skipping update.")
+    else:
+        try:
+            latest_link = study_type_dir / "latest_study"
+            latest_txt = study_type_dir / "latest_study.txt"
+
+            if latest_link.is_symlink():
+                latest_link.unlink()
+
+            if not latest_link.exists():
+                try:
+                    os.symlink(study_id, latest_link)
+                    logger.info("Updated latest_study symlink -> %s", study_id)
+                except OSError:
+                    logger.info("Symlink not supported; using latest_study.txt pointer.")
+
+            latest_txt.write_text(study_id)
+        finally:
+            _release_lock(lock_path, fd)
+
+    append_to_jsonl(
+        base_logs / "studies.jsonl",
+        {"study_type": study_type, "study_id": study_id},
+    )
