@@ -33,6 +33,7 @@ experiment = [
     "xgboost>=3.2.0",           # (reqs: 3.2.0) gradient-boosted trees for model_type='xgboost'
     "interpret>=0.6.0",         # (reqs: 0.6.10) InterpretML — loads the EBM difficulty model
     "psutil>=5.9.0",            # (reqs: 7.0.0)  memory-aware worker budgeting in studies
+    "jenkspy>=0.3.0",           # (reqs: 0.3.3)  Jenks natural breaks for attribute binning
 ]
 
 # DEV: Local notebooks, visualisation, and explainability analysis
@@ -42,7 +43,7 @@ dev = [
     "seaborn>=0.13.0",    # (reqs: 0.13.2) statistical visualisation
     "shap>=0.44.0",       # (reqs: 0.50.0) SHAP feature importance (lazy-imported)
     "lime>=0.2.0",        # (reqs: 0.2.0.1) LIME local explanations (lazy-imported)
-    "jenkspy>=0.3.0",     # (reqs: 0.3.3)  Jenks natural breaks for attribute binning
+    "jenkspy>=0.3.0",     # (reqs: 0.3.3)  Jenks natural breaks (also in experiment)
     "tqdm>=4.66.0",       # (reqs: 4.67.1) progress bars
     "pytest>=8.0.0",      # test runner
     "pytest-xdist>=3.6.0",# process-level test parallelism (-n auto)
@@ -81,7 +82,8 @@ full = [
 ]
 
 [project.scripts]
-fairxai-characterize = "fairxai.cli.characterize:main"
+fairxai-characterize = "fairxai.cli.characterize:main"  # kept — backwards compat
+fairxai              = "fairxai.cli.main:main"           # unified subcommand CLI
 
 [project.urls]
 Repository = "https://github.com/yourusername/fairxai"
