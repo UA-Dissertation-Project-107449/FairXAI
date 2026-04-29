@@ -120,10 +120,7 @@ def _build_pca_clusters(
 
     if pca2d is not None and len(pca2d) == len(df):
         # Reuse existing PCA coords, replace class label with cluster id
-        return [
-            [float(pt[0]), float(pt[1]), int(cid)]
-            for pt, cid in zip(pca2d, cluster_labels)
-        ]
+        return [[float(pt[0]), float(pt[1]), int(cid)] for pt, cid in zip(pca2d, cluster_labels)]
 
     # Recompute PCA from numeric features
     numeric_cols = df[result.feature_cols].select_dtypes(include=[np.number])
@@ -134,10 +131,7 @@ def _build_pca_clusters(
     coords = SklearnPCA(n_components=n_components, random_state=42).fit_transform(X)
     if coords.shape[1] < 2:
         coords = np.hstack([coords, np.zeros((coords.shape[0], 1))])
-    return [
-        [float(row[0]), float(row[1]), int(cid)]
-        for row, cid in zip(coords, cluster_labels)
-    ]
+    return [[float(row[0]), float(row[1]), int(cid)] for row, cid in zip(coords, cluster_labels)]
 
 
 def _generate_recommendations(clusters: list[dict[str, Any]]) -> list[dict[str, Any]]:

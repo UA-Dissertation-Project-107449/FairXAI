@@ -77,9 +77,7 @@ def run_binning(
     }
 
 
-def _compute_bin_stats(
-    df: pd.DataFrame, bin_col: str, target_col: str
-) -> list[dict[str, Any]]:
+def _compute_bin_stats(df: pd.DataFrame, bin_col: str, target_col: str) -> list[dict[str, Any]]:
     total = len(df)
     groups = df.groupby(bin_col, observed=True)
 
@@ -89,9 +87,7 @@ def _compute_bin_stats(
         pct = round(count / total * 100, 1) if total > 0 else 0.0
         target_vals = pd.to_numeric(grp[target_col], errors="coerce").dropna()
         target_rate = round(float(target_vals.mean()), 4) if len(target_vals) > 0 else None
-        stats.append(
-            {"label": str(label), "count": count, "pct": pct, "target_rate": target_rate}
-        )
+        stats.append({"label": str(label), "count": count, "pct": pct, "target_rate": target_rate})
     return stats
 
 
