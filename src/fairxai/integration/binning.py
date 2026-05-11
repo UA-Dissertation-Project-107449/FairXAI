@@ -18,10 +18,10 @@ _DISPARITY_P1_THRESHOLD = 2.0
 SUPPORTED_STRATEGIES = [
     "equal_width_3",
     "equal_width_5",
+    "equal_width_7",
     "quantile_3",
     "quantile_5",
-    "jenks_3",
-    "jenks_5",
+    "quantile_7",
 ]
 
 

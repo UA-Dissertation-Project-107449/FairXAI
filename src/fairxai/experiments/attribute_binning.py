@@ -378,6 +378,13 @@ def _jenks_bins(
 
     logger.info(f"  Computing {n_bins} Jenks natural-break bins from data")
     values = df[col].dropna().values
+    n_unique = len(set(values.tolist()))
+    if n_unique < n_bins:
+        raise ValueError(
+            f"Cannot create {n_bins} Jenks bins for column '{col}': only {n_unique} unique "
+            f"value(s) found. Jenks requires at least as many unique values as bins requested. "
+            f"Use equal-width or quantile binning instead, or choose a more varied attribute."
+        )
     breaks = jenks_breaks(values.astype(float), n_classes=n_bins)
     # jenkspy returns n_bins+1 values including min and max
     edges = list(breaks)
