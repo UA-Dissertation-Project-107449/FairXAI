@@ -46,6 +46,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="JSON string of existing [[x,y,label],...] PCA coords to reuse",
     )
+    clust.add_argument(
+        "--pca2d-file",
+        default=None,
+        help="Path to JSON file with existing [[x,y,label],...] PCA coords to reuse",
+    )
 
     return parser
 
@@ -102,7 +107,13 @@ def main(argv: list[str] | None = None) -> int:
             from fairxai.integration.clustering import run_clustering
 
             csv_path = _resolve_csv(args.filename, args.datasets_dir)
-            pca2d = json.loads(args.pca2d_json) if args.pca2d_json else None
+            if args.pca2d_file:
+                with open(args.pca2d_file) as f:
+                    pca2d = json.load(f)
+            elif args.pca2d_json:
+                pca2d = json.loads(args.pca2d_json)
+            else:
+                pca2d = None
             result = run_clustering(
                 csv_path=csv_path,
                 target_column=args.target_column,
