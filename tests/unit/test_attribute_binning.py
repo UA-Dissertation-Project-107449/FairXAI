@@ -107,9 +107,9 @@ def test_quantile_binary_collapses():
     bins, _ = _quantile_bins(df, "feature", 3, "quantile_3")
     n_bins_created = len(bins) - 1
     # pandas qcut with duplicates='drop' collapses binary to 1 bin
-    assert n_bins_created <= 2, (
-        f"Expected binary column to collapse to ≤2 bins, got {n_bins_created}"
-    )
+    assert (
+        n_bins_created <= 2
+    ), f"Expected binary column to collapse to ≤2 bins, got {n_bins_created}"
 
 
 def test_quantile_low_cardinality_no_crash():
@@ -150,8 +150,14 @@ def test_jenks_continuous_works():
 def test_create_binning_strategy_dispatch_smoke():
     """Smoke-test strategy name dispatch for all WebApp-exposed strategy names."""
     df = _continuous_df()
-    for strategy in ("equal_width_3", "equal_width_5", "equal_width_7",
-                     "quantile_3", "quantile_5", "quantile_7"):
+    for strategy in (
+        "equal_width_3",
+        "equal_width_5",
+        "equal_width_7",
+        "quantile_3",
+        "quantile_5",
+        "quantile_7",
+    ):
         bins, _ = create_binning_strategy(df, strategy, col="feature", min_group_size=0)
         assert len(bins) >= 2, f"Strategy {strategy} returned fewer than 2 bin edges"
 
@@ -201,8 +207,9 @@ def test_run_binning_equal_width_binary_returns_2_bins(tmp_path):
     csv = tmp_path / "binary.csv"
     _binary_df(n=100).to_csv(csv, index=False)
 
-    result = run_binning(csv, target_column="target", attribute="feature",
-                         strategy="equal_width_3", min_group_size=0)
+    result = run_binning(
+        csv, target_column="target", attribute="feature", strategy="equal_width_3", min_group_size=0
+    )
 
     assert len(result["bins"]) == 2, (
         f"Expected 2 non-empty bins for binary feature with equal_width_3, "
@@ -217,8 +224,9 @@ def test_run_binning_quantile_binary_collapses(tmp_path):
     csv = tmp_path / "binary.csv"
     _binary_df(n=100).to_csv(csv, index=False)
 
-    result = run_binning(csv, target_column="target", attribute="feature",
-                         strategy="quantile_3", min_group_size=0)
+    result = run_binning(
+        csv, target_column="target", attribute="feature", strategy="quantile_3", min_group_size=0
+    )
 
     assert len(result["bins"]) <= 2
     # When only 1 bin, disparity_ratio must be None (can't compare 1 bin to itself)
@@ -233,8 +241,9 @@ def test_run_binning_continuous_full_output_schema(tmp_path):
     csv = tmp_path / "cont.csv"
     _continuous_df(n=200).to_csv(csv, index=False)
 
-    result = run_binning(csv, target_column="target", attribute="feature",
-                         strategy="quantile_5", min_group_size=0)
+    result = run_binning(
+        csv, target_column="target", attribute="feature", strategy="quantile_5", min_group_size=0
+    )
 
     assert "bins" in result
     assert "summary" in result
@@ -243,5 +252,8 @@ def test_run_binning_continuous_full_output_schema(tmp_path):
     assert len(result["bins"]) == 5
     for b in result["bins"]:
         assert "label" in b
+        assert "lower_bound" in b
+        assert "upper_bound" in b
+        assert "closed" in b
         assert "count" in b
         assert "target_rate" in b
