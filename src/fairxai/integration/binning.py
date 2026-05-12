@@ -18,10 +18,10 @@ _DISPARITY_P1_THRESHOLD = 2.0
 SUPPORTED_STRATEGIES = [
     "equal_width_3",
     "equal_width_5",
+    "equal_width_7",
     "quantile_3",
     "quantile_5",
-    "jenks_3",
-    "jenks_5",
+    "quantile_7",
 ]
 
 
@@ -87,8 +87,25 @@ def _compute_bin_stats(df: pd.DataFrame, bin_col: str, target_col: str) -> list[
         pct = round(count / total * 100, 1) if total > 0 else 0.0
         target_vals = pd.to_numeric(grp[target_col], errors="coerce").dropna()
         target_rate = round(float(target_vals.mean()), 4) if len(target_vals) > 0 else None
-        stats.append({"label": str(label), "count": count, "pct": pct, "target_rate": target_rate})
+        lower_bound, upper_bound, closed = _get_bin_bounds(label)
+        stats.append(
+            {
+                "label": str(label),
+                "lower_bound": lower_bound,
+                "upper_bound": upper_bound,
+                "closed": closed,
+                "count": count,
+                "pct": pct,
+                "target_rate": target_rate,
+            }
+        )
     return stats
+
+
+def _get_bin_bounds(label: Any) -> tuple[float | None, float | None, str | None]:
+    if isinstance(label, pd.Interval):
+        return float(label.left), float(label.right), label.closed
+    return None, None, None
 
 
 def _compute_summary(bin_stats: list[dict[str, Any]]) -> dict[str, Any]:

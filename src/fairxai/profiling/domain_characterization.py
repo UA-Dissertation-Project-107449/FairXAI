@@ -366,12 +366,15 @@ def characterize_dataset(
 
     feature_type_summary = _compute_feature_type_summary(X)
 
+    column_n_unique = {str(col): int(X[col].nunique()) for col in X.columns}
+
     result: dict[str, Any] = {
         "schema_version": "1.1",
         "jobId": file_id,
         "metrics": metrics,
         "pca2d": pca2d,
         "missing_percentages": missing_percentages,
+        "column_n_unique": column_n_unique,
         "top_missing_column": top_missing_col,
         "top_missing_pct": missing_percentages.get(top_missing_col) if top_missing_col else None,
         "target_missing_pct": target_missing_pct,
