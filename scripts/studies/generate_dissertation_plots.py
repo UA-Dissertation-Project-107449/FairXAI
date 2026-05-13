@@ -22,6 +22,16 @@ Outputs are saved to ``output/cardiac/dissertation_figures/`` organised by secti
         cross_model_radar.png
         mitigation_effectiveness_matrix.png
         pareto_all_models.png
+    fairness_comparison/
+        fairness_evidence_summary.csv
+        before_after_metric_radar.png
+        mitigation_delta_matrix.png
+        group_before_after_age.png
+        group_before_after_sex.png
+        group_delta_age.png
+        group_delta_sex.png
+        cross_model_baseline_radar.png
+        cross_model_best_available_radar.png
 
 The script skips plots whose required data files are missing and logs a warning
 for each, so a partial run still produces as many plots as possible.
@@ -44,10 +54,18 @@ sys.path.insert(0, str(_ROOT / "src"))
 
 from fairxai.cli.runner_base import setup_study_logging
 from fairxai.viz.experiment_plots import (
+    save_before_after_metric_radar,
+    save_cross_model_baseline_radar,
+    save_cross_model_best_available_radar,
     save_cross_model_radar,
+    save_fairness_evidence_summary,
+    save_group_before_after_bars,
+    save_group_delta_bars,
     save_intersectional_heatmap,
+    save_mitigation_delta_matrix,
     save_mitigation_effectiveness_matrix,
     save_pareto_all_models,
+    select_primary_fairness_row,
 )
 from fairxai.viz.fairness import (
     plot_bias_amplification_waterfall,
@@ -378,6 +396,66 @@ def _generate_cross_model_plots(
         logger.warning("[WARNING] pareto_all_models: full_comparison.csv missing")
 
 
+def _generate_fairness_comparison_plots(
+    full_df: pd.DataFrame | None,
+    per_group_df: pd.DataFrame | None,
+    out_dir: Path,
+) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _phase("fairness comparison plots")
+
+    if full_df is None:
+        logger.warning("[WARNING] fairness_comparison: full_comparison.csv missing")
+        return
+
+    selected = select_primary_fairness_row(full_df)
+
+    result = save_fairness_evidence_summary(
+        full_df, per_group_df, out_dir / "fairness_evidence_summary.csv", top_n=5
+    )
+    _report("fairness_evidence_summary", result)
+
+    result = save_before_after_metric_radar(
+        full_df, out_dir / "before_after_metric_radar.png", selected_row=selected
+    )
+    _report("before_after_metric_radar", result)
+
+    result = save_mitigation_delta_matrix(full_df, out_dir / "mitigation_delta_matrix.png")
+    _report("mitigation_delta_matrix", result)
+
+    result = save_cross_model_baseline_radar(full_df, out_dir / "cross_model_baseline_radar.png")
+    _report("cross_model_baseline_radar", result)
+
+    result = save_cross_model_best_available_radar(
+        full_df, out_dir / "cross_model_best_available_radar.png"
+    )
+    _report("cross_model_best_available_radar", result)
+
+    if selected is None:
+        logger.warning("[WARNING] group before/after plots: no selected mitigation row")
+        return
+    if per_group_df is None:
+        logger.warning("[WARNING] group before/after plots: per_group.csv missing")
+        return
+
+    for attr, label in [("age_group", "age"), ("sex", "sex")]:
+        result = save_group_before_after_bars(
+            per_group_df,
+            out_dir / f"group_before_after_{label}.png",
+            attr,
+            selected,
+        )
+        _report(f"group_before_after_{label}", result)
+
+        result = save_group_delta_bars(
+            per_group_df,
+            out_dir / f"group_delta_{label}.png",
+            attr,
+            selected,
+        )
+        _report(f"group_delta_{label}", result)
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -426,6 +504,9 @@ def main() -> None:
     _generate_fairness_plots(full_df, per_group_df, fairness_dir, run_dir, out_base / "fairness")
     _generate_transformation_plots(run_dir, full_df, out_base / "transformations")
     _generate_cross_model_plots(full_df, per_group_df, summary_df, out_base / "cross_model")
+    _generate_fairness_comparison_plots(
+        full_df, per_group_df, out_base / "fairness_comparison"
+    )
 
     logger.info("[SUCCESS] Dissertation figures generated: output_dir=%s", out_base)
 
