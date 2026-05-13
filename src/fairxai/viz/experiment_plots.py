@@ -6,6 +6,7 @@ Migrated from the legacy ``fairxai.visualization.plots`` module.
 """
 
 import logging
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -21,6 +22,679 @@ PALETTE_MODEL = {
     "svm": "#D55E00",
     "xgboost": "#CC79A7",
 }
+
+MITIGATION_LABELS = {
+    "baseline": "Baseline",
+    "adasyn": "ADASYN",
+    "adasyn+exponentiated_gradient": "ADASYN + EG",
+    "adasyn+exponentiated_gradient+threshold_optimizer": "ADASYN + EG + TO",
+    "exponentiated_gradient": "Exp. Gradient",
+    "grid_search": "Fairlearn Grid",
+    "reweighting": "Reweighting",
+    "reweighting+threshold_optimizer": "Reweighting + TO",
+    "smote": "SMOTE",
+    "smote+exponentiated_gradient": "SMOTE + EG",
+    "smote+exponentiated_gradient+threshold_optimizer": "SMOTE + EG + TO",
+    "smote+threshold_optimizer": "SMOTE + TO",
+    "threshold_optimizer": "Threshold Opt.",
+}
+
+
+def _display_mitigation(value: object) -> str:
+    value = str(value)
+    if value in MITIGATION_LABELS:
+        return MITIGATION_LABELS[value]
+    return value.replace("_", " ").replace("+", " + ").title()
+
+
+def _normalize_sensitive_attr(attr: object) -> str:
+    attr_str = str(attr)
+    if attr_str.endswith("_cat"):
+        return attr_str[: -len("_cat")]
+    return attr_str
+
+
+def _pretty_group_label(attr: object, group: object) -> str:
+    group_str = str(group)
+    if _normalize_sensitive_attr(attr) == "sex":
+        return {"0": "Female", "1": "Male"}.get(group_str, group_str)
+    return group_str
+
+
+def _numeric_series(df: pd.DataFrame, col: str) -> pd.Series:
+    if col not in df.columns:
+        return pd.Series(np.nan, index=df.index)
+    return pd.to_numeric(df[col], errors="coerce")
+
+
+def _max_from_columns(row: pd.Series, columns: list[str]) -> float:
+    vals = [row.get(col) for col in columns if col in row.index]
+    vals = [float(v) for v in vals if pd.notna(v)]
+    if not vals:
+        return float("nan")
+    return float(np.nanmax(vals))
+
+
+def _gap_specs(df: pd.DataFrame) -> tuple[list[str], list[str], list[str]]:
+    dp_cols = [c for c in df.columns if c.startswith("dem_parity_") and c.endswith("_max_diff")]
+    eq_tpr_cols = [c for c in df.columns if c.startswith("eq_odds_") and "_tpr_" in c]
+    eq_fpr_cols = [c for c in df.columns if c.startswith("eq_odds_") and "_fpr_" in c]
+    return dp_cols, eq_tpr_cols, eq_fpr_cols
+
+
+def _baseline_match(full_df: pd.DataFrame, row: pd.Series) -> pd.Series | None:
+    if full_df is None or full_df.empty:
+        return None
+    required = ["dataset", "model_type", "binning_strategy", "training_method"]
+    if not all(col in full_df.columns and col in row.index for col in required):
+        return None
+
+    mask = full_df["mitigation_technique"].astype(str).eq("baseline")
+    for col in required:
+        mask &= full_df[col].astype(str).eq(str(row.get(col)))
+    if "model_variant" in full_df.columns and "model_variant" in row.index:
+        exact = mask & full_df["model_variant"].astype(str).eq(str(row.get("model_variant")))
+        if exact.any():
+            return full_df[exact].iloc[0]
+    if mask.any():
+        return full_df[mask].iloc[0]
+    return None
+
+
+def select_primary_fairness_row(
+    full_df: pd.DataFrame,
+    model_type: str = "logistic_regression",
+    min_recall_delta: float = -0.03,
+) -> pd.Series | None:
+    """Select primary mitigation row for before/after evidence plots."""
+    if full_df is None or full_df.empty or "mitigation_technique" not in full_df.columns:
+        return None
+
+    df = full_df.copy()
+    if "model_type" in df.columns:
+        df = df[df["model_type"] == model_type]
+    df = df[df["mitigation_technique"] != "baseline"].copy()
+    if df.empty:
+        return None
+
+    for col in ["delta_fairness_gap", "delta_recall", "delta_f1"]:
+        df[col] = _numeric_series(df, col)
+
+    eligible = df[(df["delta_fairness_gap"] > 0) & (df["delta_recall"] >= min_recall_delta)]
+    if eligible.empty:
+        eligible = df[df["delta_fairness_gap"] > 0]
+    if eligible.empty:
+        eligible = df
+
+    eligible = eligible.sort_values(
+        ["delta_fairness_gap", "delta_recall", "delta_f1"],
+        ascending=[False, False, False],
+        na_position="last",
+    )
+    return eligible.iloc[0] if not eligible.empty else None
+
+
+def _radar_values(row: pd.Series, df_columns: list[str]) -> list[float]:
+    dp_cols, eq_tpr_cols, eq_fpr_cols = _gap_specs(pd.DataFrame(columns=df_columns))
+    dp_gap = row.get("dp_max_diff", _max_from_columns(row, dp_cols))
+    if pd.isna(dp_gap):
+        dp_gap = _max_from_columns(row, dp_cols)
+    eq_tpr_gap = _max_from_columns(row, eq_tpr_cols)
+    eq_fpr_gap = _max_from_columns(row, eq_fpr_cols)
+    values = [
+        row.get("f1_value", row.get("f1_score", row.get("f1"))),
+        row.get("recall_value", row.get("recall")),
+        row.get("precision_value", row.get("precision")),
+        row.get("auc_value", row.get("auc_roc")),
+        1 - dp_gap if pd.notna(dp_gap) else np.nan,
+        1 - eq_tpr_gap if pd.notna(eq_tpr_gap) else np.nan,
+        1 - eq_fpr_gap if pd.notna(eq_fpr_gap) else np.nan,
+    ]
+    return [float(np.clip(v, 0, 1)) if pd.notna(v) else np.nan for v in values]
+
+
+def save_before_after_metric_radar(
+    full_df: pd.DataFrame,
+    output_file,
+    selected_row: pd.Series | None = None,
+):
+    """Landscape radar: matched baseline vs selected mitigation, metric-by-metric."""
+    if full_df is None or full_df.empty:
+        return None
+    selected = selected_row if selected_row is not None else select_primary_fairness_row(full_df)
+    if selected is None:
+        return None
+    baseline = _baseline_match(full_df, selected)
+    if baseline is None:
+        return None
+
+    categories = [
+        "F1",
+        "Recall",
+        "Precision",
+        "AUC-ROC",
+        "DP Fairness",
+        "EO TPR Fairness",
+        "EO FPR Fairness",
+    ]
+    base_values = _radar_values(baseline, list(full_df.columns))
+    after_values = _radar_values(selected, list(full_df.columns))
+    if np.isnan(base_values).all() or np.isnan(after_values).all():
+        return None
+
+    n = len(categories)
+    angles = [i * 2 * np.pi / n for i in range(n)] + [0]
+    base_closed = base_values + [base_values[0]]
+    after_closed = after_values + [after_values[0]]
+
+    fig = plt.figure(figsize=(14, 6))
+    ax = fig.add_subplot(1, 2, 1, polar=True)
+    info_ax = fig.add_subplot(1, 2, 2)
+    info_ax.axis("off")
+
+    ax.plot(angles, base_closed, color="#666666", linewidth=2, label="Baseline")
+    ax.fill(angles, base_closed, color="#666666", alpha=0.12)
+    ax.plot(angles, after_closed, color="#0072B2", linewidth=2.5, label="After Mitigation")
+    ax.fill(angles, after_closed, color="#0072B2", alpha=0.18)
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels(categories, fontsize=9)
+    ax.set_ylim(0, 1)
+    ax.set_yticks([0.25, 0.50, 0.75, 1.00])
+    ax.set_yticklabels(["0.25", "0.50", "0.75", "1.00"], fontsize=7)
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.18), ncol=2, fontsize=9)
+
+    deltas = np.array(after_values) - np.array(base_values)
+    table_rows = [
+        [label, f"{base:.3f}", f"{after:.3f}", f"{delta * 100:+.1f} pp"]
+        for label, base, after, delta in zip(categories, base_values, after_values, deltas)
+    ]
+    table = info_ax.table(
+        cellText=table_rows,
+        colLabels=["Metric", "Baseline", "After", "Delta"],
+        loc="center",
+        cellLoc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(9)
+    table.scale(1.0, 1.35)
+
+    title = (
+        "Baseline vs Mitigation Metric Profile\n"
+        f"{_display_mitigation(selected.get('mitigation_technique'))} / "
+        f"{selected.get('binning_strategy')} / {selected.get('training_method')}"
+    )
+    fig.suptitle(title, fontsize=13)
+    plt.tight_layout()
+    fig.savefig(output_file, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    return output_file
+
+
+def save_mitigation_delta_matrix(full_df: pd.DataFrame, output_file):
+    """Wide heatmap of metric deltas vs matched baseline. Positive = better."""
+    if full_df is None or full_df.empty or "mitigation_technique" not in full_df.columns:
+        return None
+
+    delta_specs = [
+        ("delta_f1", "F1"),
+        ("delta_recall", "Recall"),
+        ("delta_precision", "Precision"),
+        ("delta_auc", "AUC-ROC"),
+        ("delta_accuracy", "Accuracy"),
+        ("delta_fairness_gap", "Fairness Gap"),
+        ("delta_dp_gap", "DP Gap"),
+        ("delta_eq_tpr_gap", "EO TPR Gap"),
+        ("delta_eq_fpr_gap", "EO FPR Gap"),
+    ]
+    available = [(col, label) for col, label in delta_specs if col in full_df.columns]
+    if len(available) < 2:
+        return None
+
+    plot_df = full_df[full_df["mitigation_technique"] != "baseline"].copy()
+    if plot_df.empty:
+        return None
+    for col, _ in available:
+        plot_df[col] = pd.to_numeric(plot_df[col], errors="coerce")
+
+    agg = plot_df.groupby("mitigation_technique")[[col for col, _ in available]].mean()
+    agg = agg.dropna(how="all")
+    if agg.empty:
+        return None
+    if "delta_fairness_gap" in agg.columns:
+        agg = agg.sort_values("delta_fairness_gap", ascending=False)
+
+    plot_values = agg.rename(columns=dict(available)) * 100
+    plot_values.index = [_display_mitigation(idx) for idx in plot_values.index]
+    max_abs = float(np.nanmax(np.abs(plot_values.to_numpy(dtype=float))))
+    max_abs = max(max_abs, 1.0)
+
+    fig, ax = plt.subplots(figsize=(16, max(5, len(plot_values) * 0.35 + 2)))
+    sns.heatmap(
+        plot_values,
+        annot=True,
+        fmt=".1f",
+        cmap="RdYlGn",
+        center=0,
+        vmin=-max_abs,
+        vmax=max_abs,
+        linewidths=0.5,
+        cbar_kws={"label": "Delta vs baseline (percentage points)"},
+        ax=ax,
+    )
+    ax.set_title("Mitigation Effects by Metric (positive = improvement)", fontsize=12)
+    ax.set_xlabel("Metric")
+    ax.set_ylabel("Mitigation")
+    plt.xticks(rotation=20, ha="right")
+    plt.tight_layout()
+    fig.savefig(output_file, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    return output_file
+
+
+def _filter_per_group_for_selected(
+    per_group_df: pd.DataFrame,
+    selected_row: pd.Series,
+    sensitive_attr: str,
+) -> pd.DataFrame:
+    if per_group_df is None or per_group_df.empty:
+        return pd.DataFrame()
+    df = per_group_df.copy()
+    df["sensitive_attr_norm"] = df["sensitive_attr"].map(_normalize_sensitive_attr)
+    df = df[df["sensitive_attr_norm"] == _normalize_sensitive_attr(sensitive_attr)]
+
+    if "experiment_id" in df.columns and "experiment_id" in selected_row.index:
+        exp_id = selected_row.get("experiment_id")
+        if pd.notna(exp_id):
+            exp_df = df[df["experiment_id"].astype(str) == str(exp_id)]
+            if not exp_df.empty:
+                df = exp_df
+    else:
+        for col in [
+            "dataset",
+            "model_type",
+            "binning_strategy",
+            "training_method",
+            "mitigation_technique",
+            "model_variant",
+        ]:
+            if col in df.columns and col in selected_row.index:
+                df = df[df[col].astype(str) == str(selected_row.get(col))]
+
+    for col in [
+        "baseline_value",
+        "experiment_value",
+        "delta",
+        "baseline_overall_value",
+        "experiment_overall_value",
+    ]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df.dropna(subset=["baseline_value", "experiment_value"])
+
+
+def save_group_before_after_bars(
+    per_group_df: pd.DataFrame,
+    output_file,
+    sensitive_attr: str,
+    selected_row: pd.Series,
+):
+    """Landscape grouped bars: baseline vs selected mitigation by subgroup."""
+    df = _filter_per_group_for_selected(per_group_df, selected_row, sensitive_attr)
+    if df.empty:
+        return None
+
+    metric_order = [
+        ("tpr", "TPR"),
+        ("fpr", "FPR"),
+        ("predictive_parity_precision", "Precision"),
+        ("demographic_parity_rate", "DP Rate"),
+    ]
+    available = [(m, label) for m, label in metric_order if m in set(df["metric"])]
+    if not available:
+        return None
+
+    fig, axes = plt.subplots(1, len(available), figsize=(14, 5), sharey=False)
+    axes = np.atleast_1d(axes).ravel()
+    palette = {"Baseline": "#8C8C8C", "After Mitigation": "#0072B2"}
+
+    for idx, (metric, label) in enumerate(available):
+        ax = axes[idx]
+        sub = df[df["metric"] == metric].copy()
+        sub["group_label"] = [
+            _pretty_group_label(attr, group)
+            for attr, group in zip(sub["sensitive_attr"], sub["group"])
+        ]
+        records = []
+        for _, row in sub.iterrows():
+            records.append(
+                {
+                    "group": row["group_label"],
+                    "condition": "Baseline",
+                    "value": row["baseline_value"],
+                }
+            )
+            records.append(
+                {
+                    "group": row["group_label"],
+                    "condition": "After Mitigation",
+                    "value": row["experiment_value"],
+                }
+            )
+        plot_df = pd.DataFrame(records)
+        sns.barplot(data=plot_df, x="group", y="value", hue="condition", palette=palette, ax=ax)
+        ax.set_title(label)
+        ax.set_xlabel("Group")
+        ax.set_ylabel("Rate" if idx == 0 else "")
+        ax.set_ylim(0, 1.05)
+        ax.tick_params(axis="x", rotation=30)
+        if idx > 0 and ax.get_legend():
+            ax.get_legend().remove()
+
+    attr_label = _normalize_sensitive_attr(sensitive_attr).replace("_", " ").title()
+    fig.suptitle(
+        f"Per-Group Metrics Before/After - {attr_label} - "
+        f"{_display_mitigation(selected_row.get('mitigation_technique'))}",
+        fontsize=12,
+    )
+    plt.tight_layout()
+    fig.savefig(output_file, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    return output_file
+
+
+def _group_improvement(row: pd.Series) -> float:
+    base = row.get("baseline_value")
+    exp = row.get("experiment_value")
+    if pd.isna(base) or pd.isna(exp):
+        return np.nan
+    metric = row.get("metric")
+    if metric in {"tpr", "equal_opportunity_tpr", "predictive_parity_precision"}:
+        return exp - base
+    if metric == "fpr":
+        return base - exp
+    if metric == "demographic_parity_rate":
+        base_overall = row.get("baseline_overall_value")
+        exp_overall = row.get("experiment_overall_value")
+        if pd.isna(base_overall) or pd.isna(exp_overall):
+            return np.nan
+        return abs(base - base_overall) - abs(exp - exp_overall)
+    return exp - base
+
+
+def save_group_delta_bars(
+    per_group_df: pd.DataFrame,
+    output_file,
+    sensitive_attr: str,
+    selected_row: pd.Series,
+):
+    """Landscape delta bars. Positive means subgroup-level improvement."""
+    df = _filter_per_group_for_selected(per_group_df, selected_row, sensitive_attr)
+    if df.empty:
+        return None
+    df["improvement"] = df.apply(_group_improvement, axis=1)
+    df = df.dropna(subset=["improvement"])
+    if df.empty:
+        return None
+
+    metric_order = [
+        ("tpr", "TPR"),
+        ("fpr", "FPR"),
+        ("predictive_parity_precision", "Precision"),
+        ("demographic_parity_rate", "DP Distance"),
+    ]
+    available = [(m, label) for m, label in metric_order if m in set(df["metric"])]
+    if not available:
+        return None
+
+    fig, axes = plt.subplots(1, len(available), figsize=(14, 5), sharey=True)
+    axes = np.atleast_1d(axes).ravel()
+    max_abs = max(float(np.nanmax(np.abs(df["improvement"]))), 0.02)
+
+    for idx, (metric, label) in enumerate(available):
+        ax = axes[idx]
+        sub = df[df["metric"] == metric].copy()
+        sub["group_label"] = [
+            _pretty_group_label(attr, group)
+            for attr, group in zip(sub["sensitive_attr"], sub["group"])
+        ]
+        sub = sub.groupby("group_label", as_index=False)["improvement"].mean()
+        colors = ["#2E8B57" if value >= 0 else "#B22222" for value in sub["improvement"]]
+        ax.bar(sub["group_label"], sub["improvement"] * 100, color=colors, edgecolor="white")
+        ax.axhline(0, color="#333333", linewidth=1)
+        ax.set_title(label)
+        ax.set_xlabel("Group")
+        ax.set_ylabel("Improvement (pp)" if idx == 0 else "")
+        ax.set_ylim(-max_abs * 110, max_abs * 110)
+        ax.tick_params(axis="x", rotation=30)
+
+    attr_label = _normalize_sensitive_attr(sensitive_attr).replace("_", " ").title()
+    fig.suptitle(
+        f"Subgroup Improvement Deltas - {attr_label} - "
+        f"{_display_mitigation(selected_row.get('mitigation_technique'))}",
+        fontsize=12,
+    )
+    plt.tight_layout()
+    fig.savefig(output_file, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    return output_file
+
+
+def _model_radar_values(row: pd.Series) -> list[float]:
+    fairness_gap = row.get("fairness_gap")
+    return [
+        row.get("f1_value", row.get("f1_score", row.get("f1"))),
+        row.get("recall_value", row.get("recall")),
+        row.get("precision_value", row.get("precision")),
+        row.get("auc_value", row.get("auc_roc")),
+        1 - fairness_gap if pd.notna(fairness_gap) else np.nan,
+    ]
+
+
+def _save_model_radar(rows_df: pd.DataFrame, output_file, title: str, note: str | None = None):
+    if rows_df is None or rows_df.empty or "model_type" not in rows_df.columns:
+        return None
+    categories = ["F1", "Recall", "Precision", "AUC-ROC", "Fairness\n(1-gap)"]
+    n = len(categories)
+    angles = [i * 2 * np.pi / n for i in range(n)] + [0]
+
+    fig, ax = plt.subplots(figsize=(14, 6), subplot_kw={"polar": True})
+    for _, row in rows_df.iterrows():
+        model = row["model_type"]
+        values = _model_radar_values(row)
+        if any(pd.isna(v) for v in values):
+            continue
+        values = [float(np.clip(v, 0, 1)) for v in values]
+        values_closed = values + [values[0]]
+        color = PALETTE_MODEL.get(model, "#333333")
+        ax.plot(angles, values_closed, color=color, linewidth=2, label=model.replace("_", " ").title())
+        ax.fill(angles, values_closed, color=color, alpha=0.14)
+
+    if not ax.lines:
+        plt.close(fig)
+        return None
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels(categories, fontsize=10)
+    ax.set_ylim(0, 1)
+    ax.set_yticks([0.25, 0.50, 0.75, 1.00])
+    ax.set_yticklabels(["0.25", "0.50", "0.75", "1.00"], fontsize=7)
+    ax.set_title(title, fontsize=13, pad=20)
+    ax.legend(loc="center left", bbox_to_anchor=(1.08, 0.5), fontsize=9)
+    if note:
+        fig.text(0.5, 0.03, note, ha="center", fontsize=9)
+    plt.tight_layout()
+    fig.savefig(output_file, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    return output_file
+
+
+def _best_rows_by_model(df: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for _, group in df.groupby("model_type", dropna=False):
+        sort_cols = [col for col in ["f1_value", "recall_value"] if col in group.columns]
+        group = group.copy()
+        for col in sort_cols + ["fairness_gap"]:
+            if col in group.columns:
+                group[col] = pd.to_numeric(group[col], errors="coerce")
+        if "fairness_gap" in group.columns:
+            group = group.sort_values(sort_cols + ["fairness_gap"], ascending=[False] * len(sort_cols) + [True])
+        elif sort_cols:
+            group = group.sort_values(sort_cols, ascending=False)
+        rows.append(group.iloc[0])
+    return pd.DataFrame(rows)
+
+
+def save_cross_model_baseline_radar(full_df: pd.DataFrame, output_file):
+    """Baseline-only radar across model families."""
+    if full_df is None or full_df.empty or "mitigation_technique" not in full_df.columns:
+        return None
+    base_df = full_df[full_df["mitigation_technique"] == "baseline"].copy()
+    if base_df.empty or "model_type" not in base_df.columns:
+        return None
+    rows_df = _best_rows_by_model(base_df)
+    return _save_model_radar(
+        rows_df,
+        output_file,
+        "Cross-Model Baseline Radar",
+        note="Baseline-only comparison; mitigated LR configs are excluded.",
+    )
+
+
+def save_cross_model_best_available_radar(full_df: pd.DataFrame, output_file):
+    """Appendix radar: best available row per model; LR may include mitigation."""
+    if full_df is None or full_df.empty or "model_type" not in full_df.columns:
+        return None
+    rows_df = _best_rows_by_model(full_df.copy())
+    return _save_model_radar(
+        rows_df,
+        output_file,
+        "Cross-Model Best Available Radar",
+        note="Appendix only: logistic regression has mitigation candidates; other models are baseline-only in current runs.",
+    )
+
+
+def _count_group_improvements(per_group_df: pd.DataFrame | None, selected_row: pd.Series) -> tuple[int, int]:
+    if per_group_df is None or per_group_df.empty:
+        return 0, 0
+    df = per_group_df.copy()
+    if "experiment_id" in df.columns and "experiment_id" in selected_row.index:
+        df = df[df["experiment_id"].astype(str) == str(selected_row.get("experiment_id"))]
+    else:
+        for col in [
+            "dataset",
+            "model_type",
+            "binning_strategy",
+            "training_method",
+            "mitigation_technique",
+            "model_variant",
+        ]:
+            if col in df.columns and col in selected_row.index:
+                df = df[df[col].astype(str) == str(selected_row.get(col))]
+    if df.empty:
+        return 0, 0
+    for col in ["baseline_value", "experiment_value", "baseline_overall_value", "experiment_overall_value"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df.dropna(subset=["baseline_value", "experiment_value"])
+    if df.empty:
+        return 0, 0
+    df["improvement"] = df.apply(_group_improvement, axis=1)
+    df = df.dropna(subset=["improvement"])
+    if df.empty:
+        return 0, 0
+    df["group_key"] = df["sensitive_attr"].map(_normalize_sensitive_attr) + ":" + df["group"].astype(str)
+    group_scores = df.groupby("group_key")["improvement"].mean()
+    return int((group_scores > 1e-12).sum()), int((group_scores < -1e-12).sum())
+
+
+def build_fairness_evidence_summary(
+    full_df: pd.DataFrame,
+    per_group_df: pd.DataFrame | None = None,
+    top_n: int = 5,
+    min_recall_delta: float = -0.03,
+) -> pd.DataFrame:
+    """Top mitigation evidence rows, ranked by metric-level fairness improvement."""
+    if full_df is None or full_df.empty or "mitigation_technique" not in full_df.columns:
+        return pd.DataFrame()
+    df = full_df[full_df["mitigation_technique"] != "baseline"].copy()
+    if "model_type" in df.columns:
+        lr_df = df[df["model_type"] == "logistic_regression"].copy()
+        if not lr_df.empty:
+            df = lr_df
+    if df.empty:
+        return pd.DataFrame()
+    for col in [
+        "delta_fairness_gap",
+        "delta_recall",
+        "delta_f1",
+        "delta_dp_gap",
+        "delta_eq_tpr_gap",
+        "delta_eq_fpr_gap",
+        "f1_value",
+        "recall_value",
+        "fairness_gap",
+    ]:
+        df[col] = _numeric_series(df, col)
+
+    eligible = df[(df["delta_fairness_gap"] > 0) & (df["delta_recall"] >= min_recall_delta)]
+    if eligible.empty:
+        eligible = df[df["delta_fairness_gap"] > 0]
+    if eligible.empty:
+        eligible = df
+    eligible = eligible.sort_values(
+        ["delta_fairness_gap", "delta_recall", "delta_f1"],
+        ascending=[False, False, False],
+        na_position="last",
+    )
+
+    rows = []
+    seen_mitigations = set()
+    for _, row in eligible.iterrows():
+        mitigation = row.get("mitigation_technique")
+        if mitigation in seen_mitigations:
+            continue
+        seen_mitigations.add(mitigation)
+        groups_improved, groups_worsened = _count_group_improvements(per_group_df, row)
+        rows.append(
+            {
+                "dataset": row.get("dataset"),
+                "model_type": row.get("model_type"),
+                "model_variant": row.get("model_variant"),
+                "binning_strategy": row.get("binning_strategy"),
+                "training_method": row.get("training_method"),
+                "mitigation_technique": mitigation,
+                "display_mitigation": _display_mitigation(mitigation),
+                "f1": row.get("f1_value"),
+                "recall": row.get("recall_value"),
+                "fairness_gap": row.get("fairness_gap"),
+                "delta_fairness_gap": row.get("delta_fairness_gap"),
+                "delta_recall": row.get("delta_recall"),
+                "delta_f1": row.get("delta_f1"),
+                "delta_dp_gap": row.get("delta_dp_gap"),
+                "delta_eq_tpr_gap": row.get("delta_eq_tpr_gap"),
+                "delta_eq_fpr_gap": row.get("delta_eq_fpr_gap"),
+                "groups_improved": groups_improved,
+                "groups_worsened": groups_worsened,
+                "experiment_id": row.get("experiment_id"),
+            }
+        )
+        if len(rows) >= top_n:
+            break
+    return pd.DataFrame(rows)
+
+
+def save_fairness_evidence_summary(
+    full_df: pd.DataFrame,
+    per_group_df: pd.DataFrame | None,
+    output_file,
+    top_n: int = 5,
+):
+    summary = build_fairness_evidence_summary(full_df, per_group_df, top_n=top_n)
+    if summary.empty:
+        return None
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    summary.to_csv(output_path, index=False)
+    return output_file
 
 
 def save_comparison_heatmap(
@@ -347,8 +1021,8 @@ def save_mitigation_effectiveness_matrix(full_df: pd.DataFrame, output_file):
     full_df : pd.DataFrame
         ``full_comparison.csv`` content.  Required columns:
         ``mitigation_technique``, ``fairness_gain_pct``.
-        ``score_drop_pct`` is used if present; otherwise computed from
-        ``baseline_score`` and ``score_value``.
+        ``performance_cost_pct`` is used when present. Older ``score_drop_pct``
+        remains supported as a fallback.
     output_file : path-like
         Destination path for the saved PNG.
 
@@ -364,7 +1038,16 @@ def save_mitigation_effectiveness_matrix(full_df: pd.DataFrame, output_file):
     if plot_df.empty:
         return None
 
-    if "score_drop_pct" not in plot_df.columns:
+    plot_df["fairness_gain_pct"] = pd.to_numeric(plot_df["fairness_gain_pct"], errors="coerce")
+    # Stored values are fractions in current comparison outputs; display true percent.
+    if plot_df["fairness_gain_pct"].abs().max(skipna=True) <= 1.5:
+        plot_df["fairness_gain_pct"] = plot_df["fairness_gain_pct"] * 100
+
+    if "performance_cost_pct" in plot_df.columns:
+        plot_df["score_drop_pct"] = pd.to_numeric(plot_df["performance_cost_pct"], errors="coerce")
+    elif "score_drop_pct" in plot_df.columns:
+        plot_df["score_drop_pct"] = pd.to_numeric(plot_df["score_drop_pct"], errors="coerce")
+    else:
         if "score_value" in plot_df.columns and "baseline_score" in plot_df.columns:
             plot_df["score_drop_pct"] = (
                 (plot_df["baseline_score"] - plot_df["score_value"])
@@ -377,10 +1060,11 @@ def save_mitigation_effectiveness_matrix(full_df: pd.DataFrame, output_file):
     agg = plot_df.groupby("mitigation_technique")[["fairness_gain_pct", "score_drop_pct"]].mean()
     if agg.empty:
         return None
+    agg.index = [_display_mitigation(idx) for idx in agg.index]
 
     has_cost = not agg["score_drop_pct"].isna().all()
     n_panels = 2 if has_cost else 1
-    fig, axes = plt.subplots(1, n_panels, figsize=(6 * n_panels + 1, max(5, len(agg) * 0.6 + 2)))
+    fig, axes = plt.subplots(1, n_panels, figsize=(6 * n_panels + 1, max(5, len(agg) * 0.45 + 2)))
     if n_panels == 1:
         axes = [axes]
 
@@ -411,9 +1095,9 @@ def save_mitigation_effectiveness_matrix(full_df: pd.DataFrame, output_file):
         axes[1].set_ylabel("")
         axes[1].set_xlabel("")
 
-    fig.suptitle("Mitigation Effectiveness: Fairness Gain vs Performance Cost", fontsize=12)
+    fig.suptitle("Mitigation Effectiveness: Fairness Gain vs Metric-Level Cost", fontsize=12)
     plt.tight_layout()
-    fig.savefig(output_file, dpi=200)
+    fig.savefig(output_file, dpi=300, bbox_inches="tight")
     plt.close(fig)
     return output_file
 
