@@ -422,81 +422,151 @@ def filter_best_configurations(
     return best_df  # empty DataFrame (strict set was empty)
 
 
+def _normalize_sensitive_attr(attr: object) -> str:
+    """Normalize attribute names across baseline-assess and experiment JSONs."""
+    attr_str = str(attr)
+    if attr_str.endswith("_cat"):
+        return attr_str[: -len("_cat")]
+    return attr_str
+
+
+def _safe_float(value):
+    try:
+        if value is None:
+            return None
+        value = float(value)
+        if np.isnan(value):
+            return None
+        return value
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_int(value):
+    try:
+        if value is None:
+            return None
+        if pd.isna(value):
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _baseline_key_from_row(row, include_variant: bool = True) -> tuple:
+    key = (
+        row["dataset"],
+        row.get("model_type", "logistic_regression"),
+        row["binning_strategy"],
+        row["training_method"],
+    )
+    if include_variant:
+        return key[:2] + (row.get("model_variant", "default"),) + key[2:]
+    return key
+
+
+def _extract_result_fairness_metrics(exp_data: dict) -> dict:
+    """Return fairness_metrics from a loaded experiment payload."""
+    if not isinstance(exp_data, dict):
+        return {}
+    results = exp_data.get("results", exp_data)
+    if not isinstance(results, dict):
+        return {}
+    return results.get("fairness_metrics", {})
+
+
+def _records_to_per_group_map(records: list[dict]) -> dict:
+    mapped = {}
+    for record in records:
+        key = (
+            _normalize_sensitive_attr(record.get("sensitive_attr")),
+            str(record.get("group")),
+            record.get("metric"),
+        )
+        mapped[key] = record
+    return mapped
+
+
 def _extract_per_group_fairness(fairness_metrics: dict) -> list:
     """Flatten per-group fairness data from a calculate_all_metrics() result dict.
 
     Returns a list of records:
-        {sensitive_attr, group, metric, value}
+        {sensitive_attr, group, metric, value, overall_value, group_count, ...}
 
     Covers group_fairness to {attr} to {demographic_parity, equalized_odds,
     equal_opportunity, predictive_parity} to group_rates / group_metrics.
     """
     records = []
     group_fairness = fairness_metrics.get("group_fairness", {}) if fairness_metrics else {}
+
+    def _append(attr, group, metric, value, group_data=None, overall_value=None):
+        group_data = group_data if isinstance(group_data, dict) else {}
+        records.append(
+            {
+                "sensitive_attr": _normalize_sensitive_attr(attr),
+                "group": str(group),
+                "metric": metric,
+                "value": _safe_float(value),
+                "overall_value": _safe_float(overall_value),
+                "group_count": _safe_int(group_data.get("count")),
+                "positive_count": _safe_int(group_data.get("positive_count")),
+                "negative_count": _safe_int(group_data.get("negative_count")),
+            }
+        )
+
     for attr, attr_metrics in group_fairness.items():
         if not isinstance(attr_metrics, dict):
             continue
 
         dp = attr_metrics.get("demographic_parity", {})
         if isinstance(dp, dict):
+            overall_rate = dp.get("overall_rate")
             for group, gdata in dp.get("group_rates", {}).items():
                 if isinstance(gdata, dict):
-                    records.append(
-                        {
-                            "sensitive_attr": attr,
-                            "group": str(group),
-                            "metric": "demographic_parity_rate",
-                            "value": gdata.get("positive_rate"),
-                        }
+                    _append(
+                        attr,
+                        group,
+                        "demographic_parity_rate",
+                        gdata.get("positive_rate"),
+                        group_data=gdata,
+                        overall_value=overall_rate,
+                    )
+                else:
+                    _append(
+                        attr,
+                        group,
+                        "demographic_parity_rate",
+                        gdata,
+                        overall_value=overall_rate,
                     )
 
         eq = attr_metrics.get("equalized_odds", {})
         if isinstance(eq, dict):
             for group, gdata in eq.get("group_metrics", {}).items():
                 if isinstance(gdata, dict):
-                    records.append(
-                        {
-                            "sensitive_attr": attr,
-                            "group": str(group),
-                            "metric": "tpr",
-                            "value": gdata.get("tpr"),
-                        }
-                    )
-                    records.append(
-                        {
-                            "sensitive_attr": attr,
-                            "group": str(group),
-                            "metric": "fpr",
-                            "value": gdata.get("fpr"),
-                        }
-                    )
+                    _append(attr, group, "tpr", gdata.get("tpr"), group_data=gdata)
+                    _append(attr, group, "fpr", gdata.get("fpr"), group_data=gdata)
 
         eqopp = attr_metrics.get("equal_opportunity", {})
         if isinstance(eqopp, dict):
             for group, tpr_val in eqopp.get("group_tpr", {}).items():
-                records.append(
-                    {
-                        "sensitive_attr": attr,
-                        "group": str(group),
-                        "metric": "equal_opportunity_tpr",
-                        "value": tpr_val if not isinstance(tpr_val, dict) else tpr_val.get("tpr"),
-                    }
+                _append(
+                    attr,
+                    group,
+                    "equal_opportunity_tpr",
+                    tpr_val if not isinstance(tpr_val, dict) else tpr_val.get("tpr"),
+                    group_data=tpr_val,
                 )
 
         pp = attr_metrics.get("predictive_parity", {})
         if isinstance(pp, dict):
             for group, prec_val in pp.get("group_precision", {}).items():
-                records.append(
-                    {
-                        "sensitive_attr": attr,
-                        "group": str(group),
-                        "metric": "predictive_parity_precision",
-                        "value": (
-                            prec_val
-                            if not isinstance(prec_val, dict)
-                            else prec_val.get("precision")
-                        ),
-                    }
+                _append(
+                    attr,
+                    group,
+                    "predictive_parity_precision",
+                    prec_val if not isinstance(prec_val, dict) else prec_val.get("precision"),
+                    group_data=prec_val,
                 )
     return records
 
@@ -542,24 +612,51 @@ def _build_per_group_comparison(
     run_root: Path,
     output_dir: Path,
 ) -> None:
-    """Build and save per_group_comparison.csv.
+    """Build and save per_group.csv.
 
     For each experiment, loads per-group fairness from its result JSON and pairs it
-    with the stage-6 baseline per-group JSON for the same (dataset, model_type).
+    with the matching combinatorial baseline experiment.  Fallbacks are used only
+    when an exact baseline row is absent.
     Output columns:
         dataset, model_type, binning_strategy, training_method, mitigation_technique,
         model_variant, sensitive_attr, group, metric,
-        baseline_value, experiment_value, delta
+        baseline_value, experiment_value, delta, baseline_source, counts/overall fields
     """
-    # Pre-load baseline per-group data keyed by (dataset, model_type)
-    baseline_pg: dict = {}
-    for (dataset, model_type), _ in df_success.groupby(["dataset", "model_type"], dropna=False):
-        key = (dataset, model_type)
-        if key not in baseline_pg:
-            records = _load_baseline_per_group(run_root, dataset, model_type)
-            baseline_pg[key] = {
-                (r["sensitive_attr"], r["group"], r["metric"]): r["value"] for r in records
-            }
+    baseline_exact: dict[tuple, dict] = {}
+    baseline_fallback: dict[tuple, dict] = {}
+
+    baseline_rows = df_success[df_success["mitigation_technique"] == "baseline"].copy()
+    for _, base_row in baseline_rows.iterrows():
+        exp_id = base_row["experiment_id"]
+        try:
+            exp_data = versioning.load_experiment(exp_id)
+            records = _extract_per_group_fairness(_extract_result_fairness_metrics(exp_data))
+        except Exception as exc:
+            logging.debug("Could not load combinatorial baseline %s: %s", exp_id, exc)
+            continue
+
+        record_map = _records_to_per_group_map(records)
+        exact_key = _baseline_key_from_row(base_row, include_variant=True)
+        fallback_key = _baseline_key_from_row(base_row, include_variant=False)
+        baseline_exact[exact_key] = record_map
+        baseline_fallback.setdefault(fallback_key, record_map)
+
+    baseline_assess_cache: dict[tuple, dict] = {}
+
+    def _get_baseline_map(exp_row) -> tuple[dict, str]:
+        exact_key = _baseline_key_from_row(exp_row, include_variant=True)
+        fallback_key = _baseline_key_from_row(exp_row, include_variant=False)
+
+        if exact_key in baseline_exact:
+            return baseline_exact[exact_key], "combinatorial_exact"
+        if fallback_key in baseline_fallback:
+            return baseline_fallback[fallback_key], "combinatorial_no_variant"
+
+        assess_key = (exp_row["dataset"], exp_row.get("model_type", "logistic_regression"))
+        if assess_key not in baseline_assess_cache:
+            records = _load_baseline_per_group(run_root, assess_key[0], assess_key[1])
+            baseline_assess_cache[assess_key] = _records_to_per_group_map(records)
+        return baseline_assess_cache.get(assess_key, {}), "baseline_assess"
 
     rows = []
     for _, exp_row in df_success.iterrows():
@@ -568,21 +665,26 @@ def _build_per_group_comparison(
         exp_id = exp_row["experiment_id"]
         dataset = exp_row["dataset"]
         model_type = exp_row.get("model_type", "logistic_regression")
-        baseline_lookup_key = (dataset, model_type)
 
         try:
             exp_data = versioning.load_experiment(exp_id)
-            fairness_metrics = (
-                exp_data["results"].get("fairness_metrics", {}) if exp_data.get("results") else {}
-            )
+            fairness_metrics = _extract_result_fairness_metrics(exp_data)
         except Exception:
             continue
 
         pg_records = _extract_per_group_fairness(fairness_metrics)
-        baseline_map = baseline_pg.get(baseline_lookup_key, {})
+        baseline_map, baseline_source = _get_baseline_map(exp_row)
 
         for rec in pg_records:
-            baseline_val = baseline_map.get((rec["sensitive_attr"], rec["group"], rec["metric"]))
+            baseline_rec = baseline_map.get(
+                (
+                    _normalize_sensitive_attr(rec["sensitive_attr"]),
+                    str(rec["group"]),
+                    rec["metric"],
+                ),
+                {},
+            )
+            baseline_val = baseline_rec.get("value")
             exp_val = rec["value"]
             delta = (
                 (exp_val - baseline_val)
@@ -593,6 +695,7 @@ def _build_per_group_comparison(
                 {
                     "dataset": dataset,
                     "model_type": model_type,
+                    "experiment_id": exp_id,
                     "binning_strategy": exp_row["binning_strategy"],
                     "training_method": exp_row["training_method"],
                     "mitigation_technique": exp_row["mitigation_technique"],
@@ -603,6 +706,12 @@ def _build_per_group_comparison(
                     "baseline_value": baseline_val,
                     "experiment_value": exp_val,
                     "delta": delta,
+                    "baseline_source": baseline_source,
+                    "group_count": rec.get("group_count"),
+                    "positive_count": rec.get("positive_count"),
+                    "negative_count": rec.get("negative_count"),
+                    "baseline_overall_value": baseline_rec.get("overall_value"),
+                    "experiment_overall_value": rec.get("overall_value"),
                 }
             )
 
@@ -802,21 +911,20 @@ def run_comparison_analysis(
             df_success[col] = np.nan
     df_success["fairness_gap"] = df_success[fairness_cols].max(axis=1, skipna=True)
 
-    # Compute fairness gains per metric vs baseline
-    # Key must include model_type so LR baseline is not confused with RF baseline.
+    # Compute metric-level deltas vs matching baseline.
+    # Exact key includes model_variant so LR c_0_5/c_1_0 baselines do not overwrite each other.
     fairness_metric_cols = [
         c for c in df_success.columns if c.startswith("dem_parity_") or c.startswith("eq_odds_")
     ]
+    dp_cols = [c for c in fairness_metric_cols if c.startswith("dem_parity_")]
+    eq_tpr_cols = [c for c in fairness_metric_cols if c.startswith("eq_odds_") and "_tpr_" in c]
+    eq_fpr_cols = [c for c in fairness_metric_cols if c.startswith("eq_odds_") and "_fpr_" in c]
 
-    baseline_lookup = {}
+    baseline_lookup_exact = {}
+    baseline_lookup_no_variant = {}
     for _, row in df_success[df_success["mitigation_technique"] == "baseline"].iterrows():
-        key = (
-            row["dataset"],
-            row.get("model_type", "logistic_regression"),
-            row["binning_strategy"],
-            row["training_method"],
-        )
-        baseline_lookup[key] = row
+        baseline_lookup_exact[_baseline_key_from_row(row, include_variant=True)] = row
+        baseline_lookup_no_variant.setdefault(_baseline_key_from_row(row, include_variant=False), row)
 
     for col in fairness_metric_cols:
         gain_col = f"gain_{col}"
@@ -825,15 +933,40 @@ def run_comparison_analysis(
     df_success["baseline_fairness_gap"] = np.nan
     df_success["fairness_gain_score"] = np.nan
     df_success["fairness_gain_pct"] = np.nan
+    delta_cols = [
+        "delta_f1",
+        "delta_recall",
+        "delta_precision",
+        "delta_auc",
+        "delta_accuracy",
+        "delta_fairness_gap",
+        "delta_dp_gap",
+        "delta_eq_tpr_gap",
+        "delta_eq_fpr_gap",
+        "performance_cost_pct_f1",
+        "performance_cost_pct_recall",
+        "performance_cost_pct_precision",
+        "performance_cost_pct_auc",
+        "performance_cost_pct_accuracy",
+        "performance_cost_pct",
+    ]
+    for col in delta_cols:
+        df_success[col] = np.nan
+
+    def _baseline_for_row(row):
+        exact_key = _baseline_key_from_row(row, include_variant=True)
+        fallback_key = _baseline_key_from_row(row, include_variant=False)
+        return baseline_lookup_exact.get(exact_key, baseline_lookup_no_variant.get(fallback_key))
+
+    def _max_or_nan(series, cols):
+        vals = [series.get(col) for col in cols if col in series.index]
+        vals = [v for v in vals if not pd.isna(v)]
+        if not vals:
+            return np.nan
+        return float(np.nanmax(vals))
 
     for idx, row in df_success.iterrows():
-        key = (
-            row["dataset"],
-            row.get("model_type", "logistic_regression"),
-            row["binning_strategy"],
-            row["training_method"],
-        )
-        baseline = baseline_lookup.get(key)
+        baseline = _baseline_for_row(row)
         if baseline is None:
             continue
 
@@ -849,6 +982,47 @@ def run_comparison_analysis(
 
         base_gap = baseline.get("fairness_gap")
         df_success.at[idx, "baseline_fairness_gap"] = base_gap
+        curr_gap = row.get("fairness_gap")
+        if not pd.isna(base_gap) and not pd.isna(curr_gap):
+            df_success.at[idx, "delta_fairness_gap"] = base_gap - curr_gap
+
+        performance_specs = [
+            ("f1_value", "delta_f1", "performance_cost_pct_f1"),
+            ("recall_value", "delta_recall", "performance_cost_pct_recall"),
+            ("precision_value", "delta_precision", "performance_cost_pct_precision"),
+            ("auc_value", "delta_auc", "performance_cost_pct_auc"),
+            ("accuracy_value", "delta_accuracy", "performance_cost_pct_accuracy"),
+        ]
+        costs = []
+        for metric_col, delta_col, cost_col in performance_specs:
+            base_val = baseline.get(metric_col)
+            curr_val = row.get(metric_col)
+            if pd.isna(base_val) or pd.isna(curr_val):
+                continue
+            delta = curr_val - base_val
+            df_success.at[idx, delta_col] = delta
+            if base_val and base_val > 0:
+                cost = max((base_val - curr_val) / base_val * 100, 0)
+                df_success.at[idx, cost_col] = cost
+                costs.append(cost)
+
+        base_dp = _max_or_nan(baseline, dp_cols)
+        curr_dp = _max_or_nan(row, dp_cols)
+        if not pd.isna(base_dp) and not pd.isna(curr_dp):
+            df_success.at[idx, "delta_dp_gap"] = base_dp - curr_dp
+
+        base_tpr = _max_or_nan(baseline, eq_tpr_cols)
+        curr_tpr = _max_or_nan(row, eq_tpr_cols)
+        if not pd.isna(base_tpr) and not pd.isna(curr_tpr):
+            df_success.at[idx, "delta_eq_tpr_gap"] = base_tpr - curr_tpr
+
+        base_fpr = _max_or_nan(baseline, eq_fpr_cols)
+        curr_fpr = _max_or_nan(row, eq_fpr_cols)
+        if not pd.isna(base_fpr) and not pd.isna(curr_fpr):
+            df_success.at[idx, "delta_eq_fpr_gap"] = base_fpr - curr_fpr
+
+        if costs:
+            df_success.at[idx, "performance_cost_pct"] = float(np.mean(costs))
 
         if gains:
             gain_score = float(np.mean(gains))
