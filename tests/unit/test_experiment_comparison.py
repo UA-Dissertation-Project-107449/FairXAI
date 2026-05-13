@@ -11,8 +11,10 @@ sys.path.insert(0, str(_EXPERIMENTS_DIR))
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from run_experiment_comparison import (  # noqa: E402
+    _baseline_key_from_row,
     _extract_per_group_fairness,
     _load_baseline_per_group,
+    _normalize_sensitive_attr,
 )
 
 
@@ -64,13 +66,14 @@ class TestLoadBaselinePerGroup:
 class TestBaselineLookupKeyIncludesModelType:
     """Regression test: baseline key must include model_type to avoid cross-model confusion."""
 
-    def test_baseline_key_is_four_tuple(self):
-        """Verify the key used by the baseline_lookup includes model_type."""
+    def test_baseline_key_includes_model_variant(self):
+        """Verify the baseline key separates LR variants as well as model type."""
         # Construct a small df and simulate the lookup construction from run_comparison_analysis.
         df = pd.DataFrame(
             {
                 "dataset": ["cleveland", "cleveland"],
-                "model_type": ["logistic_regression", "random_forest"],
+                "model_type": ["logistic_regression", "logistic_regression"],
+                "model_variant": ["c_0_5", "c_1_0"],
                 "binning_strategy": ["fixed_10yr", "fixed_10yr"],
                 "training_method": ["single_split", "single_split"],
                 "mitigation_technique": ["baseline", "baseline"],
@@ -83,15 +86,16 @@ class TestBaselineLookupKeyIncludesModelType:
         baseline_df = df[df["mitigation_technique"] == "baseline"]
         lookup = {}
         for _, row in baseline_df.iterrows():
-            key = (
-                row["dataset"],
-                row.get("model_type", "logistic_regression"),
-                row["binning_strategy"],
-                row["training_method"],
-            )
-            lookup[key] = row
+            lookup[_baseline_key_from_row(row, include_variant=True)] = row
 
-        # Two different model types → two separate baseline entries (not overwriting each other)
+        # Two variants → two separate baseline entries (not overwriting each other)
         assert len(lookup) == 2
-        assert ("cleveland", "logistic_regression", "fixed_10yr", "single_split") in lookup
-        assert ("cleveland", "random_forest", "fixed_10yr", "single_split") in lookup
+        assert ("cleveland", "logistic_regression", "c_0_5", "fixed_10yr", "single_split") in lookup
+        assert ("cleveland", "logistic_regression", "c_1_0", "fixed_10yr", "single_split") in lookup
+
+
+class TestSensitiveAttrNormalization:
+    def test_cat_suffix_normalizes_for_join(self):
+        assert _normalize_sensitive_attr("age_group_cat") == "age_group"
+        assert _normalize_sensitive_attr("sex_cat") == "sex"
+        assert _normalize_sensitive_attr("sex") == "sex"

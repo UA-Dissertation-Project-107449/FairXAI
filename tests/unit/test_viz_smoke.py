@@ -8,10 +8,19 @@ import numpy as np
 import pandas as pd
 
 from fairxai.viz.experiment_plots import (
+    build_fairness_evidence_summary,
+    save_before_after_metric_radar,
+    save_cross_model_baseline_radar,
+    save_cross_model_best_available_radar,
     save_cross_model_radar,
+    save_fairness_evidence_summary,
+    save_group_before_after_bars,
+    save_group_delta_bars,
     save_intersectional_heatmap,
+    save_mitigation_delta_matrix,
     save_mitigation_effectiveness_matrix,
     save_pareto_all_models,
+    select_primary_fairness_row,
 )
 from fairxai.viz.fairness import (
     plot_bias_amplification_waterfall,
@@ -42,10 +51,13 @@ def _make_full_comparison_df(n: int = 40) -> pd.DataFrame:
         binn = _BINNINGS[i % len(_BINNINGS)]
         rows.append(
             {
+                "experiment_id": f"exp_{i}",
                 "model_type": model,
+                "dataset": "cleveland",
                 "mitigation_technique": mit,
                 "binning_strategy": binn,
                 "training_method": "standard",
+                "model_variant": "default",
                 "f1_value": rng.uniform(0.6, 0.9),
                 "recall_value": rng.uniform(0.5, 0.9),
                 "precision_value": rng.uniform(0.5, 0.9),
@@ -60,16 +72,29 @@ def _make_full_comparison_df(n: int = 40) -> pd.DataFrame:
                 "fairness_gain_pct": rng.uniform(-5, 40),
                 "baseline_score": rng.uniform(0.65, 0.8),
                 "score_value": rng.uniform(0.60, 0.82),
+                "delta_f1": rng.uniform(-0.05, 0.06),
+                "delta_recall": rng.uniform(-0.02, 0.08),
+                "delta_precision": rng.uniform(-0.05, 0.05),
+                "delta_auc": rng.uniform(-0.03, 0.04),
+                "delta_accuracy": rng.uniform(-0.04, 0.04),
+                "delta_fairness_gap": rng.uniform(-0.02, 0.12),
+                "delta_dp_gap": rng.uniform(-0.02, 0.12),
+                "delta_eq_tpr_gap": rng.uniform(-0.02, 0.10),
+                "delta_eq_fpr_gap": rng.uniform(-0.02, 0.08),
+                "performance_cost_pct": rng.uniform(0, 6),
             }
         )
     # Add a few explicit baseline rows
     for model in _MODELS:
         rows.append(
             {
+                "experiment_id": f"base_{model}",
                 "model_type": model,
+                "dataset": "cleveland",
                 "mitigation_technique": "baseline",
                 "binning_strategy": "equal_width_5",
                 "training_method": "standard",
+                "model_variant": "default",
                 "f1_value": 0.72,
                 "recall_value": 0.70,
                 "precision_value": 0.74,
@@ -84,6 +109,16 @@ def _make_full_comparison_df(n: int = 40) -> pd.DataFrame:
                 "fairness_gain_pct": 0.0,
                 "baseline_score": 0.72,
                 "score_value": 0.72,
+                "delta_f1": 0.0,
+                "delta_recall": 0.0,
+                "delta_precision": 0.0,
+                "delta_auc": 0.0,
+                "delta_accuracy": 0.0,
+                "delta_fairness_gap": 0.0,
+                "delta_dp_gap": 0.0,
+                "delta_eq_tpr_gap": 0.0,
+                "delta_eq_fpr_gap": 0.0,
+                "performance_cost_pct": 0.0,
             }
         )
     return pd.DataFrame(rows)
@@ -106,13 +141,21 @@ def _make_per_group_df() -> pd.DataFrame:
                     ev = rng.uniform(0.3, 0.7)
                     rows.append(
                         {
+                            "experiment_id": f"{mit}_{attr}",
+                            "dataset": "cleveland",
+                            "model_type": "logistic_regression",
+                            "binning_strategy": "fixed_10yr",
+                            "training_method": "single_split",
                             "mitigation_technique": mit,
+                            "model_variant": "default",
                             "sensitive_attr": attr,
                             "group": grp,
                             "metric": metric,
                             "baseline_value": bv,
                             "experiment_value": ev,
                             "delta": ev - bv,
+                            "baseline_overall_value": 0.50,
+                            "experiment_overall_value": 0.52,
                         }
                     )
     return pd.DataFrame(rows)
@@ -296,3 +339,65 @@ class TestExperimentPlots:
     def test_save_pareto_all_models_missing_cols_returns_none(self, tmp_path):
         df = pd.DataFrame({"model_type": ["logistic_regression"], "f1_value": [0.7]})
         assert save_pareto_all_models(df, tmp_path / "x.png") is None
+
+    def test_save_before_after_metric_radar_creates_file(self, tmp_path):
+        df = _make_full_comparison_df()
+        out = tmp_path / "before_after_radar.png"
+        selected = df[
+            (df["mitigation_technique"] != "baseline")
+            & (df["binning_strategy"] == "equal_width_5")
+        ].iloc[0]
+        result = save_before_after_metric_radar(df, out, selected_row=selected)
+        assert result is not None
+        assert out.exists()
+
+    def test_save_mitigation_delta_matrix_creates_file(self, tmp_path):
+        df = _make_full_comparison_df()
+        out = tmp_path / "delta_matrix.png"
+        result = save_mitigation_delta_matrix(df, out)
+        assert result is not None
+        assert out.exists()
+
+    def test_group_before_after_and_delta_create_files(self, tmp_path):
+        full_df = _make_full_comparison_df()
+        per_group = _make_per_group_df()
+        selected = full_df[
+            (full_df["mitigation_technique"] != "baseline")
+            & (full_df["binning_strategy"] == "equal_width_5")
+        ].iloc[0]
+
+        before_after = tmp_path / "group_before_after.png"
+        result = save_group_before_after_bars(
+            per_group, before_after, "age_group_cat", selected
+        )
+        assert result is not None
+        assert before_after.exists()
+
+        delta = tmp_path / "group_delta.png"
+        result = save_group_delta_bars(per_group, delta, "age_group_cat", selected)
+        assert result is not None
+        assert delta.exists()
+
+    def test_cross_model_new_radars_create_files(self, tmp_path):
+        df = _make_full_comparison_df()
+        baseline_out = tmp_path / "baseline_model_radar.png"
+        best_out = tmp_path / "best_model_radar.png"
+
+        assert save_cross_model_baseline_radar(df, baseline_out) is not None
+        assert baseline_out.exists()
+        assert save_cross_model_best_available_radar(df, best_out) is not None
+        assert best_out.exists()
+
+    def test_fairness_evidence_summary_creates_file(self, tmp_path):
+        full_df = _make_full_comparison_df()
+        per_group = _make_per_group_df()
+        summary = build_fairness_evidence_summary(full_df, per_group)
+        assert not summary.empty
+        assert {"groups_improved", "groups_worsened", "delta_fairness_gap"}.issubset(
+            summary.columns
+        )
+
+        out = tmp_path / "fairness_evidence_summary.csv"
+        result = save_fairness_evidence_summary(full_df, per_group, out)
+        assert result is not None
+        assert out.exists()
