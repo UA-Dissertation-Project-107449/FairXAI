@@ -27,6 +27,7 @@ from fairxai.viz.fairness import (
     plot_fairness_metric_heatmap,
     plot_group_performance_gaps,
 )
+from fairxai.viz import fairness_comparison as fairness_comparison_viz
 from fairxai.viz.transformations import (
     plot_before_after_distributions,
     plot_scaling_effects,
@@ -355,6 +356,15 @@ class TestExperimentPlots:
         df = _make_full_comparison_df()
         out = tmp_path / "delta_matrix.png"
         result = save_mitigation_delta_matrix(df, out)
+        assert result is not None
+        assert out.exists()
+
+    def test_fairness_comparison_delta_matrix_does_not_need_score_value(self, tmp_path):
+        df = _make_full_comparison_df().drop(
+            columns=["score_value", "baseline_score", "fairness_gain_pct"], errors="ignore"
+        )
+        out = tmp_path / "delta_no_score.png"
+        result = fairness_comparison_viz.save_mitigation_delta_matrix(df, out)
         assert result is not None
         assert out.exists()
 

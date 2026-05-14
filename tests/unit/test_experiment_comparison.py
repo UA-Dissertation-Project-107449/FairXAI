@@ -10,6 +10,12 @@ _EXPERIMENTS_DIR = Path(__file__).parent.parent.parent / "scripts" / "experiment
 sys.path.insert(0, str(_EXPERIMENTS_DIR))
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
+from fairxai.comparison.config import load_comparison_config  # noqa: E402
+from fairxai.comparison.metric_tables import (  # noqa: E402
+    build_group_metric_deltas,
+    build_metric_deltas,
+    build_metric_values,
+)
 from run_experiment_comparison import (  # noqa: E402
     _baseline_key_from_row,
     _extract_per_group_fairness,
@@ -99,3 +105,113 @@ class TestSensitiveAttrNormalization:
         assert _normalize_sensitive_attr("age_group_cat") == "age_group"
         assert _normalize_sensitive_attr("sex_cat") == "sex"
         assert _normalize_sensitive_attr("sex") == "sex"
+
+
+class TestCanonicalMetricTables:
+    def _full_df(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    "experiment_id": "base",
+                    "dataset": "cleveland",
+                    "model_type": "logistic_regression",
+                    "model_variant": "c_1_0",
+                    "binning_strategy": "fixed_10yr",
+                    "training_method": "single_split",
+                    "mitigation_technique": "baseline",
+                    "f1_value": 0.70,
+                    "recall_value": 0.65,
+                    "precision_value": 0.75,
+                    "auc_value": 0.80,
+                    "accuracy_value": 0.72,
+                    "fairness_gap": 0.20,
+                    "dp_max_diff": 0.18,
+                    "eq_odds_age_group_tpr_diff": 0.14,
+                    "eq_odds_age_group_fpr_diff": 0.10,
+                },
+                {
+                    "experiment_id": "mit",
+                    "dataset": "cleveland",
+                    "model_type": "logistic_regression",
+                    "model_variant": "c_1_0",
+                    "binning_strategy": "fixed_10yr",
+                    "training_method": "single_split",
+                    "mitigation_technique": "smote",
+                    "f1_value": 0.68,
+                    "recall_value": 0.70,
+                    "precision_value": 0.72,
+                    "auc_value": 0.79,
+                    "accuracy_value": 0.71,
+                    "fairness_gap": 0.12,
+                    "dp_max_diff": 0.11,
+                    "eq_odds_age_group_tpr_diff": 0.09,
+                    "eq_odds_age_group_fpr_diff": 0.07,
+                },
+            ]
+        )
+
+    def test_metric_values_and_deltas_are_long_and_directional(self):
+        full_df = self._full_df()
+        values = build_metric_values(full_df)
+        deltas = build_metric_deltas(full_df)
+
+        assert {"metric_family", "metric", "value", "higher_is_better"}.issubset(values.columns)
+        assert {"baseline_value", "experiment_value", "delta", "improvement"}.issubset(
+            deltas.columns
+        )
+        f1 = deltas[deltas["metric"] == "f1"].iloc[0]
+        fairness = deltas[deltas["metric"] == "fairness_gap"].iloc[0]
+        assert round(float(f1["delta"]), 6) == -0.02
+        assert round(float(f1["improvement"]), 6) == -0.02
+        assert round(float(fairness["delta"]), 6) == -0.08
+        assert round(float(fairness["improvement"]), 6) == 0.08
+
+    def test_group_metric_deltas_normalize_improvement_direction(self):
+        per_group = pd.DataFrame(
+            [
+                {
+                    "experiment_id": "mit",
+                    "dataset": "cleveland",
+                    "model_type": "logistic_regression",
+                    "model_variant": "c_1_0",
+                    "binning_strategy": "fixed_10yr",
+                    "training_method": "single_split",
+                    "mitigation_technique": "smote",
+                    "sensitive_attr": "age_group_cat",
+                    "group": "60-69",
+                    "metric": "fpr",
+                    "baseline_value": 0.30,
+                    "experiment_value": 0.20,
+                },
+                {
+                    "experiment_id": "mit",
+                    "dataset": "cleveland",
+                    "model_type": "logistic_regression",
+                    "model_variant": "c_1_0",
+                    "binning_strategy": "fixed_10yr",
+                    "training_method": "single_split",
+                    "mitigation_technique": "smote",
+                    "sensitive_attr": "age_group_cat",
+                    "group": "60-69",
+                    "metric": "demographic_parity_rate",
+                    "baseline_value": 0.80,
+                    "experiment_value": 0.62,
+                    "baseline_overall_value": 0.50,
+                    "experiment_overall_value": 0.52,
+                },
+            ]
+        )
+        deltas = build_group_metric_deltas(per_group)
+
+        assert set(deltas["sensitive_attr"]) == {"age_group"}
+        assert round(float(deltas[deltas["metric"] == "fpr"]["improvement"].iloc[0]), 6) == 0.10
+        dp = deltas[deltas["metric"] == "demographic_parity_rate"].iloc[0]
+        assert round(float(dp["distance_improvement"]), 6) == 0.20
+
+    def test_comparison_config_loads_yaml_defaults(self, tmp_path):
+        cfg = tmp_path / "comparison.yaml"
+        cfg.write_text("selection:\n  primary_model_type: random_forest\n", encoding="utf-8")
+        loaded = load_comparison_config(Path(__file__).parents[2], str(cfg))
+
+        assert loaded["selection"]["primary_model_type"] == "random_forest"
+        assert loaded["canonical_outputs"]["enabled"] is True

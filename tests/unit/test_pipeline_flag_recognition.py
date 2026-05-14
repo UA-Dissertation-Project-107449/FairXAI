@@ -37,6 +37,7 @@ def test_prefect_help_lists_scope_flags() -> None:
     assert "--parallel-experiments" in output
     assert "--max-cores" in output
     assert "--hpo-search-n-jobs" in output
+    assert "--comparison-config" in output
 
 
 def test_combinatorial_help_lists_scope_flags() -> None:
