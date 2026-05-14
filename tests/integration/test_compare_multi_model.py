@@ -18,6 +18,7 @@ sys.path.insert(0, str(_EXPERIMENTS_DIR))
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from run_experiment_comparison import (  # noqa: E402
+    _baseline_key_from_row,
     _build_per_group_comparison,
     _extract_per_group_fairness,
 )
@@ -98,18 +99,12 @@ class TestCrossModelSummary:
 
 class TestBaselineLookupMultiModel:
     def test_each_model_type_gets_own_baseline(self):
-        """Confirm the (dataset, model_type, binning, training) key avoids cross-model confusion."""
+        """Confirm baseline key avoids cross-model and cross-variant confusion."""
         df = _make_results_df()
         baseline_df = df[df["mitigation_technique"] == "baseline"]
         lookup = {}
         for _, row in baseline_df.iterrows():
-            key = (
-                row["dataset"],
-                row.get("model_type", "logistic_regression"),
-                row["binning_strategy"],
-                row["training_method"],
-            )
-            lookup[key] = row
+            lookup[_baseline_key_from_row(row, include_variant=True)] = row
 
         # All 4 model types should have their own baseline entry
         model_types_in_lookup = {k[1] for k in lookup.keys()}
@@ -161,6 +156,7 @@ class TestPerGroupComparison:
         required_cols = {
             "dataset",
             "model_type",
+            "experiment_id",
             "binning_strategy",
             "training_method",
             "mitigation_technique",
@@ -170,8 +166,13 @@ class TestPerGroupComparison:
             "baseline_value",
             "experiment_value",
             "delta",
+            "baseline_source",
+            "baseline_overall_value",
+            "experiment_overall_value",
         }
         assert required_cols.issubset(set(result.columns))
+        assert result["baseline_value"].notna().any()
+        assert result["delta"].notna().any()
 
     def test_extract_then_compare_produces_delta(self, minimal_fairness_metrics_dict):
         """Delta = experiment_value - baseline_value for known inputs."""

@@ -18,6 +18,7 @@ from prefect import flow, get_run_logger, task
 # Add the src directory to the path
 ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT_DIR / "src"))
+COMPARISON_CONFIG = "configs/experiments/comparison.yaml"
 
 from fairxai.cli.runner_utils import (  # noqa: E402
     get_run_root,
@@ -343,12 +344,12 @@ def compare_experiments(run_id: str, verbose: int = 0):
     logger = get_run_logger()
     logger.info("[PHASE 12/12] Experiment comparison and dissertation plots")
     script = ROOT_DIR / "scripts" / "cardiac" / "compare.py"
-    args = ["--pipeline", "cardiac", "--run-id", run_id]
+    args = ["--pipeline", "cardiac", "--run-id", run_id, "--config", COMPARISON_CONFIG]
     args.extend(_verbose_flags(verbose))
     _run_script(script, args, os.environ.copy())
 
     plots_script = ROOT_DIR / "scripts" / "studies" / "generate_dissertation_plots.py"
-    plots_args = ["--run-id", run_id]
+    plots_args = ["--run-id", run_id, "--config", COMPARISON_CONFIG]
     _run_script(plots_script, plots_args, os.environ.copy())
 
 
@@ -543,6 +544,7 @@ def cardiac_pipeline(
     logger.info(f"Mitigation enabled: {run_mitigation}")
     logger.info(f"Combinatorial enabled: {run_combinatorial}")
     logger.info(f"Comparison enabled: {run_comparison}")
+    logger.info(f"Comparison config: {COMPARISON_CONFIG}")
     logger.info(f"Datasets override: {datasets if datasets else 'config/default'}")
     logger.info(f"Model types override: {model_types if model_types else 'config/default'}")
 

@@ -5,23 +5,30 @@ Usage
     python scripts/generate_dissertation_plots.py --run-id latest
     python scripts/generate_dissertation_plots.py --run-id 2026-03-31_run_01
 
-Outputs are saved to ``output/cardiac/dissertation_figures/`` organised by section:
+Outputs are saved to ``output/cardiac/studies/dissertation_figures/<run_id>/``
+organised by section:
 
     fairness/
-        fairness_metric_heatmap_age.png
-        fairness_metric_heatmap_sex.png
-        group_performance_gaps_age.png
-        group_performance_gaps_sex.png
+        cleveland_age_group_fairness_metric_heatmap.png
+        cleveland_sex_fairness_metric_heatmap.png
         bias_amplification_waterfall.png   (requires stage_gaps.json in run dir)
     transformations/
         transformation_impact.png
         before_after_distributions.png
         scaling_effects.png
     cross_model/
-        intersectional_heatmap_dp.png
-        cross_model_radar.png
-        mitigation_effectiveness_matrix.png
-        pareto_all_models.png
+        cleveland_demographic_parity_intersectional_heatmap.png
+    fairness_comparison/
+        data/fairness_evidence_summary.csv
+        plots/cleveland_lr_primary_mitigation_radar_before_after.png
+        plots/cleveland_lr_mitigation_metric_delta_matrix.png
+        plots/cleveland_lr_primary_age_group_performance_gaps.png
+        plots/cleveland_lr_primary_sex_performance_gaps.png
+        plots/cleveland_lr_primary_age_group_before_after.png
+        plots/cleveland_lr_primary_sex_before_after.png
+        plots/cleveland_lr_primary_age_group_delta.png
+        plots/cleveland_lr_primary_sex_delta.png
+        plots/cleveland_baseline_cross_model_radar.png
 
 The script skips plots whose required data files are missing and logs a warning
 for each, so a partial run still produces as many plots as possible.
@@ -43,16 +50,22 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_ROOT / "src"))
 
 from fairxai.cli.runner_base import setup_study_logging
-from fairxai.viz.experiment_plots import (
-    save_cross_model_radar,
-    save_intersectional_heatmap,
-    save_mitigation_effectiveness_matrix,
-    save_pareto_all_models,
-)
+from fairxai.comparison import build_metric_plot_frame, figure_filename, load_comparison_config
+from fairxai.comparison.metric_tables import build_fairness_evidence_summary
 from fairxai.viz.fairness import (
     plot_bias_amplification_waterfall,
     plot_fairness_metric_heatmap,
-    plot_group_performance_gaps,
+)
+from fairxai.viz.fairness_comparison import (
+    save_before_after_metric_radar,
+    save_cross_model_baseline_radar,
+    save_cross_model_best_available_radar,
+    save_group_before_after_bars,
+    save_group_delta_bars,
+    save_group_performance_gap_bars,
+    save_intersectional_heatmap,
+    save_mitigation_delta_matrix,
+    select_primary_fairness_row,
 )
 from fairxai.viz.transformations import (
     plot_before_after_distributions,
@@ -103,10 +116,11 @@ def _safe_read_csv(path: Path) -> pd.DataFrame | None:
     return pd.read_csv(path)
 
 
-def _resolve_comparisons_dir(run_dir: Path) -> Path:
+def _resolve_comparisons_dir(run_dir: Path, comparison_config: dict | None = None) -> Path:
     """Resolve the comparisons data directory for both old and current layouts."""
+    data_subdir = (comparison_config or {}).get("outputs", {}).get("comparison_data_dir", "data")
     candidates = [
-        run_dir / "experiments" / "comparisons" / "data",
+        run_dir / "experiments" / "comparisons" / data_subdir,
         run_dir / "experiments" / "comparisons",
         run_dir / "experiments" / "full" / "comparisons",
     ]
@@ -128,50 +142,6 @@ def _phase(name: str) -> None:
     logger.info("[PHASE] %s", name)
 
 
-def _normalize_cross_model_summary(
-    summary_df: pd.DataFrame | None,
-    full_df: pd.DataFrame | None,
-) -> pd.DataFrame | None:
-    if summary_df is None or summary_df.empty:
-        return summary_df
-
-    df = summary_df.copy()
-
-    if "f1_score" not in df.columns and "f1" in df.columns:
-        df["f1_score"] = df["f1"]
-    if "auc_roc" not in df.columns and "auc" in df.columns:
-        df["auc_roc"] = df["auc"]
-
-    # Fill missing metrics from full_comparison rows referenced by experiment_id.
-    if full_df is not None and not full_df.empty and "experiment_id" in df.columns:
-        metric_cols = {
-            "precision": ["precision_value", "precision"],
-            "auc_roc": ["auc_value", "auc_roc"],
-            "recall": ["recall_value", "recall"],
-            "f1_score": ["f1_value", "f1_score"],
-            "fairness_gap": ["fairness_gap"],
-        }
-        src = full_df.copy()
-        merge_map = {"experiment_id": src.get("experiment_id")}
-        for target_col, candidates in metric_cols.items():
-            for candidate in candidates:
-                if candidate in src.columns:
-                    merge_map[target_col] = src[candidate]
-                    break
-        enrich_df = pd.DataFrame(merge_map)
-        df = df.merge(enrich_df, on="experiment_id", how="left", suffixes=("", "_from_full"))
-        for target_col in metric_cols:
-            fallback_col = f"{target_col}_from_full"
-            if fallback_col in df.columns:
-                if target_col not in df.columns:
-                    df[target_col] = df[fallback_col]
-                else:
-                    df[target_col] = df[target_col].fillna(df[fallback_col])
-                df = df.drop(columns=[fallback_col])
-
-    return df
-
-
 # ---------------------------------------------------------------------------
 # Section generators
 # ---------------------------------------------------------------------------
@@ -179,46 +149,39 @@ def _normalize_cross_model_summary(
 
 def _generate_fairness_plots(
     full_df: pd.DataFrame | None,
-    per_group_df: pd.DataFrame | None,
-    fairness_dir: Path,
     run_dir: Path,
     out_dir: Path,
+    comparison_config: dict,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     _phase("fairness plots")
 
     # 1. Fairness metric heatmaps (one per sensitive attribute)
     if full_df is not None:
-        for attr in _SENSITIVE_ATTRS:
-            attr_short = attr.replace("_cat", "")
-            result = plot_fairness_metric_heatmap(
-                full_df, attr, out_dir / f"fairness_metric_heatmap_{attr_short}.png"
+        datasets = (
+            sorted(full_df["dataset"].dropna().unique())
+            if "dataset" in full_df.columns
+            else ["dataset"]
+        )
+        for dataset in datasets:
+            dataset_df = (
+                full_df[full_df["dataset"].astype(str) == str(dataset)].copy()
+                if "dataset" in full_df.columns
+                else full_df
             )
-            _report(f"fairness_metric_heatmap_{attr_short}", result)
+            for attr in _SENSITIVE_ATTRS:
+                filename = figure_filename(
+                    comparison_config,
+                    "fairness_metric_heatmap",
+                    dataset=dataset,
+                    sensitive_attr=attr,
+                )
+                result = plot_fairness_metric_heatmap(dataset_df, attr, out_dir / filename)
+                _report(filename.removesuffix(".png"), result)
     else:
         logger.warning("[WARNING] fairness_metric_heatmap: full_comparison.csv missing")
 
-    # 2. Group performance gaps (baseline vs best LR experiment per attribute)
-    baseline_jsons = sorted(fairness_dir.glob("*_logistic_regression_fairness_assessment.json"))
-    if baseline_jsons:
-        before_json = baseline_jsons[0]
-        # Use the same file for both if no experiment JSON is available.
-        for attr in _SENSITIVE_ATTRS:
-            attr_short = attr.replace("_cat", "")
-            result = plot_group_performance_gaps(
-                before_json,
-                before_json,  # placeholder; replace with experiment JSON for real before/after
-                attr,
-                out_dir / f"group_performance_gaps_{attr_short}.png",
-            )
-            _report(f"group_performance_gaps_{attr_short}", result)
-    else:
-        logger.warning(
-            "[WARNING] group_performance_gaps: no baseline fairness JSON found under %s",
-            fairness_dir,
-        )
-
-    # 3. Bias amplification waterfall (requires stage_gaps.json placed in run dir)
+    # 2. Bias amplification waterfall (requires stage_gaps.json placed in run dir)
     stage_gaps_path = run_dir / "stage_gaps.json"
     if stage_gaps_path.exists():
         with stage_gaps_path.open() as f:
@@ -331,51 +294,189 @@ def _generate_transformation_plots(
 
 
 def _generate_cross_model_plots(
-    full_df: pd.DataFrame | None,
     per_group_df: pd.DataFrame | None,
-    summary_df: pd.DataFrame | None,
     out_dir: Path,
+    comparison_config: dict,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     _phase("cross-model plots")
 
-    # 7. Intersectional heatmap
-    if per_group_df is not None:
+    if per_group_df is not None and "dataset" in per_group_df.columns:
+        for dataset in sorted(per_group_df["dataset"].dropna().unique()):
+            dataset_df = per_group_df[per_group_df["dataset"].astype(str) == str(dataset)].copy()
+            filename = figure_filename(
+                comparison_config,
+                "intersectional_heatmap",
+                dataset=dataset,
+                metric="demographic_parity",
+            )
+            result = save_intersectional_heatmap(
+                dataset_df, "demographic_parity_rate", out_dir / filename
+            )
+            _report(filename.removesuffix(".png"), result)
+    elif per_group_df is not None:
         result = save_intersectional_heatmap(
-            per_group_df, "demographic_parity_rate", out_dir / "intersectional_heatmap_dp.png"
+            per_group_df,
+            "demographic_parity_rate",
+            out_dir / "dataset_demographic_parity_intersectional_heatmap.png",
         )
-        _report("intersectional_heatmap_dp", result)
+        _report("dataset_demographic_parity_intersectional_heatmap", result)
     else:
         logger.warning(
             "[WARNING] intersectional_heatmap: per_group.csv missing (run full pipeline first)"
         )
 
-    # 8. Cross-model radar
-    if summary_df is not None:
-        normalized_summary = _normalize_cross_model_summary(summary_df, full_df)
-        result = save_cross_model_radar(normalized_summary, out_dir / "cross_model_radar.png")
-        _report("cross_model_radar", result)
+
+def _generate_fairness_comparison_plots(
+    full_df: pd.DataFrame | None,
+    per_group_df: pd.DataFrame | None,
+    evidence_summary_df: pd.DataFrame | None,
+    out_dir: Path,
+    comparison_config: dict,
+) -> None:
+    output_cfg = comparison_config.get("outputs", {})
+    plots_dir = out_dir / output_cfg.get("dissertation_plot_dir", "plots")
+    data_dir = out_dir / output_cfg.get("dissertation_data_dir", "data")
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    _phase("fairness comparison plots")
+
+    if full_df is None:
+        logger.warning("[WARNING] fairness_comparison: comparison metric data missing")
+        return
+
+    selection_cfg = comparison_config.get("selection", {})
+    primary_model = selection_cfg.get("primary_model_type", "logistic_regression")
+    model_label = selection_cfg.get("primary_model_label", "lr")
+    min_recall_delta = float(selection_cfg.get("min_recall_delta", -0.03))
+    include_appendix = bool(
+        comparison_config.get("figures", {}).get("include_best_available_appendix", True)
+    )
+
+    if evidence_summary_df is not None and not evidence_summary_df.empty:
+        summary_file = data_dir / "fairness_evidence_summary.csv"
+        evidence_summary_df.to_csv(summary_file, index=False)
+        _report("fairness_evidence_summary", summary_file)
     else:
-        logger.warning(
-            "[WARNING] cross_model_radar: cross_model_summary.csv missing (run full pipeline first)"
+        summary_df = build_fairness_evidence_summary(full_df, per_group_df, comparison_config)
+        if not summary_df.empty:
+            summary_file = data_dir / "fairness_evidence_summary.csv"
+            summary_df.to_csv(summary_file, index=False)
+            _report("fairness_evidence_summary", summary_file)
+        else:
+            _report("fairness_evidence_summary", None)
+
+    for dataset in sorted(full_df["dataset"].dropna().unique()):
+        dataset_df = full_df[full_df["dataset"].astype(str) == str(dataset)].copy()
+        if dataset_df.empty:
+            continue
+        primary_df = dataset_df
+        if "model_type" in primary_df.columns:
+            primary_df = primary_df[primary_df["model_type"].astype(str) == str(primary_model)]
+
+        selected = select_primary_fairness_row(
+            dataset_df, model_type=primary_model, min_recall_delta=min_recall_delta
         )
 
-    # 9. Mitigation effectiveness matrix
-    if full_df is not None:
-        result = save_mitigation_effectiveness_matrix(
-            full_df, out_dir / "mitigation_effectiveness_matrix.png"
+        radar_name = figure_filename(
+            comparison_config,
+            "primary_mitigation_radar",
+            dataset=dataset,
+            model_label=model_label,
         )
-        _report("mitigation_effectiveness_matrix", result)
-    else:
-        logger.warning("[WARNING] mitigation_effectiveness_matrix: full_comparison.csv missing")
+        result = save_before_after_metric_radar(
+            dataset_df,
+            plots_dir / radar_name,
+            selected_row=selected,
+        )
+        _report(radar_name.removesuffix(".png"), result)
 
-    # 10. All-model Pareto - support both f1_value (new) and f1_score (old) column naming
-    if full_df is not None:
-        x_col = "f1_value" if "f1_value" in full_df.columns else "f1_score"
-        result = save_pareto_all_models(full_df, out_dir / "pareto_all_models.png", x_col=x_col)
-        _report("pareto_all_models", result)
-    else:
-        logger.warning("[WARNING] pareto_all_models: full_comparison.csv missing")
+        matrix_name = figure_filename(
+            comparison_config,
+            "mitigation_delta_matrix",
+            dataset=dataset,
+            model_label=model_label,
+        )
+        result = save_mitigation_delta_matrix(primary_df, plots_dir / matrix_name)
+        _report(matrix_name.removesuffix(".png"), result)
+
+        baseline_radar_name = figure_filename(
+            comparison_config,
+            "baseline_cross_model_radar",
+            dataset=dataset,
+        )
+        result = save_cross_model_baseline_radar(dataset_df, plots_dir / baseline_radar_name)
+        _report(baseline_radar_name.removesuffix(".png"), result)
+
+        if include_appendix:
+            best_name = figure_filename(
+                comparison_config,
+                "best_available_cross_model_radar",
+                dataset=dataset,
+            )
+            result = save_cross_model_best_available_radar(
+                dataset_df,
+                plots_dir / best_name,
+            )
+            _report(best_name.removesuffix(".png"), result)
+
+        if selected is None:
+            logger.warning("[WARNING] group before/after plots: no selected mitigation row")
+            continue
+        if per_group_df is None:
+            logger.warning("[WARNING] group before/after plots: group metric deltas missing")
+            continue
+
+        dataset_groups = (
+            per_group_df[per_group_df["dataset"].astype(str) == str(dataset)].copy()
+            if "dataset" in per_group_df.columns
+            else per_group_df.copy()
+        )
+        for attr in ["age_group", "sex"]:
+            performance_name = figure_filename(
+                comparison_config,
+                "group_performance_gaps",
+                dataset=dataset,
+                model_label=model_label,
+                sensitive_attr=attr,
+            )
+            result = save_group_performance_gap_bars(
+                dataset_groups,
+                plots_dir / performance_name,
+                attr,
+                selected,
+            )
+            _report(performance_name.removesuffix(".png"), result)
+
+            before_after_name = figure_filename(
+                comparison_config,
+                "group_before_after",
+                dataset=dataset,
+                model_label=model_label,
+                sensitive_attr=attr,
+            )
+            result = save_group_before_after_bars(
+                dataset_groups,
+                plots_dir / before_after_name,
+                attr,
+                selected,
+            )
+            _report(before_after_name.removesuffix(".png"), result)
+
+            delta_name = figure_filename(
+                comparison_config,
+                "group_delta",
+                dataset=dataset,
+                model_label=model_label,
+                sensitive_attr=attr,
+            )
+            result = save_group_delta_bars(
+                dataset_groups,
+                plots_dir / delta_name,
+                attr,
+                selected,
+            )
+            _report(delta_name.removesuffix(".png"), result)
 
 
 # ---------------------------------------------------------------------------
@@ -392,6 +493,11 @@ def main() -> None:
         default="latest",
         help="Run ID (directory name under output/cardiac/runs/) or 'latest'.",
     )
+    parser.add_argument(
+        "--config",
+        default="configs/experiments/comparison.yaml",
+        help="Comparison YAML config (CLI flags override overlapping values).",
+    )
     args = parser.parse_args()
 
     setup_study_logging(
@@ -404,10 +510,8 @@ def main() -> None:
     )
 
     run_dir = _resolve_run_dir(args.run_id)
-    comparisons_dir = _resolve_comparisons_dir(run_dir)
-    fairness_dir = run_dir / "baseline" / "prediction_fairness"
-    if not fairness_dir.exists():
-        fairness_dir = run_dir / "baseline" / "fairness"
+    comparison_config = load_comparison_config(_ROOT, args.config)
+    comparisons_dir = _resolve_comparisons_dir(run_dir, comparison_config)
     out_base = _OUT_BASE / run_dir.name
     logger.info("[PHASE] Dissertation plot generation started")
     logger.info(
@@ -421,11 +525,32 @@ def main() -> None:
     per_group_df = _safe_read_csv(comparisons_dir / "per_group.csv")
     if per_group_df is None:
         per_group_df = _safe_read_csv(comparisons_dir / "per_group_comparison.csv")
-    summary_df = _safe_read_csv(comparisons_dir / "cross_model_summary.csv")
+    experiment_index_df = _safe_read_csv(comparisons_dir / "experiment_index.csv")
+    metric_values_df = _safe_read_csv(comparisons_dir / "metric_values.csv")
+    metric_deltas_df = _safe_read_csv(comparisons_dir / "metric_deltas.csv")
+    group_metric_deltas_df = _safe_read_csv(comparisons_dir / "group_metric_deltas.csv")
+    evidence_summary_df = _safe_read_csv(comparisons_dir / "fairness_evidence_summary.csv")
 
-    _generate_fairness_plots(full_df, per_group_df, fairness_dir, run_dir, out_base / "fairness")
+    canonical_full_df = build_metric_plot_frame(
+        experiment_index_df, metric_values_df, metric_deltas_df
+    )
+    fairness_comparison_full_df = canonical_full_df if canonical_full_df is not None else full_df
+    fairness_comparison_group_df = (
+        group_metric_deltas_df if group_metric_deltas_df is not None else per_group_df
+    )
+
+    _generate_fairness_plots(full_df, run_dir, out_base / "fairness", comparison_config)
     _generate_transformation_plots(run_dir, full_df, out_base / "transformations")
-    _generate_cross_model_plots(full_df, per_group_df, summary_df, out_base / "cross_model")
+    _generate_cross_model_plots(
+        fairness_comparison_group_df, out_base / "cross_model", comparison_config
+    )
+    _generate_fairness_comparison_plots(
+        fairness_comparison_full_df,
+        fairness_comparison_group_df,
+        evidence_summary_df,
+        out_base / "fairness_comparison",
+        comparison_config,
+    )
 
     logger.info("[SUCCESS] Dissertation figures generated: output_dir=%s", out_base)
 

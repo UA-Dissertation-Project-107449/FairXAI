@@ -79,6 +79,7 @@ MITIGATION_CONFIG="$ROOT_DIR/configs/experiments/mitigation.yaml"
 COMBINATORIAL_CONFIG="$ROOT_DIR/configs/experiments/combinatorial.yaml"
 HPO_CONFIG="$ROOT_DIR/configs/experiments/hpo.yaml"
 FEATURE_SELECTION_STUDY_CONFIG="$ROOT_DIR/configs/experiments/feature_selection_study.yaml"
+COMPARISON_CONFIG="$ROOT_DIR/configs/experiments/comparison.yaml"
 
 DATASETS=()
 MODEL_TYPES=()
@@ -484,6 +485,7 @@ echo "Attr binning:     $RUN_ATTRIBUTE_BINNING"
 echo "Mitigation:       $RUN_MITIGATION"
 echo "Combinatorial:    $RUN_COMBINATORIAL"
 echo "Comparison:       $RUN_COMPARISON"
+echo "Comparison config: $COMPARISON_CONFIG"
 echo "Recommendations:  $RUN_RECOMMENDATIONS"
 echo "Datasets:         ${DATASETS[*]:-config/default}"
 echo "Model types:      ${MODEL_TYPES[*]:-config/default}"
@@ -777,8 +779,8 @@ fi
 if should_run 12; then
     if [[ "$RUN_COMPARISON" == "true" ]]; then
         echo "[PHASE 12/12] Experiment comparison and dissertation plots"
-        python3 "$ROOT_DIR/scripts/cardiac/compare.py" --run-id "$RUN_ID" $VERBOSE_FLAG
-        python3 "$ROOT_DIR/scripts/studies/generate_dissertation_plots.py" --run-id "$RUN_ID"
+        python3 "$ROOT_DIR/scripts/cardiac/compare.py" --run-id "$RUN_ID" --config "$COMPARISON_CONFIG" $VERBOSE_FLAG
+        python3 "$ROOT_DIR/scripts/studies/generate_dissertation_plots.py" --run-id "$RUN_ID" --config "$COMPARISON_CONFIG"
         mark_done 12 "compare"
         echo ""
     else

@@ -31,20 +31,22 @@ from .distributions import (
     plot_stacked_group_distribution_grid,
     plot_target_distribution_by_group,
 )
-from .experiment_plots import (
-    PALETTE_MODEL,
-    save_comparison_heatmap,
-    save_cross_model_radar,
-    save_intersectional_heatmap,
-    save_mitigation_effectiveness_matrix,
-    save_pareto_all_models,
-    save_pareto_frontier,
-    save_tradeoff_scatter,
-)
 from .fairness import (
     plot_bias_amplification_waterfall,
     plot_fairness_metric_heatmap,
     plot_group_performance_gaps,
+)
+from .fairness_comparison import (
+    PALETTE_MODEL,
+    save_before_after_metric_radar,
+    save_cross_model_baseline_radar,
+    save_cross_model_best_available_radar,
+    save_group_before_after_bars,
+    save_group_delta_bars,
+    save_group_performance_gap_bars,
+    save_intersectional_heatmap,
+    save_mitigation_delta_matrix,
+    select_primary_fairness_row,
 )
 from .style import (
     PALETTE_DATASET,
@@ -85,12 +87,14 @@ __all__ = [
     "CARDIAC_CATEGORY_VALUE_LABEL_MAPPING",
     "CARDIAC_CATEGORY_DISPLAY_ORDER",
     "normalize_cardiac_category_series",
-    "save_comparison_heatmap",
-    "save_tradeoff_scatter",
-    "save_pareto_frontier",
     "save_intersectional_heatmap",
-    "save_cross_model_radar",
-    "save_mitigation_effectiveness_matrix",
-    "save_pareto_all_models",
+    "save_before_after_metric_radar",
+    "save_mitigation_delta_matrix",
+    "save_group_before_after_bars",
+    "save_group_delta_bars",
+    "save_group_performance_gap_bars",
+    "save_cross_model_baseline_radar",
+    "save_cross_model_best_available_radar",
+    "select_primary_fairness_row",
     "PALETTE_MODEL",
 ]
