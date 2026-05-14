@@ -1,0 +1,32 @@
+# Comparison stage configuration
+# YAML owns defaults; CLI flags override overlapping values.
+
+canonical_outputs:
+  enabled: true
+  compatibility_outputs: true
+
+selection:
+  primary_model_type: logistic_regression
+  primary_model_label: lr
+  primary_dataset: null
+  min_recall_delta: -0.03
+  top_n: 5
+
+figures:
+  enabled: true
+  canonical_naming: true
+  dpi: 300
+  include_best_available_appendix: true
+  dataset_averages: false
+  sizes:
+    radar_pair: [14, 6]
+    delta_matrix: [16, 6]
+    group_bars: [14, 5]
+
+legacy_score:
+  # Keep score_value in compatibility CSVs/model promotion, 
+  # but keep score plots out of main outputs unless explicitly enabled.
+  plots_enabled: false
+  dissertation_figures_enabled: false
+  output_subdir: legacy_score
+
