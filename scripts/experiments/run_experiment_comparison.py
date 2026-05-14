@@ -29,11 +29,6 @@ from fairxai.comparison import (
 )
 from fairxai.comparison.baseline_matching import build_baseline_lookups, find_matching_baseline
 from fairxai.experiments.versioning import ExperimentVersioning
-from fairxai.viz.experiment_plots import (
-    save_comparison_heatmap,
-    save_pareto_frontier,
-    save_tradeoff_scatter,
-)
 
 # Composite score weights (must sum to 1.0)
 SCORE_WEIGHTS = {"f1_value": 0.40, "recall_value": 0.30, "accuracy_value": 0.20, "auc_value": 0.10}
@@ -216,8 +211,6 @@ def create_summary_statistics(df: pd.DataFrame) -> pd.DataFrame:
 def compare_binning_strategies(
     df: pd.DataFrame,
     output_dir: Path,
-    plots_dir: Path = None,
-    write_plot: bool = True,
 ):
     """
     Create binning strategy comparison table.
@@ -236,18 +229,10 @@ def compare_binning_strategies(
         index="binning_strategy", columns="dataset", values=metric_col, aggfunc="mean"
     )
 
-    # Save CSV in data/, heatmap PNG in plots/
+    # Save compatibility CSV. Score plots are intentionally no longer generated here.
     output_file = output_dir / "binning_summary.csv"
     pivot.to_csv(output_file)
     logging.info(f"[SUCCESS] Saved binning summary: {output_file}")
-
-    if write_plot:
-        heatmap_dir = plots_dir if plots_dir else output_dir
-        heatmap_file = heatmap_dir / "binning_comparison_heatmap.png"
-        save_comparison_heatmap(
-            pivot, title="Binning Strategy Comparison (Composite Score)", output_file=heatmap_file
-        )
-        logging.info(f"[SUCCESS] Saved binning heatmap: {heatmap_file}")
 
     return pivot
 
@@ -255,8 +240,6 @@ def compare_binning_strategies(
 def compare_mitigation_techniques(
     df: pd.DataFrame,
     output_dir: Path,
-    plots_dir: Path = None,
-    write_plot: bool = True,
 ):
     """
     Create mitigation technique comparison table.
@@ -274,18 +257,10 @@ def compare_mitigation_techniques(
         index="mitigation_technique", columns="dataset", values=metric_col, aggfunc="mean"
     )
 
-    # Save CSV in data/, heatmap PNG in plots/
+    # Save compatibility CSV. Score plots are intentionally no longer generated here.
     output_file = output_dir / "mitigation_summary.csv"
     pivot.to_csv(output_file)
     logging.info(f"[SUCCESS] Saved mitigation summary: {output_file}")
-
-    if write_plot:
-        heatmap_dir = plots_dir if plots_dir else output_dir
-        heatmap_file = heatmap_dir / "mitigation_comparison_heatmap.png"
-        save_comparison_heatmap(
-            pivot, title="Mitigation Technique Comparison (Composite Score)", output_file=heatmap_file
-        )
-        logging.info(f"[SUCCESS] Saved mitigation heatmap: {heatmap_file}")
 
     return pivot
 
@@ -780,24 +755,6 @@ def _promote_top_n_models(versioning, df_success: "pd.DataFrame", save_top_n: in
         logging.warning("[TOP_N] No temp models found to promote")
 
 
-def _remove_legacy_score_plot_artifacts(plots_dir: Path) -> None:
-    """Remove old root-level score plots when legacy score plots are disabled."""
-    patterns = [
-        "binning_comparison_heatmap.png",
-        "mitigation_comparison_heatmap.png",
-        "tradeoff_*.png",
-        "pareto_*.png",
-    ]
-    for pattern in patterns:
-        for path in plots_dir.glob(pattern):
-            if path.is_file():
-                try:
-                    path.unlink()
-                    logging.info("[CLEANUP] Removed disabled legacy score plot: %s", path)
-                except OSError as exc:
-                    logging.warning("[CLEANUP] Could not remove legacy score plot %s: %s", path, exc)
-
-
 def run_comparison_analysis(
     results_dir: str = None,
     pipeline: str = "cardiac",
@@ -809,7 +766,6 @@ def run_comparison_analysis(
     output_root: str = None,
     save_top_n: int = 10,
     config_path: str | None = None,
-    legacy_score_plots: bool | None = None,
 ):
     """Main comparison script."""
     project_root = get_project_root(Path(__file__))
@@ -871,15 +827,9 @@ def run_comparison_analysis(
     # Initialize versioning
     versioning = ExperimentVersioning(base_output_dir, run_dir=run_dir)
     comparison_config = load_comparison_config(project_root, config_path)
-    if legacy_score_plots is not None:
-        comparison_config.setdefault("legacy_score", {})["plots_enabled"] = legacy_score_plots
-    legacy_score_plots_enabled = bool(
-        comparison_config.get("legacy_score", {}).get("plots_enabled", False)
-    )
     logging.info(
-        "[CONFIG] comparison_config=%s legacy_score_plots=%s canonical_outputs=%s",
+        "[CONFIG] comparison_config=%s canonical_outputs=%s",
         config_path or "configs/experiments/comparison.yaml",
-        legacy_score_plots_enabled,
         comparison_config.get("canonical_outputs", {}).get("enabled", True),
     )
 
@@ -911,10 +861,9 @@ def run_comparison_analysis(
     # Create output directories
     output_dir = versioning.latest_dir / "comparisons"
     output_dir.mkdir(exist_ok=True)
-    data_dir = output_dir / "data"
-    plots_dir = output_dir / "plots"
+    data_subdir = comparison_config.get("outputs", {}).get("comparison_data_dir", "data")
+    data_dir = output_dir / data_subdir
     data_dir.mkdir(exist_ok=True)
-    plots_dir.mkdir(exist_ok=True)
 
     # Compute composite score for ranking
     for metric, weight in SCORE_WEIGHTS.items():
@@ -1074,27 +1023,11 @@ def run_comparison_analysis(
     # Create comparison tables
     logging.info("Generating comparison tables...")
 
-    legacy_plots_dir = plots_dir / comparison_config.get("legacy_score", {}).get(
-        "output_subdir", "legacy_score"
-    )
-    if legacy_score_plots_enabled and not no_plots:
-        legacy_plots_dir.mkdir(parents=True, exist_ok=True)
-    elif not legacy_score_plots_enabled:
-        _remove_legacy_score_plot_artifacts(plots_dir)
+    if no_plots:
+        logging.info("[CONFIG] --no-plots accepted; comparison stage no longer writes plots")
 
-    write_legacy_score_plots = legacy_score_plots_enabled and not no_plots
-    compare_binning_strategies(
-        df_success,
-        data_dir,
-        plots_dir=legacy_plots_dir,
-        write_plot=write_legacy_score_plots,
-    )
-    compare_mitigation_techniques(
-        df_success,
-        data_dir,
-        plots_dir=legacy_plots_dir,
-        write_plot=write_legacy_score_plots,
-    )
+    compare_binning_strategies(df_success, data_dir)
+    compare_mitigation_techniques(df_success, data_dir)
 
     # Filter best configurations (writes to data_dir now)
     logging.info("Filtering best configurations...")
@@ -1105,7 +1038,7 @@ def run_comparison_analysis(
         performance_threshold,
     )
 
-    # Legacy score-value trade-off outputs (CSV compatibility always, plots only by config).
+    # Score-value trade-off CSVs remain compatibility outputs; plots were retired.
     for dataset in sorted(df_success["dataset"].unique()):
         subset = df_success[df_success["dataset"] == dataset].copy()
         if subset.empty:
@@ -1114,59 +1047,11 @@ def run_comparison_analysis(
         tradeoff_csv = data_dir / f"tradeoff_{dataset}.csv"
         subset.to_csv(tradeoff_csv, index=False)
 
-        if write_legacy_score_plots:
-            tradeoff_png = legacy_plots_dir / f"tradeoff_{dataset}.png"
-            tradeoff_result = save_tradeoff_scatter(
-                subset,
-                x_col="score_value",
-                y_col="fairness_gap",
-                hue_col="mitigation_technique",
-                style_col="training_method",
-                title=f"{dataset} - Performance vs Fairness",
-                output_file=tradeoff_png,
-            )
-            if tradeoff_result:
-                logging.info(f"[SUCCESS] Saved tradeoff plot: {tradeoff_png}")
-            else:
-                logging.warning(f"Tradeoff plot skipped (no data): {tradeoff_png}")
-
         pareto_subset = (
             subset[subset["is_pareto"]].copy() if "is_pareto" in subset.columns else subset
         )
         pareto_csv = data_dir / f"pareto_{dataset}.csv"
         pareto_subset.to_csv(pareto_csv, index=False)
-
-        if write_legacy_score_plots:
-            pareto_png = legacy_plots_dir / f"pareto_{dataset}.png"
-            pareto_result = save_pareto_frontier(
-                subset,
-                x_col="score_value",
-                y_col="fairness_gap",
-                title=f"{dataset} - Pareto Frontier",
-                output_file=pareto_png,
-            )
-            if pareto_result:
-                logging.info(f"[SUCCESS] Saved pareto plot: {pareto_png}")
-            else:
-                logging.warning(f"Pareto plot skipped (no data): {pareto_png}")
-
-            # Per-model Pareto plots: one per (dataset, model_type).
-            for model_type in sorted(subset["model_type"].dropna().unique()):
-                model_subset = subset[subset["model_type"] == model_type].copy()
-                if model_subset.empty or model_subset["fairness_gap"].isna().all():
-                    continue
-                pareto_model_png = legacy_plots_dir / f"pareto_{dataset}_{model_type}.png"
-                pareto_model_result = save_pareto_frontier(
-                    model_subset,
-                    x_col="score_value",
-                    y_col="fairness_gap",
-                    title=f"{dataset} / {model_type} - Pareto Frontier",
-                    output_file=pareto_model_png,
-                )
-                if pareto_model_result:
-                    logging.info(f"[SUCCESS] Saved per-model pareto: {pareto_model_png}")
-                else:
-                    logging.debug(f"Per-model pareto skipped (no data): {pareto_model_png}")
 
     # Summary outputs
     summary_rows = []
@@ -1289,21 +1174,11 @@ def main():
         default=0.15,
         help="Maximum performance drop (15%% default)",
     )
-    parser.add_argument("--no-plots", action="store_true", help="Disable plot generation")
-    legacy_group = parser.add_mutually_exclusive_group()
-    legacy_group.add_argument(
-        "--legacy-score-plots",
-        dest="legacy_score_plots",
+    parser.add_argument(
+        "--no-plots",
         action="store_true",
-        help="Write legacy score_value plots under plots/legacy_score",
+        help="Accepted for old commands; comparison stage now writes data only.",
     )
-    legacy_group.add_argument(
-        "--no-legacy-score-plots",
-        dest="legacy_score_plots",
-        action="store_false",
-        help="Disable legacy score_value plots",
-    )
-    parser.set_defaults(legacy_score_plots=None)
     parser.add_argument(
         "--save-top-n",
         type=int,
@@ -1327,7 +1202,6 @@ def main():
         output_root=args.output_root,
         save_top_n=args.save_top_n,
         config_path=args.config,
-        legacy_score_plots=args.legacy_score_plots,
     )
 
 
