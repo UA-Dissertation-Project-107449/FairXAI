@@ -8,6 +8,9 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
+from fairxai.viz.labels import display_mitigation
+from fairxai.viz.save_utils import heatmap_size, save_figure
+
 logger = logging.getLogger(__name__)
 
 _THRESHOLD = 0.10  # standard fairness gap threshold line
@@ -63,9 +66,11 @@ def plot_fairness_metric_heatmap(df, sensitive_attr, output_file):
     )
     if agg.empty:
         return None
+    agg.index = [display_mitigation(idx) for idx in agg.index]
 
     attr_label = attr_short.replace("_", " ").title()
-    fig, ax = plt.subplots(figsize=(max(7, len(available) * 2.5), max(5, len(agg) * 0.6 + 2)))
+    width, height = heatmap_size(agg.index, len(available), min_width=10, min_height=5)
+    fig, ax = plt.subplots(figsize=(width, height))
     sns.heatmap(
         agg,
         annot=True,
@@ -82,7 +87,7 @@ def plot_fairness_metric_heatmap(df, sensitive_attr, output_file):
     ax.set_ylabel("Mitigation Technique")
     plt.xticks(rotation=20, ha="right")
     plt.tight_layout()
-    fig.savefig(output_file, dpi=200)
+    save_figure(fig, output_file, dpi=300)
     plt.close(fig)
     return output_file
 
