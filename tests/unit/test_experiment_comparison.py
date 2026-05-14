@@ -12,10 +12,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from fairxai.comparison.config import load_comparison_config  # noqa: E402
 from fairxai.comparison.metric_tables import (  # noqa: E402
+    build_experiment_index,
     build_group_metric_deltas,
     build_metric_deltas,
     build_metric_values,
 )
+from fairxai.comparison.naming import figure_filename  # noqa: E402
+from fairxai.comparison.plot_frames import build_metric_plot_frame  # noqa: E402
 from run_experiment_comparison import (  # noqa: E402
     _baseline_key_from_row,
     _extract_per_group_fairness,
@@ -166,6 +169,20 @@ class TestCanonicalMetricTables:
         assert round(float(fairness["delta"]), 6) == -0.08
         assert round(float(fairness["improvement"]), 6) == 0.08
 
+    def test_plot_frame_adapter_does_not_require_score_value(self):
+        full_df = self._full_df()
+        index = build_experiment_index(full_df)
+        values = build_metric_values(full_df)
+        deltas = build_metric_deltas(full_df)
+
+        plot_frame = build_metric_plot_frame(index, values, deltas)
+
+        assert plot_frame is not None
+        assert "score_value" not in plot_frame.columns
+        assert {"f1_value", "recall_value", "delta_f1", "delta_fairness_gap"}.issubset(
+            plot_frame.columns
+        )
+
     def test_group_metric_deltas_normalize_improvement_direction(self):
         per_group = pd.DataFrame(
             [
@@ -215,3 +232,24 @@ class TestCanonicalMetricTables:
 
         assert loaded["selection"]["primary_model_type"] == "random_forest"
         assert loaded["canonical_outputs"]["enabled"] is True
+        assert "legacy_score" not in loaded
+
+    def test_figure_filename_uses_dataset_scoped_template(self):
+        cfg = load_comparison_config(Path(__file__).parents[2])
+        filename = figure_filename(
+            cfg,
+            "fairness_metric_heatmap",
+            dataset="kaggle_heart",
+            sensitive_attr="age_group_cat",
+        )
+
+        assert filename == "kaggle_heart_age_group_fairness_metric_heatmap.png"
+
+        performance_filename = figure_filename(
+            cfg,
+            "group_performance_gaps",
+            dataset="kaggle_heart",
+            model_label="lr",
+            sensitive_attr="sex_cat",
+        )
+        assert performance_filename == "kaggle_heart_lr_primary_sex_performance_gaps.png"

@@ -7,19 +7,19 @@ matplotlib.use("Agg")  # must be before any other matplotlib import
 import numpy as np
 import pandas as pd
 
-from fairxai.viz.experiment_plots import (
+from fairxai.comparison.metric_tables import (
     build_fairness_evidence_summary,
+    build_group_metric_deltas,
+)
+from fairxai.viz.fairness_comparison import (
     save_before_after_metric_radar,
     save_cross_model_baseline_radar,
     save_cross_model_best_available_radar,
-    save_cross_model_radar,
-    save_fairness_evidence_summary,
     save_group_before_after_bars,
     save_group_delta_bars,
+    save_group_performance_gap_bars,
     save_intersectional_heatmap,
     save_mitigation_delta_matrix,
-    save_mitigation_effectiveness_matrix,
-    save_pareto_all_models,
     select_primary_fairness_row,
 )
 from fairxai.viz.fairness import (
@@ -308,39 +308,6 @@ class TestExperimentPlots:
         df = _make_per_group_df()
         assert save_intersectional_heatmap(df, "nonexistent_metric", tmp_path / "x.png") is None
 
-    def test_save_cross_model_radar_creates_file(self, tmp_path):
-        df = _make_summary_df()
-        out = tmp_path / "radar.png"
-        result = save_cross_model_radar(df, out)
-        assert result is not None
-        assert out.exists()
-
-    def test_save_cross_model_radar_missing_cols_returns_none(self, tmp_path):
-        df = pd.DataFrame({"model_type": ["logistic_regression"], "f1_score": [0.7]})
-        assert save_cross_model_radar(df, tmp_path / "x.png") is None
-
-    def test_save_mitigation_effectiveness_matrix_creates_file(self, tmp_path):
-        df = _make_full_comparison_df()
-        out = tmp_path / "effectiveness.png"
-        result = save_mitigation_effectiveness_matrix(df, out)
-        assert result is not None
-        assert out.exists()
-
-    def test_save_mitigation_effectiveness_matrix_missing_col_returns_none(self, tmp_path):
-        df = pd.DataFrame({"mitigation_technique": ["smote"]})
-        assert save_mitigation_effectiveness_matrix(df, tmp_path / "x.png") is None
-
-    def test_save_pareto_all_models_creates_file(self, tmp_path):
-        df = _make_full_comparison_df()
-        out = tmp_path / "pareto.png"
-        result = save_pareto_all_models(df, out)
-        assert result is not None
-        assert out.exists()
-
-    def test_save_pareto_all_models_missing_cols_returns_none(self, tmp_path):
-        df = pd.DataFrame({"model_type": ["logistic_regression"], "f1_value": [0.7]})
-        assert save_pareto_all_models(df, tmp_path / "x.png") is None
-
     def test_save_before_after_metric_radar_creates_file(self, tmp_path):
         df = _make_full_comparison_df()
         out = tmp_path / "before_after_radar.png"
@@ -388,6 +355,19 @@ class TestExperimentPlots:
         assert result is not None
         assert delta.exists()
 
+    def test_group_performance_gaps_from_paired_rows_create_file(self, tmp_path):
+        full_df = _make_full_comparison_df()
+        per_group = _make_per_group_df()
+        selected = full_df[
+            (full_df["mitigation_technique"] != "baseline")
+            & (full_df["binning_strategy"] == "equal_width_5")
+        ].iloc[0]
+
+        out = tmp_path / "group_performance_gaps.png"
+        result = save_group_performance_gap_bars(per_group, out, "age_group_cat", selected)
+        assert result is not None
+        assert out.exists()
+
     def test_cross_model_new_radars_create_files(self, tmp_path):
         df = _make_full_comparison_df()
         baseline_out = tmp_path / "baseline_model_radar.png"
@@ -400,14 +380,19 @@ class TestExperimentPlots:
 
     def test_fairness_evidence_summary_creates_file(self, tmp_path):
         full_df = _make_full_comparison_df()
-        per_group = _make_per_group_df()
-        summary = build_fairness_evidence_summary(full_df, per_group)
+        group_deltas = build_group_metric_deltas(_make_per_group_df())
+        summary = build_fairness_evidence_summary(
+            full_df,
+            group_deltas,
+            {
+                "selection": {
+                    "primary_model_type": "logistic_regression",
+                    "min_recall_delta": -0.03,
+                    "top_n": 5,
+                }
+            },
+        )
         assert not summary.empty
         assert {"groups_improved", "groups_worsened", "delta_fairness_gap"}.issubset(
             summary.columns
         )
-
-        out = tmp_path / "fairness_evidence_summary.csv"
-        result = save_fairness_evidence_summary(full_df, per_group, out)
-        assert result is not None
-        assert out.exists()
