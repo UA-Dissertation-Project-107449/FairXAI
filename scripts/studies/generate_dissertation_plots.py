@@ -53,19 +53,22 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_ROOT / "src"))
 
 from fairxai.cli.runner_base import setup_study_logging
-from fairxai.viz.experiment_plots import (
+from fairxai.comparison import load_comparison_config
+from fairxai.viz.fairness_comparison import (
     save_before_after_metric_radar,
     save_cross_model_baseline_radar,
     save_cross_model_best_available_radar,
-    save_cross_model_radar,
     save_fairness_evidence_summary,
     save_group_before_after_bars,
     save_group_delta_bars,
-    save_intersectional_heatmap,
     save_mitigation_delta_matrix,
+    select_primary_fairness_row,
+)
+from fairxai.viz.experiment_plots import (
+    save_cross_model_radar,
+    save_intersectional_heatmap,
     save_mitigation_effectiveness_matrix,
     save_pareto_all_models,
-    select_primary_fairness_row,
 )
 from fairxai.viz.fairness import (
     plot_bias_amplification_waterfall,
@@ -188,6 +191,109 @@ def _normalize_cross_model_summary(
                 df = df.drop(columns=[fallback_col])
 
     return df
+
+
+def _canonical_full_for_plots(
+    experiment_index: pd.DataFrame | None,
+    metric_values: pd.DataFrame | None,
+    metric_deltas: pd.DataFrame | None,
+) -> pd.DataFrame | None:
+    """Build a wide plot-ready frame from canonical long metric tables."""
+    if experiment_index is None or metric_values is None:
+        return None
+    if experiment_index.empty or metric_values.empty:
+        return None
+
+    id_cols = [
+        "experiment_id",
+        "dataset",
+        "model_type",
+        "model_variant",
+        "binning_strategy",
+        "training_method",
+        "mitigation_technique",
+    ]
+    keep_cols = [c for c in id_cols + ["status"] if c in experiment_index.columns]
+    wide = experiment_index[keep_cols].copy()
+
+    value_pivot = (
+        metric_values.pivot_table(index="experiment_id", columns="metric", values="value", aggfunc="first")
+        .reset_index()
+        .rename(
+            columns={
+                "f1": "f1_value",
+                "recall": "recall_value",
+                "precision": "precision_value",
+                "auc_roc": "auc_value",
+                "accuracy": "accuracy_value",
+                "demographic_parity_gap": "dp_max_diff",
+                "equalized_odds_gap": "eq_odds_max_diff",
+                "equalized_odds_tpr_gap": "eq_odds_global_tpr_diff",
+                "equalized_odds_fpr_gap": "eq_odds_global_fpr_diff",
+            }
+        )
+    )
+    wide = wide.merge(value_pivot, on="experiment_id", how="left")
+
+    if metric_deltas is not None and not metric_deltas.empty:
+        deltas = metric_deltas.copy()
+        deltas["plot_delta"] = pd.to_numeric(deltas["delta"], errors="coerce")
+        gap_mask = deltas["metric_family"].astype(str).eq("fairness_gap")
+        if "improvement" in deltas.columns:
+            deltas.loc[gap_mask, "plot_delta"] = pd.to_numeric(
+                deltas.loc[gap_mask, "improvement"], errors="coerce"
+            )
+        delta_pivot = (
+            deltas.pivot_table(
+                index="experiment_id", columns="metric", values="plot_delta", aggfunc="first"
+            )
+            .reset_index()
+            .rename(
+                columns={
+                    "f1": "delta_f1",
+                    "recall": "delta_recall",
+                    "precision": "delta_precision",
+                    "auc_roc": "delta_auc",
+                    "accuracy": "delta_accuracy",
+                    "fairness_gap": "delta_fairness_gap",
+                    "demographic_parity_gap": "delta_dp_gap",
+                    "equalized_odds_tpr_gap": "delta_eq_tpr_gap",
+                    "equalized_odds_fpr_gap": "delta_eq_fpr_gap",
+                }
+            )
+        )
+        wide = wide.merge(delta_pivot, on="experiment_id", how="left")
+
+    return wide
+
+
+def _dataset_prefix(dataset: object, model_label: str | None = None) -> str:
+    dataset_slug = str(dataset).lower().replace(" ", "_")
+    if model_label:
+        return f"{dataset_slug}_{model_label}"
+    return dataset_slug
+
+
+def _remove_generic_fairness_comparison_artifacts(out_dir: Path) -> None:
+    """Remove pre-canonical generic filenames so stale figures do not linger."""
+    filenames = [
+        "before_after_metric_radar.png",
+        "mitigation_delta_matrix.png",
+        "group_before_after_age.png",
+        "group_before_after_sex.png",
+        "group_delta_age.png",
+        "group_delta_sex.png",
+        "cross_model_baseline_radar.png",
+        "cross_model_best_available_radar.png",
+    ]
+    for name in filenames:
+        path = out_dir / name
+        if path.exists():
+            try:
+                path.unlink()
+                logger.info("[CLEANUP] Removed generic fairness comparison figure: %s", path.name)
+            except OSError as exc:
+                logger.warning("[CLEANUP] Could not remove %s: %s", path, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -353,6 +459,7 @@ def _generate_cross_model_plots(
     per_group_df: pd.DataFrame | None,
     summary_df: pd.DataFrame | None,
     out_dir: Path,
+    comparison_config: dict,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     _phase("cross-model plots")
@@ -378,20 +485,28 @@ def _generate_cross_model_plots(
             "[WARNING] cross_model_radar: cross_model_summary.csv missing (run full pipeline first)"
         )
 
-    # 9. Mitigation effectiveness matrix
-    if full_df is not None:
+    legacy_score_enabled = bool(
+        comparison_config.get("legacy_score", {}).get("dissertation_figures_enabled", False)
+    )
+
+    # 9. Legacy score-based mitigation effectiveness matrix
+    if full_df is not None and legacy_score_enabled:
         result = save_mitigation_effectiveness_matrix(
             full_df, out_dir / "mitigation_effectiveness_matrix.png"
         )
         _report("mitigation_effectiveness_matrix", result)
+    elif full_df is not None:
+        logger.info("[SKIP] mitigation_effectiveness_matrix: legacy score figure disabled")
     else:
         logger.warning("[WARNING] mitigation_effectiveness_matrix: full_comparison.csv missing")
 
-    # 10. All-model Pareto - support both f1_value (new) and f1_score (old) column naming
-    if full_df is not None:
+    # 10. Legacy Pareto figure
+    if full_df is not None and legacy_score_enabled:
         x_col = "f1_value" if "f1_value" in full_df.columns else "f1_score"
         result = save_pareto_all_models(full_df, out_dir / "pareto_all_models.png", x_col=x_col)
         _report("pareto_all_models", result)
+    elif full_df is not None:
+        logger.info("[SKIP] pareto_all_models: legacy score figure disabled")
     else:
         logger.warning("[WARNING] pareto_all_models: full_comparison.csv missing")
 
@@ -399,61 +514,101 @@ def _generate_cross_model_plots(
 def _generate_fairness_comparison_plots(
     full_df: pd.DataFrame | None,
     per_group_df: pd.DataFrame | None,
+    evidence_summary_df: pd.DataFrame | None,
     out_dir: Path,
+    comparison_config: dict,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     _phase("fairness comparison plots")
+    if comparison_config.get("figures", {}).get("canonical_naming", True):
+        _remove_generic_fairness_comparison_artifacts(out_dir)
 
     if full_df is None:
-        logger.warning("[WARNING] fairness_comparison: full_comparison.csv missing")
+        logger.warning("[WARNING] fairness_comparison: comparison metric data missing")
         return
 
-    selected = select_primary_fairness_row(full_df)
-
-    result = save_fairness_evidence_summary(
-        full_df, per_group_df, out_dir / "fairness_evidence_summary.csv", top_n=5
+    selection_cfg = comparison_config.get("selection", {})
+    primary_model = selection_cfg.get("primary_model_type", "logistic_regression")
+    model_label = selection_cfg.get("primary_model_label", "lr")
+    min_recall_delta = float(selection_cfg.get("min_recall_delta", -0.03))
+    include_appendix = bool(
+        comparison_config.get("figures", {}).get("include_best_available_appendix", True)
     )
-    _report("fairness_evidence_summary", result)
 
-    result = save_before_after_metric_radar(
-        full_df, out_dir / "before_after_metric_radar.png", selected_row=selected
-    )
-    _report("before_after_metric_radar", result)
-
-    result = save_mitigation_delta_matrix(full_df, out_dir / "mitigation_delta_matrix.png")
-    _report("mitigation_delta_matrix", result)
-
-    result = save_cross_model_baseline_radar(full_df, out_dir / "cross_model_baseline_radar.png")
-    _report("cross_model_baseline_radar", result)
-
-    result = save_cross_model_best_available_radar(
-        full_df, out_dir / "cross_model_best_available_radar.png"
-    )
-    _report("cross_model_best_available_radar", result)
-
-    if selected is None:
-        logger.warning("[WARNING] group before/after plots: no selected mitigation row")
-        return
-    if per_group_df is None:
-        logger.warning("[WARNING] group before/after plots: per_group.csv missing")
-        return
-
-    for attr, label in [("age_group", "age"), ("sex", "sex")]:
-        result = save_group_before_after_bars(
+    if evidence_summary_df is not None and not evidence_summary_df.empty:
+        evidence_summary_df.to_csv(out_dir / "fairness_evidence_summary.csv", index=False)
+        _report("fairness_evidence_summary", out_dir / "fairness_evidence_summary.csv")
+    else:
+        result = save_fairness_evidence_summary(
+            full_df,
             per_group_df,
-            out_dir / f"group_before_after_{label}.png",
-            attr,
-            selected,
+            out_dir / "fairness_evidence_summary.csv",
+            top_n=int(selection_cfg.get("top_n", 5)),
         )
-        _report(f"group_before_after_{label}", result)
+        _report("fairness_evidence_summary", result)
 
-        result = save_group_delta_bars(
-            per_group_df,
-            out_dir / f"group_delta_{label}.png",
-            attr,
-            selected,
+    for dataset in sorted(full_df["dataset"].dropna().unique()):
+        dataset_df = full_df[full_df["dataset"].astype(str) == str(dataset)].copy()
+        if dataset_df.empty:
+            continue
+        primary_df = dataset_df
+        if "model_type" in primary_df.columns:
+            primary_df = primary_df[primary_df["model_type"].astype(str) == str(primary_model)]
+
+        selected = select_primary_fairness_row(
+            dataset_df, model_type=primary_model, min_recall_delta=min_recall_delta
         )
-        _report(f"group_delta_{label}", result)
+        dataset_prefix = _dataset_prefix(dataset)
+        primary_prefix = _dataset_prefix(dataset, model_label)
+
+        result = save_before_after_metric_radar(
+            dataset_df,
+            out_dir / f"{primary_prefix}_primary_mitigation_radar_before_after.png",
+            selected_row=selected,
+        )
+        _report(f"{primary_prefix}_primary_mitigation_radar_before_after", result)
+
+        result = save_mitigation_delta_matrix(
+            primary_df, out_dir / f"{primary_prefix}_mitigation_metric_delta_matrix.png"
+        )
+        _report(f"{primary_prefix}_mitigation_metric_delta_matrix", result)
+
+        result = save_cross_model_baseline_radar(
+            dataset_df, out_dir / f"{dataset_prefix}_baseline_cross_model_radar.png"
+        )
+        _report(f"{dataset_prefix}_baseline_cross_model_radar", result)
+
+        if include_appendix:
+            result = save_cross_model_best_available_radar(
+                dataset_df,
+                out_dir / f"{dataset_prefix}_unbalanced_best_available_cross_model_radar.png",
+            )
+            _report(f"{dataset_prefix}_unbalanced_best_available_cross_model_radar", result)
+
+        if selected is None:
+            logger.warning("[WARNING] group before/after plots: no selected mitigation row")
+            continue
+        if per_group_df is None:
+            logger.warning("[WARNING] group before/after plots: group metric deltas missing")
+            continue
+
+        dataset_groups = per_group_df[per_group_df["dataset"].astype(str) == str(dataset)].copy()
+        for attr, label in [("age_group", "age_group"), ("sex", "sex")]:
+            result = save_group_before_after_bars(
+                dataset_groups,
+                out_dir / f"{primary_prefix}_primary_{label}_before_after.png",
+                attr,
+                selected,
+            )
+            _report(f"{primary_prefix}_primary_{label}_before_after", result)
+
+            result = save_group_delta_bars(
+                dataset_groups,
+                out_dir / f"{primary_prefix}_primary_{label}_delta.png",
+                attr,
+                selected,
+            )
+            _report(f"{primary_prefix}_primary_{label}_delta", result)
 
 
 # ---------------------------------------------------------------------------
@@ -470,6 +625,25 @@ def main() -> None:
         default="latest",
         help="Run ID (directory name under output/cardiac/runs/) or 'latest'.",
     )
+    parser.add_argument(
+        "--config",
+        default="configs/experiments/comparison.yaml",
+        help="Comparison YAML config (CLI flags override overlapping values).",
+    )
+    legacy_group = parser.add_mutually_exclusive_group()
+    legacy_group.add_argument(
+        "--legacy-score-figures",
+        dest="legacy_score_figures",
+        action="store_true",
+        help="Enable legacy score-value dissertation figures.",
+    )
+    legacy_group.add_argument(
+        "--no-legacy-score-figures",
+        dest="legacy_score_figures",
+        action="store_false",
+        help="Disable legacy score-value dissertation figures.",
+    )
+    parser.set_defaults(legacy_score_figures=None)
     args = parser.parse_args()
 
     setup_study_logging(
@@ -482,6 +656,11 @@ def main() -> None:
     )
 
     run_dir = _resolve_run_dir(args.run_id)
+    comparison_config = load_comparison_config(_ROOT, args.config)
+    if args.legacy_score_figures is not None:
+        comparison_config.setdefault("legacy_score", {})[
+            "dissertation_figures_enabled"
+        ] = args.legacy_score_figures
     comparisons_dir = _resolve_comparisons_dir(run_dir)
     fairness_dir = run_dir / "baseline" / "prediction_fairness"
     if not fairness_dir.exists():
@@ -500,12 +679,31 @@ def main() -> None:
     if per_group_df is None:
         per_group_df = _safe_read_csv(comparisons_dir / "per_group_comparison.csv")
     summary_df = _safe_read_csv(comparisons_dir / "cross_model_summary.csv")
+    experiment_index_df = _safe_read_csv(comparisons_dir / "experiment_index.csv")
+    metric_values_df = _safe_read_csv(comparisons_dir / "metric_values.csv")
+    metric_deltas_df = _safe_read_csv(comparisons_dir / "metric_deltas.csv")
+    group_metric_deltas_df = _safe_read_csv(comparisons_dir / "group_metric_deltas.csv")
+    evidence_summary_df = _safe_read_csv(comparisons_dir / "fairness_evidence_summary.csv")
+
+    canonical_full_df = _canonical_full_for_plots(
+        experiment_index_df, metric_values_df, metric_deltas_df
+    )
+    fairness_comparison_full_df = canonical_full_df if canonical_full_df is not None else full_df
+    fairness_comparison_group_df = (
+        group_metric_deltas_df if group_metric_deltas_df is not None else per_group_df
+    )
 
     _generate_fairness_plots(full_df, per_group_df, fairness_dir, run_dir, out_base / "fairness")
     _generate_transformation_plots(run_dir, full_df, out_base / "transformations")
-    _generate_cross_model_plots(full_df, per_group_df, summary_df, out_base / "cross_model")
+    _generate_cross_model_plots(
+        full_df, per_group_df, summary_df, out_base / "cross_model", comparison_config
+    )
     _generate_fairness_comparison_plots(
-        full_df, per_group_df, out_base / "fairness_comparison"
+        fairness_comparison_full_df,
+        fairness_comparison_group_df,
+        evidence_summary_df,
+        out_base / "fairness_comparison",
+        comparison_config,
     )
 
     logger.info("[SUCCESS] Dissertation figures generated: output_dir=%s", out_base)
