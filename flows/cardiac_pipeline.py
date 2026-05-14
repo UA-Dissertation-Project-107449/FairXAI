@@ -338,17 +338,21 @@ def run_combinatorial_experiments(
 
 
 @task
-def compare_experiments(run_id: str, verbose: int = 0):
+def compare_experiments(run_id: str, comparison_config: Optional[str] = None, verbose: int = 0):
     """Compares experiments."""
     logger = get_run_logger()
     logger.info("[PHASE 12/12] Experiment comparison and dissertation plots")
     script = ROOT_DIR / "scripts" / "cardiac" / "compare.py"
     args = ["--pipeline", "cardiac", "--run-id", run_id]
+    if comparison_config:
+        args.extend(["--config", comparison_config])
     args.extend(_verbose_flags(verbose))
     _run_script(script, args, os.environ.copy())
 
     plots_script = ROOT_DIR / "scripts" / "studies" / "generate_dissertation_plots.py"
     plots_args = ["--run-id", run_id]
+    if comparison_config:
+        plots_args.extend(["--config", comparison_config])
     _run_script(plots_script, plots_args, os.environ.copy())
 
 
@@ -375,6 +379,7 @@ def cardiac_pipeline(
     run_id_override: Optional[str] = None,
     datasets: Optional[list[str]] = None,
     model_types: Optional[list[str]] = None,
+    comparison_config: Optional[str] = None,
 ):
     """
     The main pipeline flow for the cardiac fairness analysis.
@@ -781,7 +786,9 @@ def cardiac_pipeline(
                 ]
             if not wait and assess_predictions_task:
                 wait = [assess_predictions_task]
-            comparison_task = compare_experiments.submit(run_id, verbose, wait_for=wait)
+            comparison_task = compare_experiments.submit(
+                run_id, comparison_config, verbose, wait_for=wait
+            )
         else:
             logger.info("[12/12] compare - skipped (disabled)")
             _mark_skipped(12, "disabled")
@@ -990,6 +997,11 @@ Examples:
         help="Optional model types override for baseline/combinatorial stages.",
     )
     p.add_argument(
+        "--comparison-config",
+        default=None,
+        help="Optional comparison YAML override passed to phase 12.",
+    )
+    p.add_argument(
         "-v", "--verbose", action="count", default=0, help="Verbosity: -v=info, -vv=debug"
     )
     return p
@@ -1019,4 +1031,5 @@ if __name__ == "__main__":
         run_id_override=args.run_id,
         datasets=args.datasets,
         model_types=args.model_types,
+        comparison_config=args.comparison_config,
     )
