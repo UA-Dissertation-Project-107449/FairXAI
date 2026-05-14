@@ -19,6 +19,15 @@ from _gates import evaluate_recall_gate, load_gate_thresholds
 
 from fairxai.cli.runner_base import get_project_root, setup_phase_logging
 from fairxai.cli.runner_utils import resolve_latest_run_dir, resolve_run_id
+from fairxai.comparison import (
+    baseline_key_from_row as _baseline_key_from_row,
+    load_comparison_config,
+    normalize_sensitive_attr as _normalize_sensitive_attr,
+    safe_float as _safe_float,
+    safe_int as _safe_int,
+    write_canonical_comparison_outputs,
+)
+from fairxai.comparison.baseline_matching import build_baseline_lookups, find_matching_baseline
 from fairxai.experiments.versioning import ExperimentVersioning
 from fairxai.viz.experiment_plots import (
     save_comparison_heatmap,
@@ -204,7 +213,12 @@ def create_summary_statistics(df: pd.DataFrame) -> pd.DataFrame:
     return summary
 
 
-def compare_binning_strategies(df: pd.DataFrame, output_dir: Path, plots_dir: Path = None):
+def compare_binning_strategies(
+    df: pd.DataFrame,
+    output_dir: Path,
+    plots_dir: Path = None,
+    write_plot: bool = True,
+):
     """
     Create binning strategy comparison table.
 
@@ -227,17 +241,23 @@ def compare_binning_strategies(df: pd.DataFrame, output_dir: Path, plots_dir: Pa
     pivot.to_csv(output_file)
     logging.info(f"[SUCCESS] Saved binning summary: {output_file}")
 
-    heatmap_dir = plots_dir if plots_dir else output_dir
-    heatmap_file = heatmap_dir / "binning_comparison_heatmap.png"
-    save_comparison_heatmap(
-        pivot, title="Binning Strategy Comparison (Composite Score)", output_file=heatmap_file
-    )
-    logging.info(f"[SUCCESS] Saved binning heatmap: {heatmap_file}")
+    if write_plot:
+        heatmap_dir = plots_dir if plots_dir else output_dir
+        heatmap_file = heatmap_dir / "binning_comparison_heatmap.png"
+        save_comparison_heatmap(
+            pivot, title="Binning Strategy Comparison (Composite Score)", output_file=heatmap_file
+        )
+        logging.info(f"[SUCCESS] Saved binning heatmap: {heatmap_file}")
 
     return pivot
 
 
-def compare_mitigation_techniques(df: pd.DataFrame, output_dir: Path, plots_dir: Path = None):
+def compare_mitigation_techniques(
+    df: pd.DataFrame,
+    output_dir: Path,
+    plots_dir: Path = None,
+    write_plot: bool = True,
+):
     """
     Create mitigation technique comparison table.
 
@@ -259,12 +279,13 @@ def compare_mitigation_techniques(df: pd.DataFrame, output_dir: Path, plots_dir:
     pivot.to_csv(output_file)
     logging.info(f"[SUCCESS] Saved mitigation summary: {output_file}")
 
-    heatmap_dir = plots_dir if plots_dir else output_dir
-    heatmap_file = heatmap_dir / "mitigation_comparison_heatmap.png"
-    save_comparison_heatmap(
-        pivot, title="Mitigation Technique Comparison (Composite Score)", output_file=heatmap_file
-    )
-    logging.info(f"[SUCCESS] Saved mitigation heatmap: {heatmap_file}")
+    if write_plot:
+        heatmap_dir = plots_dir if plots_dir else output_dir
+        heatmap_file = heatmap_dir / "mitigation_comparison_heatmap.png"
+        save_comparison_heatmap(
+            pivot, title="Mitigation Technique Comparison (Composite Score)", output_file=heatmap_file
+        )
+        logging.info(f"[SUCCESS] Saved mitigation heatmap: {heatmap_file}")
 
     return pivot
 
@@ -422,49 +443,6 @@ def filter_best_configurations(
     return best_df  # empty DataFrame (strict set was empty)
 
 
-def _normalize_sensitive_attr(attr: object) -> str:
-    """Normalize attribute names across baseline-assess and experiment JSONs."""
-    attr_str = str(attr)
-    if attr_str.endswith("_cat"):
-        return attr_str[: -len("_cat")]
-    return attr_str
-
-
-def _safe_float(value):
-    try:
-        if value is None:
-            return None
-        value = float(value)
-        if np.isnan(value):
-            return None
-        return value
-    except (TypeError, ValueError):
-        return None
-
-
-def _safe_int(value):
-    try:
-        if value is None:
-            return None
-        if pd.isna(value):
-            return None
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _baseline_key_from_row(row, include_variant: bool = True) -> tuple:
-    key = (
-        row["dataset"],
-        row.get("model_type", "logistic_regression"),
-        row["binning_strategy"],
-        row["training_method"],
-    )
-    if include_variant:
-        return key[:2] + (row.get("model_variant", "default"),) + key[2:]
-    return key
-
-
 def _extract_result_fairness_metrics(exp_data: dict) -> dict:
     """Return fairness_metrics from a loaded experiment payload."""
     if not isinstance(exp_data, dict):
@@ -611,7 +589,7 @@ def _build_per_group_comparison(
     versioning: "ExperimentVersioning",
     run_root: Path,
     output_dir: Path,
-) -> None:
+) -> pd.DataFrame | None:
     """Build and save per_group.csv.
 
     For each experiment, loads per-group fairness from its result JSON and pairs it
@@ -624,6 +602,8 @@ def _build_per_group_comparison(
     """
     baseline_exact: dict[tuple, dict] = {}
     baseline_fallback: dict[tuple, dict] = {}
+    baseline_exact_id: dict[tuple, str] = {}
+    baseline_fallback_id: dict[tuple, str] = {}
 
     baseline_rows = df_success[df_success["mitigation_technique"] == "baseline"].copy()
     for _, base_row in baseline_rows.iterrows():
@@ -639,24 +619,30 @@ def _build_per_group_comparison(
         exact_key = _baseline_key_from_row(base_row, include_variant=True)
         fallback_key = _baseline_key_from_row(base_row, include_variant=False)
         baseline_exact[exact_key] = record_map
+        baseline_exact_id[exact_key] = exp_id
         baseline_fallback.setdefault(fallback_key, record_map)
+        baseline_fallback_id.setdefault(fallback_key, exp_id)
 
     baseline_assess_cache: dict[tuple, dict] = {}
 
-    def _get_baseline_map(exp_row) -> tuple[dict, str]:
+    def _get_baseline_map(exp_row) -> tuple[dict, str, str | None]:
         exact_key = _baseline_key_from_row(exp_row, include_variant=True)
         fallback_key = _baseline_key_from_row(exp_row, include_variant=False)
 
         if exact_key in baseline_exact:
-            return baseline_exact[exact_key], "combinatorial_exact"
+            return baseline_exact[exact_key], "combinatorial_exact", baseline_exact_id.get(exact_key)
         if fallback_key in baseline_fallback:
-            return baseline_fallback[fallback_key], "combinatorial_no_variant"
+            return (
+                baseline_fallback[fallback_key],
+                "combinatorial_no_variant",
+                baseline_fallback_id.get(fallback_key),
+            )
 
         assess_key = (exp_row["dataset"], exp_row.get("model_type", "logistic_regression"))
         if assess_key not in baseline_assess_cache:
             records = _load_baseline_per_group(run_root, assess_key[0], assess_key[1])
             baseline_assess_cache[assess_key] = _records_to_per_group_map(records)
-        return baseline_assess_cache.get(assess_key, {}), "baseline_assess"
+        return baseline_assess_cache.get(assess_key, {}), "baseline_assess", None
 
     rows = []
     for _, exp_row in df_success.iterrows():
@@ -673,7 +659,7 @@ def _build_per_group_comparison(
             continue
 
         pg_records = _extract_per_group_fairness(fairness_metrics)
-        baseline_map, baseline_source = _get_baseline_map(exp_row)
+        baseline_map, baseline_source, baseline_experiment_id = _get_baseline_map(exp_row)
 
         for rec in pg_records:
             baseline_rec = baseline_map.get(
@@ -696,6 +682,7 @@ def _build_per_group_comparison(
                     "dataset": dataset,
                     "model_type": model_type,
                     "experiment_id": exp_id,
+                    "baseline_experiment_id": baseline_experiment_id,
                     "binning_strategy": exp_row["binning_strategy"],
                     "training_method": exp_row["training_method"],
                     "mitigation_technique": exp_row["mitigation_technique"],
@@ -719,12 +706,13 @@ def _build_per_group_comparison(
         logging.warning(
             "No per-group comparison rows generated (stage-6 baseline JSONs may be absent)"
         )
-        return
+        return None
 
     pg_df = pd.DataFrame(rows)
     pg_csv = output_dir / "per_group.csv"
     pg_df.to_csv(pg_csv, index=False)
     logging.info(f"[SUCCESS] Saved per-group comparison: {pg_csv} ({len(pg_df)} rows)")
+    return pg_df
 
 
 def _promote_top_n_models(versioning, df_success: "pd.DataFrame", save_top_n: int = 10) -> None:
@@ -792,6 +780,24 @@ def _promote_top_n_models(versioning, df_success: "pd.DataFrame", save_top_n: in
         logging.warning("[TOP_N] No temp models found to promote")
 
 
+def _remove_legacy_score_plot_artifacts(plots_dir: Path) -> None:
+    """Remove old root-level score plots when legacy score plots are disabled."""
+    patterns = [
+        "binning_comparison_heatmap.png",
+        "mitigation_comparison_heatmap.png",
+        "tradeoff_*.png",
+        "pareto_*.png",
+    ]
+    for pattern in patterns:
+        for path in plots_dir.glob(pattern):
+            if path.is_file():
+                try:
+                    path.unlink()
+                    logging.info("[CLEANUP] Removed disabled legacy score plot: %s", path)
+                except OSError as exc:
+                    logging.warning("[CLEANUP] Could not remove legacy score plot %s: %s", path, exc)
+
+
 def run_comparison_analysis(
     results_dir: str = None,
     pipeline: str = "cardiac",
@@ -802,9 +808,14 @@ def run_comparison_analysis(
     run_id: str = None,
     output_root: str = None,
     save_top_n: int = 10,
+    config_path: str | None = None,
+    legacy_score_plots: bool | None = None,
 ):
     """Main comparison script."""
     project_root = get_project_root(Path(__file__))
+    requested_run_id = run_id
+    if isinstance(run_id, str) and run_id.lower() == "latest":
+        run_id = None
     use_run_id = bool(run_id or os.getenv("RUN_ID") or os.getenv("PREFECT__RUNTIME__FLOW_RUN_ID"))
     run_id = resolve_run_id(run_id) if use_run_id else None
     setup_phase_logging(
@@ -847,7 +858,8 @@ def run_comparison_analysis(
             run_dir = candidate
 
     logging.info(
-        f"[RUN_CONTEXT] pipeline={pipeline} run_id={run_id or 'none'} "
+        f"[RUN_CONTEXT] pipeline={pipeline} requested_run_id={requested_run_id or 'latest'} "
+        f"resolved_run_id={run_id or 'latest'} "
         f"base_output_dir={base_output_dir} run_dir={run_dir if run_dir else 'not_found'}"
     )
 
@@ -858,6 +870,18 @@ def run_comparison_analysis(
 
     # Initialize versioning
     versioning = ExperimentVersioning(base_output_dir, run_dir=run_dir)
+    comparison_config = load_comparison_config(project_root, config_path)
+    if legacy_score_plots is not None:
+        comparison_config.setdefault("legacy_score", {})["plots_enabled"] = legacy_score_plots
+    legacy_score_plots_enabled = bool(
+        comparison_config.get("legacy_score", {}).get("plots_enabled", False)
+    )
+    logging.info(
+        "[CONFIG] comparison_config=%s legacy_score_plots=%s canonical_outputs=%s",
+        config_path or "configs/experiments/comparison.yaml",
+        legacy_score_plots_enabled,
+        comparison_config.get("canonical_outputs", {}).get("enabled", True),
+    )
 
     # Derive run_root: the directory that contains baseline/, experiments/, etc.
     # run_dir is typically {run_root}/experiments.
@@ -920,11 +944,7 @@ def run_comparison_analysis(
     eq_tpr_cols = [c for c in fairness_metric_cols if c.startswith("eq_odds_") and "_tpr_" in c]
     eq_fpr_cols = [c for c in fairness_metric_cols if c.startswith("eq_odds_") and "_fpr_" in c]
 
-    baseline_lookup_exact = {}
-    baseline_lookup_no_variant = {}
-    for _, row in df_success[df_success["mitigation_technique"] == "baseline"].iterrows():
-        baseline_lookup_exact[_baseline_key_from_row(row, include_variant=True)] = row
-        baseline_lookup_no_variant.setdefault(_baseline_key_from_row(row, include_variant=False), row)
+    baseline_lookup_exact, baseline_lookup_no_variant = build_baseline_lookups(df_success)
 
     for col in fairness_metric_cols:
         gain_col = f"gain_{col}"
@@ -954,9 +974,8 @@ def run_comparison_analysis(
         df_success[col] = np.nan
 
     def _baseline_for_row(row):
-        exact_key = _baseline_key_from_row(row, include_variant=True)
-        fallback_key = _baseline_key_from_row(row, include_variant=False)
-        return baseline_lookup_exact.get(exact_key, baseline_lookup_no_variant.get(fallback_key))
+        baseline, _ = find_matching_baseline(row, baseline_lookup_exact, baseline_lookup_no_variant)
+        return baseline
 
     def _max_or_nan(series, cols):
         vals = [series.get(col) for col in cols if col in series.index]
@@ -1055,8 +1074,27 @@ def run_comparison_analysis(
     # Create comparison tables
     logging.info("Generating comparison tables...")
 
-    compare_binning_strategies(df_success, data_dir, plots_dir=plots_dir)
-    compare_mitigation_techniques(df_success, data_dir, plots_dir=plots_dir)
+    legacy_plots_dir = plots_dir / comparison_config.get("legacy_score", {}).get(
+        "output_subdir", "legacy_score"
+    )
+    if legacy_score_plots_enabled and not no_plots:
+        legacy_plots_dir.mkdir(parents=True, exist_ok=True)
+    elif not legacy_score_plots_enabled:
+        _remove_legacy_score_plot_artifacts(plots_dir)
+
+    write_legacy_score_plots = legacy_score_plots_enabled and not no_plots
+    compare_binning_strategies(
+        df_success,
+        data_dir,
+        plots_dir=legacy_plots_dir,
+        write_plot=write_legacy_score_plots,
+    )
+    compare_mitigation_techniques(
+        df_success,
+        data_dir,
+        plots_dir=legacy_plots_dir,
+        write_plot=write_legacy_score_plots,
+    )
 
     # Filter best configurations (writes to data_dir now)
     logging.info("Filtering best configurations...")
@@ -1067,18 +1105,17 @@ def run_comparison_analysis(
         performance_threshold,
     )
 
-    # Trade-off visuals (per dataset, then per dataset x model_type)
-    if not no_plots:
-        for dataset in sorted(df_success["dataset"].unique()):
-            subset = df_success[df_success["dataset"] == dataset].copy()
-            if subset.empty:
-                continue
+    # Legacy score-value trade-off outputs (CSV compatibility always, plots only by config).
+    for dataset in sorted(df_success["dataset"].unique()):
+        subset = df_success[df_success["dataset"] == dataset].copy()
+        if subset.empty:
+            continue
 
-            # Tradeoff: CSV in data/, PNG in plots/
-            tradeoff_csv = data_dir / f"tradeoff_{dataset}.csv"
-            subset.to_csv(tradeoff_csv, index=False)
+        tradeoff_csv = data_dir / f"tradeoff_{dataset}.csv"
+        subset.to_csv(tradeoff_csv, index=False)
 
-            tradeoff_png = plots_dir / f"tradeoff_{dataset}.png"
+        if write_legacy_score_plots:
+            tradeoff_png = legacy_plots_dir / f"tradeoff_{dataset}.png"
             tradeoff_result = save_tradeoff_scatter(
                 subset,
                 x_col="score_value",
@@ -1093,14 +1130,14 @@ def run_comparison_analysis(
             else:
                 logging.warning(f"Tradeoff plot skipped (no data): {tradeoff_png}")
 
-            # Pareto: subset to pareto-flagged rows; CSV in data/, PNG in plots/
-            pareto_subset = (
-                subset[subset["is_pareto"]].copy() if "is_pareto" in subset.columns else subset
-            )
-            pareto_csv = data_dir / f"pareto_{dataset}.csv"
-            pareto_subset.to_csv(pareto_csv, index=False)
+        pareto_subset = (
+            subset[subset["is_pareto"]].copy() if "is_pareto" in subset.columns else subset
+        )
+        pareto_csv = data_dir / f"pareto_{dataset}.csv"
+        pareto_subset.to_csv(pareto_csv, index=False)
 
-            pareto_png = plots_dir / f"pareto_{dataset}.png"
+        if write_legacy_score_plots:
+            pareto_png = legacy_plots_dir / f"pareto_{dataset}.png"
             pareto_result = save_pareto_frontier(
                 subset,
                 x_col="score_value",
@@ -1113,12 +1150,12 @@ def run_comparison_analysis(
             else:
                 logging.warning(f"Pareto plot skipped (no data): {pareto_png}")
 
-            # Per-model Pareto plots: one per (dataset, model_type) — PNG only in plots/
+            # Per-model Pareto plots: one per (dataset, model_type).
             for model_type in sorted(subset["model_type"].dropna().unique()):
                 model_subset = subset[subset["model_type"] == model_type].copy()
                 if model_subset.empty or model_subset["fairness_gap"].isna().all():
                     continue
-                pareto_model_png = plots_dir / f"pareto_{dataset}_{model_type}.png"
+                pareto_model_png = legacy_plots_dir / f"pareto_{dataset}_{model_type}.png"
                 pareto_model_result = save_pareto_frontier(
                     model_subset,
                     x_col="score_value",
@@ -1187,11 +1224,26 @@ def run_comparison_analysis(
     cross_model_df.to_csv(cross_model_csv, index=False)
     logging.info(f"[SUCCESS] Saved cross-model summary: {cross_model_csv}")
 
-    # Per-subgroup before/after comparison (requires stage-6 baseline JSONs)
+    # Per-subgroup before/after comparison (requires experiment or stage-6 baseline JSONs)
+    per_group_df = None
     if run_root is not None and run_root.exists():
-        _build_per_group_comparison(df_success, versioning, run_root, data_dir)
+        per_group_df = _build_per_group_comparison(df_success, versioning, run_root, data_dir)
     else:
         logging.debug("Skipping per-group comparison: run_root not available")
+
+    if comparison_config.get("canonical_outputs", {}).get("enabled", True):
+        canonical_tables = write_canonical_comparison_outputs(
+            df_success,
+            per_group_df,
+            data_dir,
+            comparison_config,
+            run_id=run_root.name if run_root is not None else run_id,
+            input_paths={"full_comparison": str(full_results_file)},
+        )
+        logging.info(
+            "[SUCCESS] Saved canonical comparison tables: %s",
+            {name: len(df) for name, df in canonical_tables.items()},
+        )
 
     # Promote top N models from _temp/ to models/
     _promote_top_n_models(versioning, df_success, save_top_n=save_top_n)
@@ -1220,6 +1272,12 @@ def main():
         "--pipeline", type=str, default="cardiac", help="Pipeline name (e.g., cardiac, dermatology)"
     )
     parser.add_argument(
+        "--config",
+        type=str,
+        default="configs/experiments/comparison.yaml",
+        help="Comparison YAML config (CLI flags override overlapping values)",
+    )
+    parser.add_argument(
         "--fairness-threshold",
         type=float,
         default=None,
@@ -1232,6 +1290,20 @@ def main():
         help="Maximum performance drop (15%% default)",
     )
     parser.add_argument("--no-plots", action="store_true", help="Disable plot generation")
+    legacy_group = parser.add_mutually_exclusive_group()
+    legacy_group.add_argument(
+        "--legacy-score-plots",
+        dest="legacy_score_plots",
+        action="store_true",
+        help="Write legacy score_value plots under plots/legacy_score",
+    )
+    legacy_group.add_argument(
+        "--no-legacy-score-plots",
+        dest="legacy_score_plots",
+        action="store_false",
+        help="Disable legacy score_value plots",
+    )
+    parser.set_defaults(legacy_score_plots=None)
     parser.add_argument(
         "--save-top-n",
         type=int,
@@ -1254,6 +1326,8 @@ def main():
         run_id=args.run_id,
         output_root=args.output_root,
         save_top_n=args.save_top_n,
+        config_path=args.config,
+        legacy_score_plots=args.legacy_score_plots,
     )
 
 
