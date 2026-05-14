@@ -423,6 +423,30 @@ def write_canonical_comparison_outputs(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "input_paths": input_paths or {},
         "row_counts": {name: int(len(df)) for name, df in tables.items()},
+        "canonical_outputs": [
+            "experiment_index.csv",
+            "metric_values.csv",
+            "metric_deltas.csv",
+            "group_metric_values.csv",
+            "group_metric_deltas.csv",
+            "fairness_evidence_summary.csv",
+        ],
+        "compatibility_outputs": [
+            "full_comparison.csv",
+            "per_group.csv",
+            "binning_summary.csv",
+            "mitigation_summary.csv",
+            "dataset_summary.csv",
+            "cross_model_summary.csv",
+            "tradeoff_<dataset>.csv",
+            "pareto_<dataset>.csv",
+            "top_configs.csv",
+        ],
+        "dissertation_evidence_policy": (
+            "Use canonical metric-level tables for claims and figures. Compatibility "
+            "outputs may contain score_value for transitional ranking/model-promotion "
+            "logic, but score_value is not dissertation evidence."
+        ),
         "baseline_matching_policy": (
             "dataset + model_type + model_variant + binning_strategy + training_method; "
             "fallback omits model_variant"

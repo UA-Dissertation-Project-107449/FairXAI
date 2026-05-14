@@ -33,10 +33,29 @@ DEFAULT_COMPARISON_CONFIG: dict[str, Any] = {
             "group_bars": [14, 5],
         },
     },
-    "legacy_score": {
-        "plots_enabled": False,
-        "dissertation_figures_enabled": False,
-        "output_subdir": "legacy_score",
+    "outputs": {
+        "comparison_data_dir": "data",
+        "dissertation_plot_dir": "plots",
+        "dissertation_data_dir": "data",
+    },
+    "naming": {
+        "figure_templates": {
+            "fairness_metric_heatmap": "{dataset}_{sensitive_attr}_fairness_metric_heatmap.png",
+            "intersectional_heatmap": "{dataset}_{metric}_intersectional_heatmap.png",
+            "primary_mitigation_radar": (
+                "{dataset}_{model_label}_primary_mitigation_radar_before_after.png"
+            ),
+            "mitigation_delta_matrix": "{dataset}_{model_label}_mitigation_metric_delta_matrix.png",
+            "group_performance_gaps": (
+                "{dataset}_{model_label}_primary_{sensitive_attr}_performance_gaps.png"
+            ),
+            "group_before_after": "{dataset}_{model_label}_primary_{sensitive_attr}_before_after.png",
+            "group_delta": "{dataset}_{model_label}_primary_{sensitive_attr}_delta.png",
+            "baseline_cross_model_radar": "{dataset}_baseline_cross_model_radar.png",
+            "best_available_cross_model_radar": (
+                "{dataset}_unbalanced_best_available_cross_model_radar.png"
+            ),
+        },
     },
 }
 
