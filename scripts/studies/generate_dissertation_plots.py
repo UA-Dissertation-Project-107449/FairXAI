@@ -52,6 +52,10 @@ sys.path.insert(0, str(_ROOT / "src"))
 from fairxai.cli.runner_base import setup_study_logging
 from fairxai.comparison import build_metric_plot_frame, figure_filename, load_comparison_config
 from fairxai.comparison.metric_tables import build_fairness_evidence_summary
+from fairxai.viz.fairness import (
+    plot_bias_amplification_waterfall,
+    plot_fairness_metric_heatmap,
+)
 from fairxai.viz.fairness_comparison import (
     save_before_after_metric_radar,
     save_cross_model_baseline_radar,
@@ -62,10 +66,6 @@ from fairxai.viz.fairness_comparison import (
     save_intersectional_heatmap,
     save_mitigation_delta_matrix,
     select_primary_fairness_row,
-)
-from fairxai.viz.fairness import (
-    plot_bias_amplification_waterfall,
-    plot_fairness_metric_heatmap,
 )
 from fairxai.viz.transformations import (
     plot_before_after_distributions,
@@ -118,9 +118,7 @@ def _safe_read_csv(path: Path) -> pd.DataFrame | None:
 
 def _resolve_comparisons_dir(run_dir: Path, comparison_config: dict | None = None) -> Path:
     """Resolve the comparisons data directory for both old and current layouts."""
-    data_subdir = (
-        (comparison_config or {}).get("outputs", {}).get("comparison_data_dir", "data")
-    )
+    data_subdir = (comparison_config or {}).get("outputs", {}).get("comparison_data_dir", "data")
     candidates = [
         run_dir / "experiments" / "comparisons" / data_subdir,
         run_dir / "experiments" / "comparisons",
@@ -399,9 +397,7 @@ def _generate_fairness_comparison_plots(
             dataset=dataset,
             model_label=model_label,
         )
-        result = save_mitigation_delta_matrix(
-            primary_df, plots_dir / matrix_name
-        )
+        result = save_mitigation_delta_matrix(primary_df, plots_dir / matrix_name)
         _report(matrix_name.removesuffix(".png"), result)
 
         baseline_radar_name = figure_filename(
@@ -409,9 +405,7 @@ def _generate_fairness_comparison_plots(
             "baseline_cross_model_radar",
             dataset=dataset,
         )
-        result = save_cross_model_baseline_radar(
-            dataset_df, plots_dir / baseline_radar_name
-        )
+        result = save_cross_model_baseline_radar(dataset_df, plots_dir / baseline_radar_name)
         _report(baseline_radar_name.removesuffix(".png"), result)
 
         if include_appendix:

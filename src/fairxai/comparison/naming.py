@@ -7,7 +7,6 @@ from typing import Any
 
 from fairxai.comparison.baseline_matching import normalize_sensitive_attr
 
-
 DEFAULT_FIGURE_TEMPLATES = {
     "fairness_metric_heatmap": "{dataset}_{sensitive_attr}_fairness_metric_heatmap.png",
     "intersectional_heatmap": "{dataset}_{metric}_intersectional_heatmap.png",

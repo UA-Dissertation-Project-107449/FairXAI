@@ -31,6 +31,11 @@ from .distributions import (
     plot_stacked_group_distribution_grid,
     plot_target_distribution_by_group,
 )
+from .fairness import (
+    plot_bias_amplification_waterfall,
+    plot_fairness_metric_heatmap,
+    plot_group_performance_gaps,
+)
 from .fairness_comparison import (
     PALETTE_MODEL,
     save_before_after_metric_radar,
@@ -42,11 +47,6 @@ from .fairness_comparison import (
     save_intersectional_heatmap,
     save_mitigation_delta_matrix,
     select_primary_fairness_row,
-)
-from .fairness import (
-    plot_bias_amplification_waterfall,
-    plot_fairness_metric_heatmap,
-    plot_group_performance_gaps,
 )
 from .style import (
     PALETTE_DATASET,

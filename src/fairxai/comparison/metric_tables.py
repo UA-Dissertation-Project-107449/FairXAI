@@ -170,9 +170,7 @@ def build_metric_deltas(full_df: pd.DataFrame) -> pd.DataFrame:
         baseline, source = find_matching_baseline(row, exact, no_variant)
         if baseline is None:
             continue
-        baseline_specs = {
-            spec["metric"]: spec for spec in _metric_specs_for_row(baseline, full_df)
-        }
+        baseline_specs = {spec["metric"]: spec for spec in _metric_specs_for_row(baseline, full_df)}
         for spec in _metric_specs_for_row(row, full_df):
             base_spec = baseline_specs.get(spec["metric"])
             if base_spec is None or spec["value"] is None or base_spec["value"] is None:
@@ -348,9 +346,7 @@ def build_fairness_evidence_summary(
     if group_metric_deltas is not None and not group_metric_deltas.empty:
         gd = group_metric_deltas.copy()
         gd["improvement"] = pd.to_numeric(gd["improvement"], errors="coerce")
-        gd["group_key"] = (
-            gd["sensitive_attr"].astype(str) + ":" + gd["group"].astype(str)
-        )
+        gd["group_key"] = gd["sensitive_attr"].astype(str) + ":" + gd["group"].astype(str)
         for exp_id, group in gd.dropna(subset=["improvement"]).groupby("experiment_id"):
             scores = group.groupby("group_key")["improvement"].mean()
             group_counts[str(exp_id)] = (

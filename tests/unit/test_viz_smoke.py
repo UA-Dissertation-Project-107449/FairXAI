@@ -11,6 +11,12 @@ from fairxai.comparison.metric_tables import (
     build_fairness_evidence_summary,
     build_group_metric_deltas,
 )
+from fairxai.viz import fairness_comparison as fairness_comparison_viz
+from fairxai.viz.fairness import (
+    plot_bias_amplification_waterfall,
+    plot_fairness_metric_heatmap,
+    plot_group_performance_gaps,
+)
 from fairxai.viz.fairness_comparison import (
     save_before_after_metric_radar,
     save_cross_model_baseline_radar,
@@ -20,14 +26,7 @@ from fairxai.viz.fairness_comparison import (
     save_group_performance_gap_bars,
     save_intersectional_heatmap,
     save_mitigation_delta_matrix,
-    select_primary_fairness_row,
 )
-from fairxai.viz.fairness import (
-    plot_bias_amplification_waterfall,
-    plot_fairness_metric_heatmap,
-    plot_group_performance_gaps,
-)
-from fairxai.viz import fairness_comparison as fairness_comparison_viz
 from fairxai.viz.transformations import (
     plot_before_after_distributions,
     plot_scaling_effects,
@@ -312,8 +311,7 @@ class TestExperimentPlots:
         df = _make_full_comparison_df()
         out = tmp_path / "before_after_radar.png"
         selected = df[
-            (df["mitigation_technique"] != "baseline")
-            & (df["binning_strategy"] == "equal_width_5")
+            (df["mitigation_technique"] != "baseline") & (df["binning_strategy"] == "equal_width_5")
         ].iloc[0]
         result = save_before_after_metric_radar(df, out, selected_row=selected)
         assert result is not None
@@ -344,9 +342,7 @@ class TestExperimentPlots:
         ].iloc[0]
 
         before_after = tmp_path / "group_before_after.png"
-        result = save_group_before_after_bars(
-            per_group, before_after, "age_group_cat", selected
-        )
+        result = save_group_before_after_bars(per_group, before_after, "age_group_cat", selected)
         assert result is not None
         assert before_after.exists()
 

@@ -49,7 +49,9 @@ def baseline_key_from_row(row, include_variant: bool = True) -> tuple:
     return key
 
 
-def build_baseline_lookups(df: pd.DataFrame) -> tuple[dict[tuple, pd.Series], dict[tuple, pd.Series]]:
+def build_baseline_lookups(
+    df: pd.DataFrame,
+) -> tuple[dict[tuple, pd.Series], dict[tuple, pd.Series]]:
     """Build exact and no-variant baseline lookup maps."""
     exact: dict[tuple, pd.Series] = {}
     no_variant: dict[tuple, pd.Series] = {}
@@ -78,4 +80,3 @@ def find_matching_baseline(
         return no_variant_lookup[fallback_key], "combinatorial_no_variant"
 
     return None, None
-

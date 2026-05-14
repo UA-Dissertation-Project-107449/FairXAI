@@ -10,6 +10,13 @@ _EXPERIMENTS_DIR = Path(__file__).parent.parent.parent / "scripts" / "experiment
 sys.path.insert(0, str(_EXPERIMENTS_DIR))
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
+from run_experiment_comparison import (  # noqa: E402
+    _baseline_key_from_row,
+    _extract_per_group_fairness,
+    _load_baseline_per_group,
+    _normalize_sensitive_attr,
+)
+
 from fairxai.comparison.config import load_comparison_config  # noqa: E402
 from fairxai.comparison.metric_tables import (  # noqa: E402
     build_experiment_index,
@@ -19,12 +26,6 @@ from fairxai.comparison.metric_tables import (  # noqa: E402
 )
 from fairxai.comparison.naming import figure_filename  # noqa: E402
 from fairxai.comparison.plot_frames import build_metric_plot_frame  # noqa: E402
-from run_experiment_comparison import (  # noqa: E402
-    _baseline_key_from_row,
-    _extract_per_group_fairness,
-    _load_baseline_per_group,
-    _normalize_sensitive_attr,
-)
 
 
 class TestExtractPerGroupFairness:

@@ -8,7 +8,6 @@ from typing import Any
 
 from fairxai.utils.config import load_yaml_config
 
-
 DEFAULT_COMPARISON_CONFIG: dict[str, Any] = {
     "canonical_outputs": {
         "enabled": True,
@@ -72,7 +71,9 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 
 def load_comparison_config(project_root: Path, config_path: str | None = None) -> dict[str, Any]:
     """Load comparison config from YAML, merged over code fallback defaults."""
-    path = Path(config_path) if config_path else project_root / "configs/experiments/comparison.yaml"
+    path = (
+        Path(config_path) if config_path else project_root / "configs/experiments/comparison.yaml"
+    )
     if not path.is_absolute():
         path = project_root / path
     if path.exists():

@@ -539,7 +539,9 @@ def _save_model_radar(rows_df: pd.DataFrame, output_file, title: str, note: str 
         values = [float(np.clip(v, 0, 1)) for v in values]
         values_closed = values + [values[0]]
         color = PALETTE_MODEL.get(model, "#333333")
-        ax.plot(angles, values_closed, color=color, linewidth=2, label=model.replace("_", " ").title())
+        ax.plot(
+            angles, values_closed, color=color, linewidth=2, label=model.replace("_", " ").title()
+        )
         ax.fill(angles, values_closed, color=color, alpha=0.14)
 
     if not ax.lines:
@@ -661,9 +663,7 @@ def save_intersectional_heatmap(
     values = pivot.to_numpy(dtype=float)
     valid = np.isfinite(values)
     if not valid.any():
-        logger.warning(
-            "save_intersectional_heatmap: all values are NaN for metric '%s'", metric
-        )
+        logger.warning("save_intersectional_heatmap: all values are NaN for metric '%s'", metric)
         return None
     abs_max = max(float(np.abs(values[valid]).max()), 0.01)
 
@@ -691,9 +691,11 @@ def save_intersectional_heatmap(
     value_label = (
         "Improvement (positive = better)"
         if value_col == "improvement"
-        else "Delta (Experiment - Baseline)"
-        if value_col == "delta"
-        else "Experiment Value (baseline unavailable)"
+        else (
+            "Delta (Experiment - Baseline)"
+            if value_col == "delta"
+            else "Experiment Value (baseline unavailable)"
+        )
     )
     ax.set_title(f"Intersectional Fairness - {metric_label}\n{value_label}", fontsize=12)
     ax.set_xlabel("Subgroup")
