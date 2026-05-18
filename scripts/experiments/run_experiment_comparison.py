@@ -501,6 +501,7 @@ def _extract_per_group_fairness(fairness_metrics: dict) -> list:
                 if isinstance(gdata, dict):
                     _append(attr, group, "tpr", gdata.get("tpr"), group_data=gdata)
                     _append(attr, group, "fpr", gdata.get("fpr"), group_data=gdata)
+                    _append(attr, group, "fnr", gdata.get("fnr"), group_data=gdata)
 
         eqopp = attr_metrics.get("equal_opportunity", {})
         if isinstance(eqopp, dict):
