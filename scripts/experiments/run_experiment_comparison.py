@@ -777,7 +777,7 @@ def run_comparison_analysis(
     """Main comparison script."""
     project_root = get_project_root(Path(__file__))
     requested_run_id = run_id
-    if isinstance(run_id, str) and run_id.lower() == "latest":
+    if isinstance(run_id, str) and run_id.lower() in ("latest", "run_latest"):
         run_id = None
     use_run_id = bool(run_id or os.getenv("RUN_ID") or os.getenv("PREFECT__RUNTIME__FLOW_RUN_ID"))
     run_id = resolve_run_id(run_id) if use_run_id else None
