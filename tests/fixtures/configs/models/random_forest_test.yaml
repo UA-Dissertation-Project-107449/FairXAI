@@ -1,7 +1,9 @@
 hyperparameters:
   n_estimators: 25
   max_depth: 4
-  min_samples_leaf: 1
+  min_samples_leaf: 2
+  min_samples_split: 4
+  max_features: sqrt
   class_weight: balanced_subsample
   n_jobs: 1
   random_state: 42
