@@ -42,6 +42,16 @@ class SklearnClassifierWrapper:
 
         self.training_metrics = self._calculate_metrics(y_train, y_train_pred, y_train_proba)
 
+        train_auc = self.training_metrics.get("auc_roc", 0.0)
+        train_f1 = self.training_metrics.get("f1_score", 0.0)
+        train_acc = self.training_metrics.get("accuracy", 0.0)
+        if train_auc >= 0.98 or train_f1 >= 0.98 or train_acc >= 0.99:
+            logging.warning(
+                f"[OVERFIT-RISK] {self.model_name}: train_auc_roc={train_auc:.4f} "
+                f"train_f1={train_f1:.4f} train_accuracy={train_acc:.4f} "
+                f"— check test/CV metrics for memorization."
+            )
+
         logging.info(
             f"[SUCCESS] {self.model_name} training complete: "
             f"train_accuracy={self.training_metrics['accuracy']:.4f} "
