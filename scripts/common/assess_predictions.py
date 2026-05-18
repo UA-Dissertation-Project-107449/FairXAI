@@ -408,6 +408,107 @@ def compare_fairness(train_metrics: Dict, test_metrics: Dict) -> Dict:
     return comparison
 
 
+def write_overfit_gap_table(training_results_path: Path, output_dir: Path) -> None:
+    """Read training_results.json and write overfit_gap_table.csv.
+
+    Emits one row per dataset × model with train/test gaps for F1, recall, and AUC.
+    Also logs a compact summary so the gap is visible in pipeline logs.
+    """
+    if not training_results_path.exists():
+        logging.warning(
+            "training_results.json not found at %s — skipping overfit gap table.",
+            training_results_path,
+        )
+        return
+
+    with open(training_results_path) as f:
+        training_results = json.load(f)
+
+    rows = []
+    for dataset, models in training_results.items():
+        if not isinstance(models, dict):
+            continue
+        for model, model_data in models.items():
+            if not isinstance(model_data, dict):
+                continue
+            train_m = model_data.get("train_metrics") or {}
+            test_m = model_data.get("test_metrics") or {}
+
+            train_f1 = train_m.get("f1_score")
+            test_f1 = test_m.get("f1_score")
+            train_recall = train_m.get("recall")
+            test_recall = test_m.get("recall")
+            train_auc = train_m.get("auc_roc")
+            test_auc = test_m.get("auc_roc")
+            train_acc = train_m.get("accuracy")
+            test_acc = test_m.get("accuracy")
+
+            def _gap(a, b):
+                if a is None or b is None:
+                    return None
+                return round(float(a) - float(b), 4)
+
+            f1_gap = _gap(train_f1, test_f1)
+            recall_gap = _gap(train_recall, test_recall)
+            auc_gap = _gap(train_auc, test_auc)
+            acc_gap = _gap(train_acc, test_acc)
+
+            high = (
+                (train_f1 is not None and train_f1 >= 0.98)
+                or (f1_gap is not None and f1_gap >= 0.15)
+                or (train_acc is not None and train_acc >= 0.99)
+            )
+            medium = (f1_gap is not None and f1_gap >= 0.08) or (
+                acc_gap is not None and acc_gap >= 0.08
+            )
+            overfit_risk = "high" if high else "medium" if medium else "low"
+
+            rows.append(
+                {
+                    "dataset": dataset,
+                    "model": model,
+                    "train_f1": train_f1,
+                    "test_f1": test_f1,
+                    "f1_gap": f1_gap,
+                    "train_recall": train_recall,
+                    "test_recall": test_recall,
+                    "recall_gap": recall_gap,
+                    "train_auc": train_auc,
+                    "test_auc": test_auc,
+                    "auc_gap": auc_gap,
+                    "train_accuracy": train_acc,
+                    "test_accuracy": test_acc,
+                    "accuracy_gap": acc_gap,
+                    "overfit_risk": overfit_risk,
+                }
+            )
+
+    if not rows:
+        logging.warning("No model entries found in training_results.json — gap table empty.")
+        return
+
+    df = pd.DataFrame(rows)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / "overfit_gap_table.csv"
+    df.to_csv(out_path, index=False)
+    logging.info("[SUCCESS] Overfit gap table saved to: %s", out_path)
+
+    logging.info("[OVERFIT-GAP] train_f1 / test_f1 / f1_gap / risk:")
+    for _, row in df.iterrows():
+        tf = f"{row['train_f1']:.3f}" if row["train_f1"] is not None else "N/A"
+        ef = f"{row['test_f1']:.3f}" if row["test_f1"] is not None else "N/A"
+        gap = f"{row['f1_gap']:+.3f}" if row["f1_gap"] is not None else "N/A"
+        logging.info(
+            "  %-12s %-22s train=%s test=%s gap=%s risk=%s",
+            row["dataset"],
+            row["model"],
+            tf,
+            ef,
+            gap,
+            row["overfit_risk"].upper(),
+        )
+
+
 def main():
     """Main execution function."""
     parser = argparse.ArgumentParser(description="Assess post-prediction fairness")
@@ -548,6 +649,10 @@ def main():
     # Save human-readable markdown interpretation
     md_file = results_dir / "fairness_report.md"
     md_file.write_text(_render_fairness_md(nested_results))
+
+    # Write overfit gap table from training_results.json
+    training_results_path = baseline_root / "results" / "training_results.json"
+    write_overfit_gap_table(training_results_path, results_dir)
 
     logging.info("[PHASE] Fairness assessment complete")
     logging.info(
