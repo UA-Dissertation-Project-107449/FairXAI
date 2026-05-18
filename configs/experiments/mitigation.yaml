@@ -13,6 +13,9 @@ data:
   base_config: "domain/cardiac.yaml"
   datasets:
     - cleveland
+  sensitive_attributes:
+    - sex
+    - age_group
   preprocessing: "configs/experiments/baseline.yaml"  # Use baseline preprocessing
 
 baseline:

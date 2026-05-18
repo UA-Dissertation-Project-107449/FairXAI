@@ -54,11 +54,10 @@ def default_exclude_columns(
         target,
         "_dataset_source",
         "_dataset_file",
-        "age_raw",
+        "age_raw",       # unscaled age — exclude; scaled "age" column is a legitimate feature
         "sex_extended",
         "sex_bin",
-        "age",
-        "Age",
+        "Age",           # Kaggle Heart dataset uppercase variant
         "Sex",
         "gender",
         "condition",
