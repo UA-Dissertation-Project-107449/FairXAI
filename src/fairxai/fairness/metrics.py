@@ -103,6 +103,7 @@ class FairnessMetrics:
             tp = (positives[pred_col] == 1).sum()
             fn = (positives[pred_col] == 0).sum()
             tpr = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+            fnr = fn / (tp + fn) if (tp + fn) > 0 else 0.0
 
             # True negatives and false positives
             negatives = group_df[group_df[true_col] == 0]
@@ -113,6 +114,7 @@ class FairnessMetrics:
             results["group_metrics"][str(group)] = {
                 "tpr": tpr,
                 "fpr": fpr,
+                "fnr": fnr,
                 "count": len(group_df),
                 "positive_count": len(positives),
                 "negative_count": len(negatives),
@@ -121,9 +123,11 @@ class FairnessMetrics:
         # Calculate max differences
         tprs = [v["tpr"] for v in results["group_metrics"].values()]
         fprs = [v["fpr"] for v in results["group_metrics"].values()]
+        fnrs = [v["fnr"] for v in results["group_metrics"].values()]
 
         results["tpr_max_difference"] = max(tprs) - min(tprs)
         results["fpr_max_difference"] = max(fprs) - min(fprs)
+        results["fnr_max_difference"] = max(fnrs) - min(fnrs)
         results["is_fair"] = (
             results["tpr_max_difference"] < 0.1 and results["fpr_max_difference"] < 0.1
         )
