@@ -44,6 +44,17 @@ class TestExtractPerGroupFairness:
         assert "tpr" in metrics
         assert "fpr" in metrics
 
+    def test_fnr_present(self, minimal_fairness_metrics_dict):
+        records = _extract_per_group_fairness(minimal_fairness_metrics_dict)
+        metrics = {r["metric"] for r in records}
+        assert "fnr" in metrics
+
+    def test_fnr_values_match_fixture(self, minimal_fairness_metrics_dict):
+        records = _extract_per_group_fairness(minimal_fairness_metrics_dict)
+        fnr_records = {r["group"]: r["value"] for r in records if r["metric"] == "fnr"}
+        assert abs(fnr_records["40-49"] - 0.3) < 1e-9
+        assert abs(fnr_records["50-59"] - 0.1) < 1e-9
+
     def test_groups_match_input(self, minimal_fairness_metrics_dict):
         records = _extract_per_group_fairness(minimal_fairness_metrics_dict)
         groups = {r["group"] for r in records}
@@ -225,6 +236,32 @@ class TestCanonicalMetricTables:
         assert round(float(deltas[deltas["metric"] == "fpr"]["improvement"].iloc[0]), 6) == 0.10
         dp = deltas[deltas["metric"] == "demographic_parity_rate"].iloc[0]
         assert round(float(dp["distance_improvement"]), 6) == 0.20
+
+    def test_fnr_group_metric_delta_direction(self):
+        """FNR is lower-is-better: improvement = baseline - experiment."""
+        per_group = pd.DataFrame(
+            [
+                {
+                    "experiment_id": "mit",
+                    "dataset": "cleveland",
+                    "model_type": "logistic_regression",
+                    "model_variant": "c_1_0",
+                    "binning_strategy": "fixed_10yr",
+                    "training_method": "single_split",
+                    "mitigation_technique": "smote",
+                    "sensitive_attr": "age_group_cat",
+                    "group": "60-69",
+                    "metric": "fnr",
+                    "baseline_value": 0.40,
+                    "experiment_value": 0.25,
+                }
+            ]
+        )
+        deltas = build_group_metric_deltas(per_group)
+        assert not deltas.empty
+        row = deltas[deltas["metric"] == "fnr"].iloc[0]
+        assert abs(float(row["delta"]) - (-0.15)) < 1e-9
+        assert abs(float(row["improvement"]) - 0.15) < 1e-9
 
     def test_comparison_config_loads_yaml_defaults(self, tmp_path):
         cfg = tmp_path / "comparison.yaml"

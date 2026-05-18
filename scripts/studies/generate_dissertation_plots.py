@@ -58,13 +58,17 @@ from fairxai.viz.fairness import (
 )
 from fairxai.viz.fairness_comparison import (
     save_before_after_metric_radar,
+    save_binning_strategy_delta_matrix,
     save_cross_model_baseline_radar,
     save_cross_model_best_available_radar,
     save_group_before_after_bars,
     save_group_delta_bars,
+    save_group_error_consequence_bars,
     save_group_performance_gap_bars,
     save_intersectional_heatmap,
     save_mitigation_delta_matrix,
+    save_top_n_binning_strategy_age_group_small_multiples,
+    save_top_n_binning_strategy_summary,
     select_primary_fairness_row,
 )
 from fairxai.viz.transformations import (
@@ -478,6 +482,104 @@ def _generate_fairness_comparison_plots(
             )
             _report(delta_name.removesuffix(".png"), result)
 
+            consequence_name = figure_filename(
+                comparison_config,
+                "group_error_consequences",
+                dataset=dataset,
+                model_label=model_label,
+                sensitive_attr=attr,
+            )
+            result = save_group_error_consequence_bars(
+                dataset_groups,
+                plots_dir / consequence_name,
+                attr,
+                selected,
+            )
+            _report(consequence_name.removesuffix(".png"), result)
+
+
+# ---------------------------------------------------------------------------
+# Binning sensitivity plots
+# ---------------------------------------------------------------------------
+
+
+def _generate_binning_sensitivity_plots(
+    full_df,
+    per_group_df,
+    out_base,
+    comparison_config: dict,
+) -> None:
+    """Generate binning strategy sensitivity figures.
+
+    Three outputs per dataset:
+    - binning_strategy_delta_matrix: heatmap of metric deltas by strategy
+    - binning_strategy_summary: horizontal bar ranking of top-N strategies
+    - binning_strategy_age_group_small_multiples: per-strategy age-group deltas
+    """
+    if full_df is None or full_df.empty:
+        logger.warning("[WARNING] binning sensitivity: full_df missing, skipping")
+        return
+
+    selection = (comparison_config or {}).get("selection", {})
+    model_type = selection.get("primary_model_type", "logistic_regression")
+    model_label = selection.get("primary_model_label", "lr")
+    top_n = int(selection.get("top_n", 5))
+    min_recall_delta = float(selection.get("min_recall_delta", -0.03))
+
+    plots_dir = out_base / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    for dataset in sorted(full_df["dataset"].dropna().unique()):
+        dataset_df = full_df[full_df["dataset"].astype(str) == str(dataset)].copy()
+        if "model_type" in dataset_df.columns:
+            dataset_df = dataset_df[dataset_df["model_type"].astype(str) == str(model_type)]
+
+        dataset_groups = (
+            per_group_df[per_group_df["dataset"].astype(str) == str(dataset)].copy()
+            if per_group_df is not None and "dataset" in per_group_df.columns
+            else per_group_df
+        )
+
+        matrix_name = figure_filename(
+            comparison_config,
+            "binning_strategy_delta_matrix",
+            dataset=dataset,
+            model_label=model_label,
+        )
+        result = save_binning_strategy_delta_matrix(
+            dataset_df, plots_dir / matrix_name, model_type, min_recall_delta
+        )
+        _report(matrix_name.removesuffix(".png"), result)
+
+        summary_name = figure_filename(
+            comparison_config,
+            "binning_strategy_summary",
+            dataset=dataset,
+            model_label=model_label,
+            n=top_n,
+        )
+        result = save_top_n_binning_strategy_summary(
+            dataset_df, plots_dir / summary_name, model_type, top_n, min_recall_delta
+        )
+        _report(summary_name.removesuffix(".png"), result)
+
+        multiples_name = figure_filename(
+            comparison_config,
+            "binning_strategy_age_group_small_multiples",
+            dataset=dataset,
+            model_label=model_label,
+            n=top_n,
+        )
+        result = save_top_n_binning_strategy_age_group_small_multiples(
+            dataset_df,
+            dataset_groups,
+            plots_dir / multiples_name,
+            model_type,
+            top_n,
+            min_recall_delta,
+        )
+        _report(multiples_name.removesuffix(".png"), result)
+
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -548,6 +650,12 @@ def main() -> None:
         fairness_comparison_full_df,
         fairness_comparison_group_df,
         evidence_summary_df,
+        out_base / "fairness_comparison",
+        comparison_config,
+    )
+    _generate_binning_sensitivity_plots(
+        fairness_comparison_full_df,
+        fairness_comparison_group_df,
         out_base / "fairness_comparison",
         comparison_config,
     )

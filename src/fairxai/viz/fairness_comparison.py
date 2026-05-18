@@ -44,6 +44,45 @@ def _gap_specs(df: pd.DataFrame) -> tuple[list[str], list[str], list[str]]:
     return dp_cols, eq_tpr_cols, eq_fpr_cols
 
 
+def _select_best_per_strategy(
+    full_df: pd.DataFrame,
+    model_type: str = "logistic_regression",
+    min_recall_delta: float = -0.03,
+) -> pd.DataFrame:
+    """One best-mitigation row per binning_strategy, sorted by delta_fairness_gap DESC."""
+    if full_df is None or full_df.empty or "mitigation_technique" not in full_df.columns:
+        return pd.DataFrame()
+    df = full_df.copy()
+    if "model_type" in df.columns:
+        df = df[df["model_type"].astype(str) == str(model_type)]
+    df = df[df["mitigation_technique"].astype(str) != "baseline"]
+    if df.empty or "binning_strategy" not in df.columns:
+        return pd.DataFrame()
+    for col in ["delta_fairness_gap", "delta_recall", "delta_f1"]:
+        df[col] = _numeric_series(df, col)
+    best_rows = []
+    for _strategy, group in df.groupby("binning_strategy", dropna=False):
+        eligible = group[
+            (group["delta_fairness_gap"] > 0) & (group["delta_recall"] >= min_recall_delta)
+        ]
+        if eligible.empty:
+            eligible = group[group["delta_fairness_gap"] > 0]
+        if eligible.empty:
+            eligible = group
+        best_rows.append(
+            eligible.sort_values(
+                ["delta_fairness_gap", "delta_recall", "delta_f1"],
+                ascending=[False, False, False],
+                na_position="last",
+            ).iloc[0]
+        )
+    if not best_rows:
+        return pd.DataFrame()
+    result = pd.DataFrame(best_rows)
+    result = result.sort_values("delta_fairness_gap", ascending=False, na_position="last")
+    return result.reset_index(drop=True)
+
+
 def _baseline_match(full_df: pd.DataFrame, row: pd.Series) -> pd.Series | None:
     if full_df is None or full_df.empty:
         return None
@@ -702,6 +741,357 @@ def save_intersectional_heatmap(
     ax.set_ylabel("Mitigation")
     plt.xticks(rotation=20, ha="right")
     plt.tight_layout()
+    save_figure(fig, output_file, dpi=300)
+    plt.close(fig)
+    return output_file
+
+
+def save_group_error_consequence_bars(
+    per_group_df: pd.DataFrame,
+    output_file,
+    sensitive_attr: str,
+    selected_row: pd.Series,
+):
+    """FNR + FPR before/after per subgroup — clinical consequence framing.
+
+    FNR (missed-diagnosis risk) and FPR (false-alarm risk) are shown as
+    absolute rates per group, not deltas, so the reader sees actual harm
+    levels rather than only changes. Group counts are annotated so small-bin
+    instability is visible.
+    """
+    df = _filter_per_group_for_selected(per_group_df, selected_row, sensitive_attr)
+    if df.empty:
+        return None
+
+    consequence_metrics = [
+        ("fnr", "FNR — Missed Diagnosis Risk"),
+        ("fpr", "FPR — False Alarm Risk"),
+    ]
+    available = [(m, label) for m, label in consequence_metrics if m in set(df["metric"])]
+    if not available:
+        return None
+
+    count_col = {"fnr": "positive_count", "fpr": "negative_count"}
+
+    fig, axes = plt.subplots(1, len(available), figsize=(6.5 * len(available), 5.2), sharey=False)
+    axes = np.atleast_1d(axes).ravel()
+    palette = {"Baseline": "#8C8C8C", "After Mitigation": "#0072B2"}
+
+    for idx, (metric, label) in enumerate(available):
+        ax = axes[idx]
+        sub = df[df["metric"] == metric].copy()
+        sub["group_label"] = [
+            pretty_group_label(attr, group)
+            for attr, group in zip(sub["sensitive_attr"], sub["group"])
+        ]
+
+        records = []
+        for _, row in sub.iterrows():
+            records.append(
+                {
+                    "group": row["group_label"],
+                    "condition": "Baseline",
+                    "value": row["baseline_value"],
+                    "n": row.get(count_col[metric]),
+                }
+            )
+            records.append(
+                {
+                    "group": row["group_label"],
+                    "condition": "After Mitigation",
+                    "value": row["experiment_value"],
+                    "n": row.get(count_col[metric]),
+                }
+            )
+        plot_df = pd.DataFrame(records)
+
+        sns.barplot(
+            data=plot_df,
+            x="group",
+            y="value",
+            hue="condition",
+            palette=palette,
+            ax=ax,
+        )
+        ax.set_title(label, fontsize=10)
+        ax.set_xlabel("Group")
+        ax.set_ylabel("Rate" if idx == 0 else "")
+        ax.set_ylim(0, 1.05)
+        ax.tick_params(axis="x", rotation=30)
+        if idx > 0 and ax.get_legend():
+            ax.get_legend().remove()
+
+        # Annotate n= counts once per group (above the taller bar)
+        groups_ordered = plot_df["group"].unique()
+        n_per_group = (
+            sub.set_index("group_label")[count_col[metric]]
+            if count_col[metric] in sub.columns
+            else pd.Series(dtype=float)
+        )
+        for g_idx, group_label in enumerate(groups_ordered):
+            n_val = n_per_group.get(group_label)
+            if n_val is None or (isinstance(n_val, float) and np.isnan(n_val)):
+                continue
+            n_int = int(n_val)
+            annotation = f"n={n_int}" if n_int >= 5 else f"n={n_int}*"
+            group_vals = plot_df[plot_df["group"] == group_label]["value"].dropna()
+            y_top = float(group_vals.max()) if not group_vals.empty else 0.0
+            ax.text(
+                g_idx,
+                min(y_top + 0.04, 1.0),
+                annotation,
+                ha="center",
+                va="bottom",
+                fontsize=7,
+                color="#333333",
+            )
+
+    attr_label = normalize_sensitive_attr(sensitive_attr).replace("_", " ").title()
+    fig.suptitle(
+        f"Group Error Consequences Before/After — {attr_label} — "
+        f"{display_mitigation(selected_row.get('mitigation_technique'))}\n"
+        f"* n < 5: estimate unreliable",
+        fontsize=11,
+    )
+    plt.tight_layout()
+    save_figure(fig, output_file, dpi=300)
+    plt.close(fig)
+    return output_file
+
+
+def save_binning_strategy_delta_matrix(
+    full_df: pd.DataFrame,
+    output_file,
+    model_type: str = "logistic_regression",
+    min_recall_delta: float = -0.03,
+):
+    """Heatmap of metric deltas by binning strategy (best mitigation per strategy).
+
+    Rows = binning strategies, cols = metric deltas. Positive = improvement vs baseline.
+    """
+    best = _select_best_per_strategy(full_df, model_type, min_recall_delta)
+    if best.empty:
+        return None
+
+    delta_specs = [
+        ("delta_f1", "F1"),
+        ("delta_recall", "Recall"),
+        ("delta_precision", "Precision"),
+        ("delta_auc", "AUC-ROC"),
+        ("delta_accuracy", "Accuracy"),
+        ("delta_fairness_gap", "Fairness Gap"),
+        ("delta_dp_gap", "DP Gap"),
+        ("delta_eq_tpr_gap", "EO TPR Gap"),
+        ("delta_eq_fpr_gap", "EO FPR Gap"),
+    ]
+    available = [(col, label) for col, label in delta_specs if col in best.columns]
+    if len(available) < 2:
+        return None
+
+    for col, _ in available:
+        best[col] = pd.to_numeric(best[col], errors="coerce")
+
+    plot_values = (
+        best.set_index("binning_strategy")[[col for col, _ in available]].rename(
+            columns=dict(available)
+        )
+        * 100
+    )
+    plot_values = plot_values.dropna(how="all")
+    if plot_values.empty:
+        return None
+
+    max_abs = float(np.nanmax(np.abs(plot_values.to_numpy(dtype=float))))
+    max_abs = max(max_abs, 1.0)
+
+    width, height = heatmap_size(plot_values.index, len(plot_values.columns), 16, 5)
+    fig, ax = plt.subplots(figsize=(width, height))
+    sns.heatmap(
+        plot_values,
+        annot=True,
+        fmt=".1f",
+        cmap="RdYlGn",
+        center=0,
+        vmin=-max_abs,
+        vmax=max_abs,
+        linewidths=0.5,
+        cbar_kws={"label": "Delta vs baseline (percentage points)"},
+        ax=ax,
+    )
+    ax.set_title(
+        "Binning Strategy Effects by Metric\n(best mitigation per strategy; positive = improvement)",
+        fontsize=12,
+    )
+    ax.set_xlabel("Metric")
+    ax.set_ylabel("Binning Strategy")
+    plt.xticks(rotation=20, ha="right")
+    plt.tight_layout()
+    save_figure(fig, output_file, dpi=300)
+    plt.close(fig)
+    return output_file
+
+
+def save_top_n_binning_strategy_summary(
+    full_df: pd.DataFrame,
+    output_file,
+    model_type: str = "logistic_regression",
+    top_n: int = 5,
+    min_recall_delta: float = -0.03,
+):
+    """Horizontal bar chart: top-N strategies ranked by fairness-gap improvement.
+
+    Each bar = fairness-gap delta for the best mitigation of that strategy.
+    Recall delta is annotated on each bar.
+    """
+    best = _select_best_per_strategy(full_df, model_type, min_recall_delta)
+    if best.empty or "delta_fairness_gap" not in best.columns:
+        return None
+
+    best["delta_fairness_gap"] = pd.to_numeric(best["delta_fairness_gap"], errors="coerce")
+    best = best.dropna(subset=["delta_fairness_gap"]).head(top_n)
+    if best.empty:
+        return None
+
+    strategies = list(best["binning_strategy"].astype(str))
+    values = list(best["delta_fairness_gap"] * 100)
+    recall_deltas = (
+        list(pd.to_numeric(best["delta_recall"], errors="coerce") * 100)
+        if "delta_recall" in best.columns
+        else [float("nan")] * len(best)
+    )
+    colors = ["#2E8B57" if v >= 0 else "#B22222" for v in values]
+
+    fig, ax = plt.subplots(figsize=(10, max(4.0, top_n * 0.85)))
+    bars = ax.barh(strategies[::-1], values[::-1], color=colors[::-1], edgecolor="white")
+    ax.axvline(0, color="#333333", linewidth=1)
+
+    for bar, recall in zip(bars, recall_deltas[::-1]):
+        if pd.notna(recall):
+            x = bar.get_width()
+            offset = 0.4 if x >= 0 else -0.4
+            ha = "left" if x >= 0 else "right"
+            ax.text(
+                x + offset,
+                bar.get_y() + bar.get_height() / 2,
+                f"recall {recall:+.1f} pp",
+                va="center",
+                ha=ha,
+                fontsize=8,
+                color="#333333",
+            )
+
+    ax.set_xlabel("Fairness-Gap Improvement (percentage points vs baseline)")
+    ax.set_title(
+        f"Top {top_n} Binning Strategies — Fairness-Gap Improvement\n"
+        f"({model_type.replace('_', ' ').title()}, best mitigation per strategy)",
+        fontsize=11,
+    )
+    plt.tight_layout()
+    save_figure(fig, output_file, dpi=300)
+    plt.close(fig)
+    return output_file
+
+
+def save_top_n_binning_strategy_age_group_small_multiples(
+    full_df: pd.DataFrame,
+    per_group_df: pd.DataFrame,
+    output_file,
+    model_type: str = "logistic_regression",
+    top_n: int = 5,
+    min_recall_delta: float = -0.03,
+    age_metric: str = "tpr",
+):
+    """Small multiples: per-strategy age-group improvement bars.
+
+    One subplot per top-N strategy. Group labels are strategy-specific — a footnote
+    warns the reader not to compare labels across subplots.
+    """
+    if per_group_df is None or per_group_df.empty:
+        return None
+
+    best = _select_best_per_strategy(full_df, model_type, min_recall_delta).head(top_n)
+    if best.empty:
+        return None
+
+    subplot_data = []
+    for _, row in best.iterrows():
+        filtered = _filter_per_group_for_selected(per_group_df, row, "age_group")
+        if filtered.empty:
+            logger.warning(
+                "save_top_n_binning_strategy_age_group_small_multiples: no per_group rows "
+                "for strategy '%s'",
+                row.get("binning_strategy"),
+            )
+            continue
+        sub = filtered[filtered["metric"] == age_metric].copy()
+        if sub.empty:
+            continue
+        if "improvement" in sub.columns:
+            sub["improvement"] = pd.to_numeric(sub["improvement"], errors="coerce")
+            missing = sub["improvement"].isna()
+            if missing.any():
+                sub.loc[missing, "improvement"] = sub[missing].apply(_group_improvement, axis=1)
+        else:
+            sub["improvement"] = sub.apply(_group_improvement, axis=1)
+        sub = sub.dropna(subset=["improvement"])
+        if sub.empty:
+            continue
+        sub["group_label"] = [
+            pretty_group_label(attr, grp) for attr, grp in zip(sub["sensitive_attr"], sub["group"])
+        ]
+        subplot_data.append((str(row.get("binning_strategy", "")), sub))
+
+    if len(subplot_data) < 2:
+        logger.warning(
+            "save_top_n_binning_strategy_age_group_small_multiples: fewer than 2 strategies "
+            "have per_group data — skipping"
+        )
+        return None
+
+    n_plots = len(subplot_data)
+    if n_plots <= 3:
+        n_rows, n_cols = 1, n_plots
+    else:
+        import math
+
+        n_cols = math.ceil(n_plots / 2)
+        n_rows = 2
+
+    all_improvements = np.concatenate([sub["improvement"].values for _, sub in subplot_data])
+    max_abs = max(float(np.nanmax(np.abs(all_improvements))), 0.02)
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(4.5 * n_cols, 4.5 * n_rows), sharey=True)
+    axes_flat = np.atleast_1d(axes).ravel()
+
+    for ax_idx, (strategy_name, sub) in enumerate(subplot_data):
+        ax = axes_flat[ax_idx]
+        agg = sub.groupby("group_label", as_index=False)["improvement"].mean()
+        colors = ["#2E8B57" if v >= 0 else "#B22222" for v in agg["improvement"]]
+        ax.bar(agg["group_label"], agg["improvement"] * 100, color=colors, edgecolor="white")
+        ax.axhline(0, color="#333333", linewidth=1)
+        ax.set_title(strategy_name, fontsize=9)
+        ax.set_xlabel("")
+        ax.set_ylabel(f"{age_metric.upper()} improvement (pp)" if ax_idx % n_cols == 0 else "")
+        ax.set_ylim(-max_abs * 115, max_abs * 115)
+        ax.tick_params(axis="x", rotation=35, labelsize=8)
+
+    for ax_idx in range(len(subplot_data), len(axes_flat)):
+        axes_flat[ax_idx].set_visible(False)
+
+    fig.suptitle(
+        f"Age-Group {age_metric.upper()} Improvement by Binning Strategy (top {n_plots})",
+        fontsize=12,
+    )
+    fig.text(
+        0.5,
+        0.01,
+        "Group labels are strategy-specific — do not compare labels across subplots",
+        ha="center",
+        fontsize=8,
+        style="italic",
+        color="#555555",
+    )
+    plt.tight_layout(rect=[0, 0.04, 1, 1])
     save_figure(fig, output_file, dpi=300)
     plt.close(fig)
     return output_file

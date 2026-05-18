@@ -59,11 +59,26 @@ def minimal_fairness_metrics_dict():
                 },
                 "equalized_odds": {
                     "group_metrics": {
-                        "40-49": {"tpr": 0.7, "fpr": 0.2, "count": 10},
-                        "50-59": {"tpr": 0.9, "fpr": 0.3, "count": 10},
+                        "40-49": {
+                            "tpr": 0.7,
+                            "fpr": 0.2,
+                            "fnr": 0.3,
+                            "count": 10,
+                            "positive_count": 7,
+                            "negative_count": 3,
+                        },
+                        "50-59": {
+                            "tpr": 0.9,
+                            "fpr": 0.3,
+                            "fnr": 0.1,
+                            "count": 10,
+                            "positive_count": 8,
+                            "negative_count": 2,
+                        },
                     },
                     "tpr_max_difference": 0.2,
                     "fpr_max_difference": 0.1,
+                    "fnr_max_difference": 0.2,
                     "is_fair": "True",
                 },
                 "equal_opportunity": {
