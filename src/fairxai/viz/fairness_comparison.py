@@ -705,3 +705,116 @@ def save_intersectional_heatmap(
     save_figure(fig, output_file, dpi=300)
     plt.close(fig)
     return output_file
+
+
+def save_group_error_consequence_bars(
+    per_group_df: pd.DataFrame,
+    output_file,
+    sensitive_attr: str,
+    selected_row: pd.Series,
+):
+    """FNR + FPR before/after per subgroup — clinical consequence framing.
+
+    FNR (missed-diagnosis risk) and FPR (false-alarm risk) are shown as
+    absolute rates per group, not deltas, so the reader sees actual harm
+    levels rather than only changes. Group counts are annotated so small-bin
+    instability is visible.
+    """
+    df = _filter_per_group_for_selected(per_group_df, selected_row, sensitive_attr)
+    if df.empty:
+        return None
+
+    consequence_metrics = [
+        ("fnr", "FNR — Missed Diagnosis Risk"),
+        ("fpr", "FPR — False Alarm Risk"),
+    ]
+    available = [(m, label) for m, label in consequence_metrics if m in set(df["metric"])]
+    if not available:
+        return None
+
+    count_col = {"fnr": "positive_count", "fpr": "negative_count"}
+
+    fig, axes = plt.subplots(1, len(available), figsize=(6.5 * len(available), 5.2), sharey=False)
+    axes = np.atleast_1d(axes).ravel()
+    palette = {"Baseline": "#8C8C8C", "After Mitigation": "#0072B2"}
+
+    for idx, (metric, label) in enumerate(available):
+        ax = axes[idx]
+        sub = df[df["metric"] == metric].copy()
+        sub["group_label"] = [
+            pretty_group_label(attr, group)
+            for attr, group in zip(sub["sensitive_attr"], sub["group"])
+        ]
+
+        records = []
+        for _, row in sub.iterrows():
+            records.append(
+                {
+                    "group": row["group_label"],
+                    "condition": "Baseline",
+                    "value": row["baseline_value"],
+                    "n": row.get(count_col[metric]),
+                }
+            )
+            records.append(
+                {
+                    "group": row["group_label"],
+                    "condition": "After Mitigation",
+                    "value": row["experiment_value"],
+                    "n": row.get(count_col[metric]),
+                }
+            )
+        plot_df = pd.DataFrame(records)
+
+        sns.barplot(
+            data=plot_df,
+            x="group",
+            y="value",
+            hue="condition",
+            palette=palette,
+            ax=ax,
+        )
+        ax.set_title(label, fontsize=10)
+        ax.set_xlabel("Group")
+        ax.set_ylabel("Rate" if idx == 0 else "")
+        ax.set_ylim(0, 1.05)
+        ax.tick_params(axis="x", rotation=30)
+        if idx > 0 and ax.get_legend():
+            ax.get_legend().remove()
+
+        # Annotate n= counts once per group (above the taller bar)
+        groups_ordered = plot_df["group"].unique()
+        n_per_group = (
+            sub.set_index("group_label")[count_col[metric]]
+            if count_col[metric] in sub.columns
+            else pd.Series(dtype=float)
+        )
+        for g_idx, group_label in enumerate(groups_ordered):
+            n_val = n_per_group.get(group_label)
+            if n_val is None or (isinstance(n_val, float) and np.isnan(n_val)):
+                continue
+            n_int = int(n_val)
+            annotation = f"n={n_int}" if n_int >= 5 else f"n={n_int}*"
+            group_vals = plot_df[plot_df["group"] == group_label]["value"].dropna()
+            y_top = float(group_vals.max()) if not group_vals.empty else 0.0
+            ax.text(
+                g_idx,
+                min(y_top + 0.04, 1.0),
+                annotation,
+                ha="center",
+                va="bottom",
+                fontsize=7,
+                color="#333333",
+            )
+
+    attr_label = normalize_sensitive_attr(sensitive_attr).replace("_", " ").title()
+    fig.suptitle(
+        f"Group Error Consequences Before/After — {attr_label} — "
+        f"{display_mitigation(selected_row.get('mitigation_technique'))}\n"
+        f"* n < 5: estimate unreliable",
+        fontsize=11,
+    )
+    plt.tight_layout()
+    save_figure(fig, output_file, dpi=300)
+    plt.close(fig)
+    return output_file
