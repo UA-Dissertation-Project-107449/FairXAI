@@ -20,6 +20,13 @@ DEFAULT_FIGURE_TEMPLATES = {
     "best_available_cross_model_radar": (
         "{dataset}_unbalanced_best_available_cross_model_radar.png"
     ),
+    "binning_strategy_delta_matrix": (
+        "{dataset}_{model_label}_binning_strategy_metric_delta_matrix.png"
+    ),
+    "binning_strategy_summary": ("{dataset}_{model_label}_top{n}_binning_strategy_summary.png"),
+    "binning_strategy_age_group_small_multiples": (
+        "{dataset}_{model_label}_top{n}_age_group_delta_small_multiples.png"
+    ),
 }
 
 
