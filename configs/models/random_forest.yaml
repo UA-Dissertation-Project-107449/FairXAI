@@ -10,11 +10,13 @@ description: |
 
 hyperparameters:
   # Ensemble size and depth
-  n_estimators: 300
-  max_depth: null      # grow full trees; controlled by min_samples_leaf
+  n_estimators: 200
+  max_depth: 8         # was null; unlimited depth causes memorization on small datasets
 
-  # Leaf size (implicit regularization — avoids very small leaves)
-  min_samples_leaf: 1
+  # Leaf regularization
+  min_samples_leaf: 4  # was 1; ~2% of Cleveland train set (206 samples)
+  min_samples_split: 10  # minimum samples required to split a node
+  max_features: "sqrt"
 
   # Class imbalance
   class_weight: "balanced_subsample"  # re-weights per bootstrap sample
