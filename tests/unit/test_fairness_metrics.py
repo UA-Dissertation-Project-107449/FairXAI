@@ -53,6 +53,45 @@ class TestDemographicParity:
         assert abs(result["max_difference"]) < 1e-6
 
 
+class TestEqualizedOdds:
+    def test_fnr_present_in_group_metrics(self):
+        """equalized_odds() result includes fnr for each group."""
+        df = _make_df(
+            groups=["A"] * 10 + ["B"] * 10,
+            y_true=[1, 1, 1, 1, 1, 0, 0, 0, 0, 0] + [1, 1, 1, 1, 0, 0, 0, 0, 0, 0],
+            y_pred=[1, 1, 1, 0, 0, 1, 0, 0, 0, 0] + [1, 1, 0, 0, 0, 1, 0, 0, 0, 0],
+        )
+        fm = FairnessMetrics(sensitive_attributes=["sex_cat"])
+        result = fm.equalized_odds(df, sensitive_attr="sex_cat")
+        for group_data in result["group_metrics"].values():
+            assert "fnr" in group_data
+            assert 0.0 <= group_data["fnr"] <= 1.0
+
+    def test_fnr_equals_one_minus_tpr(self):
+        """fnr == 1 - tpr for each group to within float precision."""
+        df = _make_df(
+            groups=["A"] * 8 + ["B"] * 8,
+            y_true=[1, 1, 1, 1, 0, 0, 0, 0] + [1, 1, 1, 0, 0, 0, 0, 0],
+            y_pred=[1, 1, 0, 0, 1, 0, 0, 0] + [1, 0, 0, 0, 1, 0, 0, 0],
+        )
+        fm = FairnessMetrics(sensitive_attributes=["sex_cat"])
+        result = fm.equalized_odds(df, sensitive_attr="sex_cat")
+        for group_data in result["group_metrics"].values():
+            assert abs(group_data["fnr"] - (1.0 - group_data["tpr"])) < 1e-9
+
+    def test_fnr_max_difference_present(self):
+        """equalized_odds() result includes fnr_max_difference aggregate."""
+        df = _make_df(
+            groups=["A"] * 10 + ["B"] * 10,
+            y_true=[1, 1, 1, 1, 1, 0, 0, 0, 0, 0] + [1, 1, 1, 0, 0, 0, 0, 0, 0, 0],
+            y_pred=[1, 1, 1, 0, 0, 0, 0, 0, 0, 0] + [1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        )
+        fm = FairnessMetrics(sensitive_attributes=["sex_cat"])
+        result = fm.equalized_odds(df, sensitive_attr="sex_cat")
+        assert "fnr_max_difference" in result
+        assert result["fnr_max_difference"] >= 0.0
+
+
 class TestCalculateAllMetrics:
     def test_returns_expected_keys(self, synthetic_predictions_df):
         """calculate_all_metrics returns group_fairness and individual_fairness keys."""

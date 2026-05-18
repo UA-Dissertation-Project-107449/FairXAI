@@ -23,6 +23,7 @@ from fairxai.viz.fairness_comparison import (
     save_cross_model_best_available_radar,
     save_group_before_after_bars,
     save_group_delta_bars,
+    save_group_error_consequence_bars,
     save_group_performance_gap_bars,
     save_intersectional_heatmap,
     save_mitigation_delta_matrix,
@@ -373,6 +374,57 @@ class TestExperimentPlots:
         assert baseline_out.exists()
         assert save_cross_model_best_available_radar(df, best_out) is not None
         assert best_out.exists()
+
+    def test_save_group_error_consequence_bars_creates_file(self, tmp_path):
+        rng = np.random.default_rng(7)
+        groups_map = {
+            "age_group_cat": ["<40", "40-49", "50-59", "60-69"],
+            "sex_cat": ["Female", "Male"],
+        }
+        rows = []
+        for attr, groups in groups_map.items():
+            for grp in groups:
+                for metric in ("fnr", "fpr"):
+                    bv = rng.uniform(0.15, 0.45)
+                    ev = rng.uniform(0.10, 0.40)
+                    rows.append(
+                        {
+                            "experiment_id": "smote_exp",
+                            "dataset": "cleveland",
+                            "model_type": "logistic_regression",
+                            "binning_strategy": "fixed_10yr",
+                            "training_method": "single_split",
+                            "mitigation_technique": "smote",
+                            "model_variant": "default",
+                            "sensitive_attr": attr,
+                            "group": grp,
+                            "metric": metric,
+                            "baseline_value": bv,
+                            "experiment_value": ev,
+                            "delta": ev - bv,
+                            "positive_count": rng.integers(5, 20),
+                            "negative_count": rng.integers(5, 20),
+                        }
+                    )
+        per_group = pd.DataFrame(rows)
+        full_df = _make_full_comparison_df()
+        selected = full_df[
+            (full_df["mitigation_technique"] != "baseline")
+            & (full_df["binning_strategy"] == "equal_width_5")
+        ].iloc[0]
+
+        out = tmp_path / "error_consequences.png"
+        result = save_group_error_consequence_bars(per_group, out, "age_group_cat", selected)
+        assert result is not None
+        assert out.exists()
+
+    def test_save_group_error_consequence_bars_empty_returns_none(self, tmp_path):
+        full_df = _make_full_comparison_df()
+        selected = full_df[full_df["mitigation_technique"] != "baseline"].iloc[0]
+        result = save_group_error_consequence_bars(
+            pd.DataFrame(), tmp_path / "x.png", "age_group_cat", selected
+        )
+        assert result is None
 
     def test_fairness_evidence_summary_creates_file(self, tmp_path):
         full_df = _make_full_comparison_df()
