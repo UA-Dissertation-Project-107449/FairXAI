@@ -19,6 +19,7 @@ from fairxai.viz.fairness import (
 )
 from fairxai.viz.fairness_comparison import (
     save_before_after_metric_radar,
+    save_binning_strategy_delta_matrix,
     save_cross_model_baseline_radar,
     save_cross_model_best_available_radar,
     save_group_before_after_bars,
@@ -27,6 +28,8 @@ from fairxai.viz.fairness_comparison import (
     save_group_performance_gap_bars,
     save_intersectional_heatmap,
     save_mitigation_delta_matrix,
+    save_top_n_binning_strategy_age_group_small_multiples,
+    save_top_n_binning_strategy_summary,
 )
 from fairxai.viz.transformations import (
     plot_before_after_distributions,
@@ -444,3 +447,86 @@ class TestExperimentPlots:
         assert {"groups_improved", "groups_worsened", "delta_fairness_gap"}.issubset(
             summary.columns
         )
+
+    def test_save_binning_strategy_delta_matrix_creates_file(self, tmp_path):
+        df = _make_full_comparison_df()
+        out = tmp_path / "binning_delta_matrix.png"
+        result = save_binning_strategy_delta_matrix(df, out)
+        assert result is not None
+        assert out.exists()
+
+    def test_save_binning_strategy_delta_matrix_empty_returns_none(self, tmp_path):
+        result = save_binning_strategy_delta_matrix(pd.DataFrame(), tmp_path / "x.png")
+        assert result is None
+
+    def test_save_top_n_binning_strategy_summary_creates_file(self, tmp_path):
+        df = _make_full_comparison_df()
+        out = tmp_path / "binning_summary.png"
+        result = save_top_n_binning_strategy_summary(df, out, top_n=3)
+        assert result is not None
+        assert out.exists()
+
+    def test_save_top_n_binning_strategy_summary_empty_returns_none(self, tmp_path):
+        result = save_top_n_binning_strategy_summary(pd.DataFrame(), tmp_path / "x.png")
+        assert result is None
+
+    def test_save_top_n_binning_strategy_age_group_small_multiples_creates_file(self, tmp_path):
+        rng = np.random.default_rng(42)
+        strategies = ["equal_width_3", "equal_width_5", "jenks_3"]
+        groups = ["<40", "40-49", "50-59", "60-69"]
+
+        full_rows = []
+        per_group_rows = []
+        for strategy in strategies:
+            exp_id = f"smote_{strategy}"
+            full_rows.append(
+                {
+                    "experiment_id": exp_id,
+                    "dataset": "cleveland",
+                    "model_type": "logistic_regression",
+                    "binning_strategy": strategy,
+                    "training_method": "single_split",
+                    "mitigation_technique": "smote",
+                    "model_variant": "default",
+                    "delta_fairness_gap": rng.uniform(0.02, 0.15),
+                    "delta_recall": rng.uniform(0.0, 0.05),
+                    "delta_f1": rng.uniform(0.0, 0.04),
+                }
+            )
+            for grp in groups:
+                bv = rng.uniform(0.3, 0.7)
+                ev = rng.uniform(0.3, 0.7)
+                per_group_rows.append(
+                    {
+                        "experiment_id": exp_id,
+                        "dataset": "cleveland",
+                        "model_type": "logistic_regression",
+                        "binning_strategy": strategy,
+                        "training_method": "single_split",
+                        "mitigation_technique": "smote",
+                        "model_variant": "default",
+                        "sensitive_attr": "age_group",
+                        "group": grp,
+                        "metric": "tpr",
+                        "baseline_value": bv,
+                        "experiment_value": ev,
+                        "delta": ev - bv,
+                    }
+                )
+
+        full_df = pd.DataFrame(full_rows)
+        per_group = pd.DataFrame(per_group_rows)
+        out = tmp_path / "binning_small_multiples.png"
+        result = save_top_n_binning_strategy_age_group_small_multiples(
+            full_df, per_group, out, top_n=3
+        )
+        assert result is not None
+        assert out.exists()
+
+    def test_save_top_n_binning_strategy_age_group_small_multiples_empty_returns_none(
+        self, tmp_path
+    ):
+        result = save_top_n_binning_strategy_age_group_small_multiples(
+            pd.DataFrame(), pd.DataFrame(), tmp_path / "x.png"
+        )
+        assert result is None
