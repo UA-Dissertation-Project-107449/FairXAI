@@ -15,6 +15,7 @@ DEFAULT_FIGURE_TEMPLATES = {
     "group_performance_gaps": "{dataset}_{model_label}_primary_{sensitive_attr}_performance_gaps.png",
     "group_before_after": "{dataset}_{model_label}_primary_{sensitive_attr}_before_after.png",
     "group_delta": "{dataset}_{model_label}_primary_{sensitive_attr}_delta.png",
+    "group_error_consequences": "{dataset}_{model_label}_primary_{sensitive_attr}_error_consequences.png",
     "baseline_cross_model_radar": "{dataset}_baseline_cross_model_radar.png",
     "best_available_cross_model_radar": (
         "{dataset}_unbalanced_best_available_cross_model_radar.png"

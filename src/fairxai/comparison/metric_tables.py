@@ -49,6 +49,7 @@ HIGHER_IS_BETTER = {
     "equal_opportunity_tpr": True,
     "predictive_parity_precision": True,
     "fpr": False,
+    "fnr": False,
     "demographic_parity_rate": False,
 }
 
@@ -231,7 +232,7 @@ def _group_improvement(row: pd.Series) -> tuple[float | None, float | None, floa
     delta = exp - base
     if metric in {"tpr", "equal_opportunity_tpr", "predictive_parity_precision"}:
         return delta, None, None
-    if metric == "fpr":
+    if metric in {"fpr", "fnr"}:
         return -delta, None, None
     if metric == "demographic_parity_rate":
         base_overall = _as_float(row.get("baseline_overall_value"))
