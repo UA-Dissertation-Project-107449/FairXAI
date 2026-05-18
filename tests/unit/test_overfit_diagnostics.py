@@ -15,10 +15,10 @@ _FAIRXAI_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(_FAIRXAI_ROOT / "src"))
 sys.path.insert(0, str(_FAIRXAI_ROOT / "scripts" / "common"))
 
-from assess_predictions import write_overfit_gap_table
-from fairxai.models.sklearn_wrapper import SklearnClassifierWrapper
-from fairxai.models.xgboost_model import XGBoostModel
+from assess_predictions import write_overfit_gap_table  # noqa: E402
 
+from fairxai.models.sklearn_wrapper import SklearnClassifierWrapper  # noqa: E402
+from fairxai.models.xgboost_model import XGBoostModel  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # write_overfit_gap_table tests
@@ -102,10 +102,20 @@ def test_gap_table_columns_present(tmp_path):
 
     out = pd.read_csv(tmp_path / "overfit_gap_table.csv")
     expected_cols = {
-        "dataset", "model", "train_f1", "test_f1", "f1_gap",
-        "train_recall", "test_recall", "recall_gap",
-        "train_auc", "test_auc", "auc_gap",
-        "train_accuracy", "test_accuracy", "accuracy_gap",
+        "dataset",
+        "model",
+        "train_f1",
+        "test_f1",
+        "f1_gap",
+        "train_recall",
+        "test_recall",
+        "recall_gap",
+        "train_auc",
+        "test_auc",
+        "auc_gap",
+        "train_accuracy",
+        "test_accuracy",
+        "accuracy_gap",
         "overfit_risk",
     }
     assert expected_cols.issubset(set(out.columns))
@@ -163,9 +173,7 @@ class _AlwaysHighEstimator:
 
 
 def test_sklearn_wrapper_emits_overfit_warning_when_train_metrics_high(caplog):
-    wrapper = SklearnClassifierWrapper(
-        estimator=_AlwaysHighEstimator(), model_name="TestModel"
-    )
+    wrapper = SklearnClassifierWrapper(estimator=_AlwaysHighEstimator(), model_name="TestModel")
     X = pd.DataFrame({"a": [1.0, 2.0, 3.0, 4.0], "b": [0.1, 0.2, 0.3, 0.4]})
     y = pd.Series([1, 1, 1, 1])
 
@@ -187,9 +195,7 @@ def test_sklearn_wrapper_no_overfit_warning_when_metrics_low(caplog):
         def predict_proba(self, X):
             return np.column_stack([np.ones(len(X)) * 0.6, np.ones(len(X)) * 0.4])
 
-    wrapper = SklearnClassifierWrapper(
-        estimator=_LowMetricEstimator(), model_name="TestModel"
-    )
+    wrapper = SklearnClassifierWrapper(estimator=_LowMetricEstimator(), model_name="TestModel")
     X = pd.DataFrame({"a": [1.0, 2.0, 3.0, 4.0], "b": [0.1, 0.2, 0.3, 0.4]})
     y = pd.Series([0, 1, 0, 1])
 
