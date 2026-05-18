@@ -62,6 +62,7 @@ from fairxai.viz.fairness_comparison import (
     save_cross_model_best_available_radar,
     save_group_before_after_bars,
     save_group_delta_bars,
+    save_group_error_consequence_bars,
     save_group_performance_gap_bars,
     save_intersectional_heatmap,
     save_mitigation_delta_matrix,
@@ -477,6 +478,21 @@ def _generate_fairness_comparison_plots(
                 selected,
             )
             _report(delta_name.removesuffix(".png"), result)
+
+            consequence_name = figure_filename(
+                comparison_config,
+                "group_error_consequences",
+                dataset=dataset,
+                model_label=model_label,
+                sensitive_attr=attr,
+            )
+            result = save_group_error_consequence_bars(
+                dataset_groups,
+                plots_dir / consequence_name,
+                attr,
+                selected,
+            )
+            _report(consequence_name.removesuffix(".png"), result)
 
 
 # ---------------------------------------------------------------------------
