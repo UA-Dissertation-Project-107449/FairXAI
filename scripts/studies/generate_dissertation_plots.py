@@ -93,6 +93,17 @@ _SENSITIVE_ATTRS = ["age_group_cat", "sex_cat"]
 _FEATURE_COLS = ["trestbps", "chol", "thalach", "oldpeak", "ca"]
 
 
+def _find_processed_csv(dataset: str, suffix: str) -> Path | None:
+    """Locate a processed CSV for a dataset, trying subdirectory then flat layout."""
+    subdir = _DATA_PROCESSED / dataset / f"{dataset}_{suffix}.csv"
+    flat = _DATA_PROCESSED / f"{dataset}_{suffix}.csv"
+    if subdir.exists():
+        return subdir
+    if flat.exists():
+        return flat
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -280,26 +291,37 @@ def _generate_transformation_plots(
             results_dir,
         )
 
-    # 6. Scaling effects - raw vs scaled using processed train CSV
-    raw_csv = _DATA_PROCESSED / "cleveland_train.csv"
-    scaled_csv = _DATA_PROCESSED / "cleveland_train_scaled.csv"
-    if raw_csv.exists() and scaled_csv.exists():
+    # 6. Scaling effects - raw vs scaled using processed train CSV (one plot per dataset)
+    scaling_datasets = (
+        sorted(full_df["dataset"].dropna().unique())
+        if full_df is not None and "dataset" in full_df.columns
+        else ["cleveland"]
+    )
+    for dataset in scaling_datasets:
+        raw_csv = _find_processed_csv(dataset, "train")
+        scaled_csv = _find_processed_csv(dataset, "train_scaled")
+        if raw_csv is None or scaled_csv is None:
+            logger.warning(
+                "[WARNING] scaling_effects: %s_train[_scaled].csv not found under %s",
+                dataset,
+                _DATA_PROCESSED,
+            )
+            continue
         raw_df = pd.read_csv(raw_csv)
         scaled_df = pd.read_csv(scaled_csv)
         feature_cols = [c for c in _FEATURE_COLS if c in raw_df.columns and c in scaled_df.columns]
         if feature_cols:
             result = plot_scaling_effects(
-                raw_df[feature_cols], scaled_df[feature_cols], out_dir / "scaling_effects.png"
+                raw_df[feature_cols],
+                scaled_df[feature_cols],
+                out_dir / f"{dataset}_scaling_effects.png",
             )
-            _report("scaling_effects", result)
+            _report(f"{dataset}_scaling_effects", result)
         else:
-            logger.warning("[WARNING] scaling_effects: no shared feature cols in raw/scaled CSVs")
-    else:
-        logger.warning(
-            "[WARNING] scaling_effects: cleveland_train.csv or cleveland_train_scaled.csv "
-            "not found under %s",
-            _DATA_PROCESSED,
-        )
+            logger.warning(
+                "[WARNING] scaling_effects: no shared feature cols in raw/scaled CSVs for %s",
+                dataset,
+            )
 
 
 def _generate_cross_model_plots(
@@ -712,11 +734,10 @@ def _generate_cluster_evidence_plots(out_dir: Path) -> None:
         )
         return
 
-    for dataset in ("cleveland",):
-        ds_dir = grouping_dir / dataset
+    for ds_dir in sorted(grouping_dir.iterdir()):
         if not ds_dir.is_dir():
-            logger.warning("[WARNING] cluster_evidence: dataset dir missing: %s", ds_dir)
             continue
+        dataset = ds_dir.name
 
         fairness_csv = ds_dir / "fairness_by_cluster.csv"
         if not fairness_csv.exists():
