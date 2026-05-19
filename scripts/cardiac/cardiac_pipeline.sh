@@ -780,6 +780,7 @@ if should_run 12; then
     if [[ "$RUN_COMPARISON" == "true" ]]; then
         echo "[PHASE 12/12] Experiment comparison and dissertation plots"
         python3 "$ROOT_DIR/scripts/cardiac/compare.py" --run-id "$RUN_ID" --config "$COMPARISON_CONFIG" $VERBOSE_FLAG
+        python3 "$ROOT_DIR/scripts/studies/run_grouping_analysis.py" --run-id "$RUN_ID" "${DATASET_ARGS[@]}"
         python3 "$ROOT_DIR/scripts/studies/generate_dissertation_plots.py" --run-id "$RUN_ID" --config "$COMPARISON_CONFIG"
         mark_done 12 "compare"
         echo ""
