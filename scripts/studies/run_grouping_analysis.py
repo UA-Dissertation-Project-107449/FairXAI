@@ -31,6 +31,7 @@ from fairxai.cli.runner_base import get_project_root, setup_study_logging
 from fairxai.cli.runner_utils import (
     get_run_root,
     get_study_root,
+    resolve_latest_run_dir,
     resolve_run_id,
     update_output_study_pointer,
 )
@@ -86,10 +87,13 @@ def _resolve_methods(cli_methods: list[str], config: dict) -> list[str]:
 
 
 def _load_predictions(run_root: Path, dataset: str) -> pd.DataFrame | None:
-    """Load baseline predictions for one model, preferring train+test pair files."""
-    results_dir = run_root / "baseline" / "results"
-    if not results_dir.exists():
-        return None
+    """Load baseline predictions for one model, preferring train+test pair files.
+
+    Checks both ``baseline/results/predictions/`` (current layout) and the flat
+    ``baseline/results/`` directory (legacy fallback) to remain compatible with
+    older runs.  Filenames follow the pattern ``{dataset}_{model}_{train|test}.csv``
+    (current) or ``{dataset}_{model}_{train|test}_predictions.csv`` (legacy).
+    """
 
     def _model_key(path: Path, split_suffix: str) -> str | None:
         stem = path.stem
@@ -98,41 +102,65 @@ def _load_predictions(run_root: Path, dataset: str) -> pd.DataFrame | None:
             return None
         return stem[len(prefix) : -len(split_suffix)]
 
-    train_files = sorted(results_dir.glob(f"{dataset}_*_train_predictions.csv"))
-    test_files = sorted(results_dir.glob(f"{dataset}_*_test_predictions.csv"))
+    def _try_load(results_dir: Path, train_suffix: str, test_suffix: str) -> pd.DataFrame | None:
+        if not results_dir.exists():
+            return None
+        train_files = sorted(results_dir.glob(f"{dataset}_*{train_suffix}.csv"))
+        test_files = sorted(results_dir.glob(f"{dataset}_*{test_suffix}.csv"))
+        train_by_model = {
+            model: path
+            for path in train_files
+            if (model := _model_key(path, train_suffix)) is not None
+        }
+        test_by_model = {
+            model: path
+            for path in test_files
+            if (model := _model_key(path, test_suffix)) is not None
+        }
+        common_models = sorted(set(train_by_model) & set(test_by_model))
+        if common_models:
+            model = common_models[0]
+            train_df = pd.read_csv(train_by_model[model])
+            test_df = pd.read_csv(test_by_model[model])
+            logger.info(
+                "  Loaded baseline predictions for model=%s (train=%d, test=%d) from %s",
+                model,
+                len(train_df),
+                len(test_df),
+                results_dir.name,
+            )
+            return pd.concat([train_df, test_df], ignore_index=True)
+        return None
 
-    train_by_model = {
-        model: path
-        for path in train_files
-        if (model := _model_key(path, "_train_predictions")) is not None
-    }
-    test_by_model = {
-        model: path
-        for path in test_files
-        if (model := _model_key(path, "_test_predictions")) is not None
-    }
+    # Current layout: baseline/results/predictions/{dataset}_{model}_{train|test}.csv
+    result = _try_load(
+        run_root / "baseline" / "results" / "predictions", "_train", "_test"
+    )
+    if result is not None:
+        return result
 
-    common_models = sorted(set(train_by_model) & set(test_by_model))
-    if common_models:
-        model = common_models[0]
-        train_df = pd.read_csv(train_by_model[model])
-        test_df = pd.read_csv(test_by_model[model])
-        logger.info(
-            "  Loaded baseline predictions for model=%s (train=%d, test=%d)",
-            model,
-            len(train_df),
-            len(test_df),
-        )
-        return pd.concat([train_df, test_df], ignore_index=True)
+    # Legacy layout: baseline/results/{dataset}_{model}_{train|test}_predictions.csv
+    result = _try_load(
+        run_root / "baseline" / "results", "_train_predictions", "_test_predictions"
+    )
+    if result is not None:
+        return result
 
-    merged_candidates = [
-        p
-        for p in sorted(results_dir.glob(f"{dataset}_*_predictions.csv"))
-        if "_train_predictions" not in p.name and "_test_predictions" not in p.name
-    ]
-    if merged_candidates:
-        logger.info("  Loaded merged prediction file: %s", merged_candidates[0].name)
-        return pd.read_csv(merged_candidates[0])
+    # Last-resort: merged prediction file
+    for results_dir in [
+        run_root / "baseline" / "results" / "predictions",
+        run_root / "baseline" / "results",
+    ]:
+        if not results_dir.exists():
+            continue
+        merged_candidates = [
+            p
+            for p in sorted(results_dir.glob(f"{dataset}_*_predictions.csv"))
+            if "_train_predictions" not in p.name and "_test_predictions" not in p.name
+        ]
+        if merged_candidates:
+            logger.info("  Loaded merged prediction file: %s", merged_candidates[0].name)
+            return pd.read_csv(merged_candidates[0])
 
     return None
 
@@ -433,10 +461,21 @@ def main() -> None:
     base_results = _ROOT / "output" / pipeline
     output_dir = get_study_root(base_results, "grouping", study_id)
 
-    # Optionally resolve a pipeline run root to load baseline predictions
+    # Resolve a pipeline run root for baseline predictions.
+    # Explicit --run-id takes precedence; otherwise auto-resolve the latest run.
     run_root: Path | None = None
     if args.run_id:
         run_root = get_run_root(base_results, args.run_id)
+    else:
+        run_root = resolve_latest_run_dir(base_results)
+        if run_root:
+            logger.info("[INFO] Auto-resolved run root: %s", run_root.name)
+        else:
+            logger.warning(
+                "[WARNING] No pipeline run found under %s; per-cluster fairness will be skipped. "
+                "Pass --run-id to specify a run explicitly.",
+                base_results / "runs",
+            )
 
     datasets = _resolve_datasets(args.datasets or [], config)
     methods = _resolve_methods(args.methods or [], config)
