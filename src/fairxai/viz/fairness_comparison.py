@@ -1094,4 +1094,164 @@ def save_top_n_binning_strategy_age_group_small_multiples(
     plt.tight_layout(rect=[0, 0.04, 1, 1])
     save_figure(fig, output_file, dpi=300)
     plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Model stability / overfit gap visualisation
+# ---------------------------------------------------------------------------
+
+_OVERFIT_RISK_BORDER = {"low": "#2E8B57", "medium": "#E69F00", "high": "#CC0000"}
+_METRIC_PAIRS = [
+    ("train_f1", "test_f1", "F1"),
+    ("train_recall", "test_recall", "Recall"),
+    ("train_auc", "test_auc", "AUC-ROC"),
+]
+_MODEL_DISPLAY = {
+    "logistic_regression": "LR",
+    "random_forest": "RF",
+    "svm": "SVM",
+    "xgboost": "XGB",
+}
+
+
+def save_model_overfit_gap_bars(
+    overfit_df: pd.DataFrame,
+    out_path: "Path",
+) -> "Path | None":
+    """Grouped-bar chart of train vs test metrics per model family.
+
+    Each group on the x-axis is one model family.  Within each group there are
+    three metric pairs (F1 / Recall / AUC-ROC), each rendered as a train bar
+    (solid, model colour) and a test bar (hatched, same colour, lighter alpha).
+    Bar border colour encodes overfit_risk: green=low, orange=medium, red=high.
+    A dashed horizontal reference at y=1.0 marks the perfect-separation ceiling.
+    """
+    from pathlib import Path as _Path
+
+    out_path = _Path(out_path)
+
+    required = {"model", "overfit_risk"}
+    for train_col, test_col, _ in _METRIC_PAIRS:
+        required.add(train_col)
+        required.add(test_col)
+
+    if overfit_df is None or overfit_df.empty:
+        logger.warning("[SKIP] save_model_overfit_gap_bars: empty dataframe")
+        return None
+    if not required.issubset(overfit_df.columns):
+        missing = required - set(overfit_df.columns)
+        logger.warning("[SKIP] save_model_overfit_gap_bars: missing columns %s", missing)
+        return None
+
+    df = overfit_df.copy()
+    for col, _, _ in _METRIC_PAIRS:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    for _, col, _ in _METRIC_PAIRS:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    models = [m for m in _MODEL_DISPLAY if m in df["model"].values]
+    if not models:
+        logger.warning("[SKIP] save_model_overfit_gap_bars: no recognised model rows")
+        return None
+
+    n_models = len(models)
+    n_metrics = len(_METRIC_PAIRS)
+    group_width = 0.8
+    bar_width = group_width / (n_metrics * 2)
+    fig, ax = plt.subplots(figsize=(max(6, n_models * 2.5), 4.5))
+
+    for m_idx, model_key in enumerate(models):
+        row = df[df["model"] == model_key].iloc[0]
+        base_color = PALETTE_MODEL.get(model_key, "#888888")
+        risk = str(row.get("overfit_risk", "low")).lower()
+        border_color = _OVERFIT_RISK_BORDER.get(risk, "#888888")
+        label = _MODEL_DISPLAY.get(model_key, model_key)
+
+        for p_idx, (train_col, test_col, metric_label) in enumerate(_METRIC_PAIRS):
+            train_val = float(row[train_col]) if not pd.isna(row[train_col]) else 0.0
+            test_val = float(row[test_col]) if not pd.isna(row[test_col]) else 0.0
+
+            # Positions: model groups spaced by 1.2, metric pairs inside group
+            group_center = m_idx * 1.2
+            pair_offset = (p_idx - (n_metrics - 1) / 2) * (bar_width * 2.2)
+            train_x = group_center + pair_offset
+            test_x = train_x + bar_width
+
+            # Train bar (solid)
+            ax.bar(
+                train_x,
+                train_val,
+                width=bar_width,
+                color=base_color,
+                edgecolor=border_color,
+                linewidth=1.5,
+                label=f"{label} train" if p_idx == 0 else "_nolegend_",
+            )
+            # Test bar (hatched, lighter)
+            ax.bar(
+                test_x,
+                test_val,
+                width=bar_width,
+                color=base_color,
+                alpha=0.45,
+                hatch="///",
+                edgecolor=border_color,
+                linewidth=1.5,
+                label=f"{label} test" if p_idx == 0 else "_nolegend_",
+            )
+
+            # Metric label below pair
+            if m_idx == 0:
+                mid_x = (train_x + test_x) / 2
+                ax.text(
+                    mid_x,
+                    -0.04,
+                    metric_label,
+                    ha="center",
+                    va="top",
+                    fontsize=7,
+                    color="#555555",
+                    transform=ax.get_xaxis_transform(),
+                )
+
+        # Model label centred on group
+        ax.text(
+            m_idx * 1.2,
+            -0.10,
+            label,
+            ha="center",
+            va="top",
+            fontsize=9,
+            fontweight="bold",
+            transform=ax.get_xaxis_transform(),
+        )
+
+    ax.axhline(1.0, color="#CC0000", linewidth=0.8, linestyle="--", label="Perfect separation")
+    ax.set_ylim(0, 1.08)
+    ax.set_xlim(-0.7, (n_models - 1) * 1.2 + 0.7)
+    ax.set_ylabel("Metric value")
+    ax.set_title("Model Train vs Test Performance — Overfit Gap Summary")
+    ax.set_xticks([])
+
+    # Risk legend patch
+    import matplotlib.patches as mpatches
+
+    risk_patches = [
+        mpatches.Patch(edgecolor=c, facecolor="none", linewidth=2, label=f"{r} risk")
+        for r, c in _OVERFIT_RISK_BORDER.items()
+    ]
+    train_patch = mpatches.Patch(facecolor="#888888", label="train (solid)")
+    test_patch = mpatches.Patch(facecolor="#888888", alpha=0.45, hatch="///", label="test (hatched)")
+    ax.legend(
+        handles=risk_patches + [train_patch, test_patch],
+        loc="lower right",
+        fontsize=7,
+        framealpha=0.7,
+    )
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.tight_layout(rect=[0, 0.08, 1, 1])
+    save_figure(fig, out_path, dpi=300)
+    plt.close(fig)
+    return out_path
     return output_file
