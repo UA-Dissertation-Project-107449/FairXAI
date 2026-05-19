@@ -6,7 +6,7 @@ paths:
   processed_dir: data/processed/cardiac
 
 runtime:
-  datasets: [cleveland]
+  datasets: [cleveland, kaggle_heart]
   schema_mapping_json: configs/schema/cardiac.json
 
 split:

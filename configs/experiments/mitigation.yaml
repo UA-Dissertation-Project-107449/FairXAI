@@ -13,6 +13,7 @@ data:
   base_config: "domain/cardiac.yaml"
   datasets:
     - cleveland
+    - kaggle_heart
   sensitive_attributes:
     - sex
     - age_group
