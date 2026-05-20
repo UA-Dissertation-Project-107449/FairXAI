@@ -52,6 +52,12 @@ sys.path.insert(0, str(_ROOT / "src"))
 from fairxai.cli.runner_base import setup_study_logging
 from fairxai.comparison import build_metric_plot_frame, figure_filename, load_comparison_config
 from fairxai.comparison.metric_tables import build_fairness_evidence_summary
+from fairxai.experiments.data_io import resolve_dataset_dir, resolve_default_binning
+from fairxai.utils.config import load_yaml_config
+from fairxai.viz.clustering import (
+    save_cluster_fairness_heatmap,
+    save_cluster_profile_bars,
+)
 from fairxai.viz.fairness import (
     plot_bias_amplification_waterfall,
     plot_fairness_metric_heatmap,
@@ -72,10 +78,6 @@ from fairxai.viz.fairness_comparison import (
     save_top_n_binning_strategy_summary,
     select_primary_fairness_row,
 )
-from fairxai.viz.clustering import (
-    save_cluster_fairness_heatmap,
-    save_cluster_profile_bars,
-)
 from fairxai.viz.transformations import (
     plot_before_after_distributions,
     plot_scaling_effects,
@@ -88,20 +90,24 @@ _RUNS_BASE = _ROOT / "output" / "cardiac" / "runs"
 _DATA_PROCESSED = _ROOT / "data" / "processed" / "cardiac"
 _OUT_BASE = _ROOT / "output" / "cardiac" / "studies" / "dissertation_figures"
 
+_PIPELINE_CFG_PATH = _ROOT / "configs" / "pipelines" / "cardiac.yaml"
+_DEFAULT_BINNING = (
+    resolve_default_binning(load_yaml_config(str(_PIPELINE_CFG_PATH)))
+    if _PIPELINE_CFG_PATH.exists()
+    else "fixed_10yr"
+)
+
 # Sensitive attribute names as used in fairness JSONs (with _cat) and in CSV columns (without)
 _SENSITIVE_ATTRS = ["age_group_cat", "sex_cat"]
 _FEATURE_COLS = ["trestbps", "chol", "thalach", "oldpeak", "ca"]
 
 
 def _find_processed_csv(dataset: str, suffix: str) -> Path | None:
-    """Locate a processed CSV for a dataset, trying subdirectory then flat layout."""
-    subdir = _DATA_PROCESSED / dataset / f"{dataset}_{suffix}.csv"
-    flat = _DATA_PROCESSED / f"{dataset}_{suffix}.csv"
-    if subdir.exists():
-        return subdir
-    if flat.exists():
-        return flat
-    return None
+    """Locate a processed CSV under the canonical {dataset}_{binning}/ layout."""
+    path = (
+        resolve_dataset_dir(_DATA_PROCESSED, dataset, _DEFAULT_BINNING) / f"{dataset}_{suffix}.csv"
+    )
+    return path if path.exists() else None
 
 
 # ---------------------------------------------------------------------------
@@ -627,9 +633,7 @@ def _generate_model_stability_plots(
     if overfit_csv.exists():
         overfit_df = _safe_read_csv(overfit_csv)
         if overfit_df is not None and not overfit_df.empty:
-            result = save_model_overfit_gap_bars(
-                overfit_df, out_dir / "model_overfit_gap_bars.png"
-            )
+            result = save_model_overfit_gap_bars(overfit_df, out_dir / "model_overfit_gap_bars.png")
             _report("model_overfit_gap_bars", result)
         else:
             logger.warning("[WARNING] model_overfit_gap_bars: overfit_gap_table.csv is empty")
@@ -684,9 +688,7 @@ def _generate_model_stability_plots(
             merge_key_right = "model"
             if merge_key_right in odf.columns:
                 table = table.merge(
-                    odf[["model", "overfit_risk"]].rename(
-                        columns={"model": merge_key_left}
-                    ),
+                    odf[["model", "overfit_risk"]].rename(columns={"model": merge_key_left}),
                     on=merge_key_left,
                     how="left",
                 )
@@ -751,9 +753,7 @@ def _generate_cluster_evidence_plots(out_dir: Path) -> None:
             logger.warning("[WARNING] cluster_evidence: fairness_by_cluster.csv is empty")
             continue
 
-        result = save_cluster_profile_bars(
-            fairness_df, out_dir / f"{dataset}_cluster_profile.png"
-        )
+        result = save_cluster_profile_bars(fairness_df, out_dir / f"{dataset}_cluster_profile.png")
         _report(f"{dataset}_cluster_profile", result)
 
         result = save_cluster_fairness_heatmap(

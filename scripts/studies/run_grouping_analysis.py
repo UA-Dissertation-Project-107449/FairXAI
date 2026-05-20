@@ -41,6 +41,7 @@ from fairxai.clustering import (
     ClusterProfiler,
     FairnessPerCluster,
 )
+from fairxai.experiments.data_io import resolve_dataset_dir, resolve_default_binning
 from fairxai.similarity import SimilarityEngine, ViolationDensityMapper
 from fairxai.utils.config import load_yaml_config
 
@@ -133,16 +134,12 @@ def _load_predictions(run_root: Path, dataset: str) -> pd.DataFrame | None:
         return None
 
     # Current layout: baseline/results/predictions/{dataset}_{model}_{train|test}.csv
-    result = _try_load(
-        run_root / "baseline" / "results" / "predictions", "_train", "_test"
-    )
+    result = _try_load(run_root / "baseline" / "results" / "predictions", "_train", "_test")
     if result is not None:
         return result
 
     # Legacy layout: baseline/results/{dataset}_{model}_{train|test}_predictions.csv
-    result = _try_load(
-        run_root / "baseline" / "results", "_train_predictions", "_test_predictions"
-    )
+    result = _try_load(run_root / "baseline" / "results", "_train_predictions", "_test_predictions")
     if result is not None:
         return result
 
@@ -165,34 +162,26 @@ def _load_predictions(run_root: Path, dataset: str) -> pd.DataFrame | None:
     return None
 
 
-def _load_grouping_dataframe(dataset: str) -> tuple[pd.DataFrame, Path, dict[str, Any]]:
-    """Resolve grouping input from processed file or from train/test split files."""
+def _load_grouping_dataframe(
+    dataset: str, binning: str
+) -> tuple[pd.DataFrame, Path, dict[str, Any]]:
+    """Resolve grouping input, preferring the canonical train/test splits.
+
+    Splits are preferred over a flat ``{dataset}_processed.csv`` so the clustered
+    row set matches the baseline predictions used for per-cluster fairness (same
+    rows, same train-then-test order).  ``{dataset}_processed.csv`` is a
+    last-resort fallback and may be a stale, pre-cleaning row set.
+    """
     processed_path = _PROCESSED_DIR / f"{dataset}_processed.csv"
-    if processed_path.exists():
-        logger.info("  Using processed input: %s", processed_path)
-        return pd.read_csv(processed_path), processed_path, {"source": "processed"}
 
-    split_candidates = [
-        (
-            _PROCESSED_DIR / dataset / f"{dataset}_train.csv",
-            _PROCESSED_DIR / dataset / f"{dataset}_test.csv",
-        ),
-        (
-            _PROCESSED_DIR / f"{dataset}_train.csv",
-            _PROCESSED_DIR / f"{dataset}_test.csv",
-        ),
-    ]
+    canonical_dir = resolve_dataset_dir(_PROCESSED_DIR, dataset, binning)
+    train_path = canonical_dir / f"{dataset}_train.csv"
+    test_path = canonical_dir / f"{dataset}_test.csv"
 
-    for train_path, test_path in split_candidates:
-        if not train_path.exists() or not test_path.exists():
-            continue
+    if train_path.exists() and test_path.exists():
         train_df = pd.read_csv(train_path)
         test_df = pd.read_csv(test_path)
-        logger.info(
-            "  Using split inputs: train=%s, test=%s",
-            train_path,
-            test_path,
-        )
+        logger.info("  Using split inputs: train=%s, test=%s", train_path, test_path)
         merged_df = pd.concat([train_df, test_df], ignore_index=True)
         return (
             merged_df,
@@ -205,8 +194,12 @@ def _load_grouping_dataframe(dataset: str) -> tuple[pd.DataFrame, Path, dict[str
             },
         )
 
+    if processed_path.exists():
+        logger.info("  Using processed input (fallback): %s", processed_path)
+        return pd.read_csv(processed_path), processed_path, {"source": "processed"}
+
     raise FileNotFoundError(
-        f"No processed or split files found for dataset '{dataset}' under {_PROCESSED_DIR}"
+        f"No split or processed files found for dataset '{dataset}' under {_PROCESSED_DIR}"
     )
 
 
@@ -252,11 +245,12 @@ def run_dataset(
     output_dir: Path,
     config: dict,
     methods: list[str],
+    binning: str,
 ) -> None:
     logger.info("[DATASET] grouping dataset=%s", dataset)
 
     try:
-        df, processed_path, source_meta = _load_grouping_dataframe(dataset)
+        df, processed_path, source_meta = _load_grouping_dataframe(dataset, binning)
     except FileNotFoundError as exc:
         logger.warning("[WARNING] %s", exc)
         return
@@ -480,6 +474,15 @@ def main() -> None:
     datasets = _resolve_datasets(args.datasets or [], config)
     methods = _resolve_methods(args.methods or [], config)
 
+    # Canonical processed-layout binning (matches train/mitigation/hpo loaders),
+    # so clustered rows match the baseline predictions for per-cluster fairness.
+    pipeline_cfg_path = _ROOT / "configs" / "pipelines" / f"{pipeline}.yaml"
+    default_binning = (
+        resolve_default_binning(load_yaml_config(str(pipeline_cfg_path)))
+        if pipeline_cfg_path.exists()
+        else "fixed_10yr"
+    )
+
     if not datasets:
         logger.error("No datasets found. Pass --datasets or ensure processed CSVs exist.")
         sys.exit(1)
@@ -497,7 +500,9 @@ def main() -> None:
 
     for dataset in datasets:
         try:
-            run_dataset(dataset, run_root or output_dir, output_dir, config, methods)
+            run_dataset(
+                dataset, run_root or output_dir, output_dir, config, methods, default_binning
+            )
         except Exception as exc:
             logger.error("dataset %s failed: %s", dataset, exc, exc_info=True)
 
