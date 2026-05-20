@@ -7,6 +7,10 @@ paths:
 
 runtime:
   datasets: [cleveland, kaggle_heart]
+  # Canonical processed layout: data/processed/cardiac/{dataset}_{default_binning}/.
+  # Loaders (train, mitigation, hpo) fall back to data/processed/cardiac/{dataset}/
+  # when the binning subdir is absent (no-binning preprocess runs).
+  default_binning: fixed_10yr
   schema_mapping_json: configs/schema/cardiac.json
 
 split:
