@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -1094,6 +1095,7 @@ def save_top_n_binning_strategy_age_group_small_multiples(
     plt.tight_layout(rect=[0, 0.04, 1, 1])
     save_figure(fig, output_file, dpi=300)
     plt.close(fig)
+    return output_file
 
 
 # ---------------------------------------------------------------------------
@@ -1241,7 +1243,9 @@ def save_model_overfit_gap_bars(
         for r, c in _OVERFIT_RISK_BORDER.items()
     ]
     train_patch = mpatches.Patch(facecolor="#888888", label="train (solid)")
-    test_patch = mpatches.Patch(facecolor="#888888", alpha=0.45, hatch="///", label="test (hatched)")
+    test_patch = mpatches.Patch(
+        facecolor="#888888", alpha=0.45, hatch="///", label="test (hatched)"
+    )
     ax.legend(
         handles=risk_patches + [train_patch, test_patch],
         loc="lower right",
@@ -1254,4 +1258,3 @@ def save_model_overfit_gap_bars(
     save_figure(fig, out_path, dpi=300)
     plt.close(fig)
     return out_path
-    return output_file
