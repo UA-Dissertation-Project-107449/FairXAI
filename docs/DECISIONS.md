@@ -50,6 +50,37 @@
 - All outputs (results, models, logs) are explicit and organized
 - Large files are gitignored to keep repo lightweight
 
+## Processed Data Layout
+
+**Decision**: Processed train/test splits live in per-dataset subdirectories:
+`data/processed/<pipeline>/{dataset}_{binning}/{dataset}_{train,test}{,_scaled}.csv`.
+
+- The canonical binning is `runtime.default_binning` in the pipeline config
+  (cardiac: `fixed_10yr`). It is the single source of truth — HPO, training,
+  and mitigation all read it from there rather than hardcoding.
+- Loaders fall back to `data/processed/<pipeline>/{dataset}/` (no binning suffix)
+  for preprocess runs executed without `--all-binnings` / `--binning-strategy`.
+- The legacy **flat** layout (`data/processed/<pipeline>/{dataset}_train.csv` etc.
+  directly under the pipeline dir) is **retired**. It was never written by the
+  current `preprocess_data.py` (which always uses subdirs); stale flat files left
+  over from an older layout silently masked the bug — `cleveland` resolved via
+  leftovers while `kaggle_heart` (no leftovers) was invisible to the train and
+  mitigation stages.
+
+**Rationale**: HPO (`run_hpo.py`) and combinatorial experiments
+(`run_combinatorial_experiments.py`) already used the `{dataset}_{binning}/`
+convention. `train_baseline.py` and `run_mitigation_comparison.py` were the
+outliers reading flat paths. Unifying on the subdir layout makes every dataset
+listed in `runtime.datasets` flow through all stages identically.
+
+**Shared resolver**: `fairxai.experiments.data_io` exposes `resolve_dataset_dir`
+(canonical `{dataset}_{binning}/` → `{dataset}/` fallback) and
+`resolve_default_binning` (reads `runtime.default_binning`). All loaders —
+training, mitigation, HPO, grouping, and dissertation plots — go through these,
+so the layout and the default binning live in exactly one place. Combinatorial
+experiments deliberately bypass the resolver: they iterate binning strategies
+explicitly, so `{dataset}_{binning}/` is always addressed directly.
+
 ---
 
 ## Known Artefacts & Documented Limitations
