@@ -39,16 +39,15 @@ from fairxai.cli.runner_utils import (
     resolve_run_id,
     update_latest_pointer,
 )
-from fairxai.experiments.data_io import default_exclude_columns
+from fairxai.experiments.data_io import (
+    default_exclude_columns,
+    resolve_dataset_dir,
+    resolve_default_binning,
+)
 from fairxai.fairness.metrics import FairnessMetrics
 from fairxai.fairness.mitigation import MitigationEngine
 from fairxai.models.baseline import BaselineLogisticRegression, generate_predictions_with_metadata
 from fairxai.utils.config import load_yaml_config
-
-
-def resolve_target_column(schema_cfg: dict, dataset_name: str, default_target: str) -> str:
-    dataset_cfg = schema_cfg.get("datasets", {}).get(dataset_name, {})
-    return dataset_cfg.get("label") or dataset_cfg.get("target") or default_target
 
 
 def load_dataset(
@@ -558,13 +557,15 @@ def run_analysis(
             },
         )
 
-    # Data directory
+    # Data directory. Per-dataset subdir resolved below via the shared resolver.
     data_dir = project_root / pipeline_cfg["paths"]["processed_dir"]
+    default_binning = resolve_default_binning(pipeline_cfg)
     logging.info(
-        "Run context: pipeline=%s run_id=%s processed_dir=%s",
+        "Run context: pipeline=%s run_id=%s processed_dir=%s default_binning=%s",
         pipeline,
         run_id or "none",
         data_dir,
+        default_binning,
     )
 
     # Techniques to test (from config)
@@ -592,10 +593,11 @@ def run_analysis(
         logging.info("[DATASET] Processing dataset=%s", dataset_name)
 
         try:
-            # Load data
-            dataset_target = resolve_target_column(schema_cfg, dataset_name, target_col)
+            dataset_dir = resolve_dataset_dir(data_dir, dataset_name, default_binning)
+
+            # Load data — processed files carry the canonical target column
             X_train, y_train, sensitive_train, X_test, y_test, sensitive_test = load_dataset(
-                dataset_name, data_dir, schema_cfg, dataset_target, sensitive_attrs
+                dataset_name, dataset_dir, schema_cfg, target_col, sensitive_attrs
             )
 
             # Train baseline
