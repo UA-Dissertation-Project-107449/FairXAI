@@ -60,18 +60,18 @@ def save_cluster_profile_bars(
 
     # Per-cluster aggregates
     # n_samples should be the same across sensitive_attr rows for the same cluster
-    cluster_sizes = (
-        df.groupby("cluster_id")["n_samples"].first().sort_index()
-    )
-    cluster_dp = (
-        df.groupby("cluster_id")["dp_max_diff"].mean().sort_index()
-    )
+    cluster_sizes = df.groupby("cluster_id")["n_samples"].first().sort_index()
+    cluster_dp = df.groupby("cluster_id")["dp_max_diff"].mean().sort_index()
     cluster_ids = cluster_sizes.index.tolist()
     colors = [_CLUSTER_PALETTE[int(c) % len(_CLUSTER_PALETTE)] for c in cluster_ids]
     small_bin = cluster_sizes < 10
 
-    fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(max(5, len(cluster_ids) * 1.2 + 1.5), 6),
-                                          gridspec_kw={"height_ratios": [1.6, 1]})
+    fig, (ax_top, ax_bot) = plt.subplots(
+        2,
+        1,
+        figsize=(max(5, len(cluster_ids) * 1.2 + 1.5), 6),
+        gridspec_kw={"height_ratios": [1.6, 1]},
+    )
 
     # Top panel: sample counts
     bars = ax_top.bar(cluster_ids, cluster_sizes.values, color=colors, edgecolor="white")
@@ -151,11 +151,17 @@ def save_cluster_fairness_heatmap(
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
     metrics = ["dp_max_diff", "eo_tpr_diff", "eo_fpr_diff"]
-    metric_labels = {"dp_max_diff": "DP gap", "eo_tpr_diff": "EO TPR gap", "eo_fpr_diff": "EO FPR gap"}
+    metric_labels = {
+        "dp_max_diff": "DP gap",
+        "eo_tpr_diff": "EO TPR gap",
+        "eo_fpr_diff": "EO FPR gap",
+    }
     attrs = sorted(df["sensitive_attr"].dropna().unique())
     n_attrs = max(len(attrs), 1)
 
-    fig, axes = plt.subplots(1, n_attrs, figsize=(5 * n_attrs + 0.5, max(3, df["cluster_id"].nunique() * 0.6 + 1.5)))
+    fig, axes = plt.subplots(
+        1, n_attrs, figsize=(5 * n_attrs + 0.5, max(3, df["cluster_id"].nunique() * 0.6 + 1.5))
+    )
     axes_flat = np.atleast_1d(axes)
 
     for ax_idx, attr in enumerate(attrs):

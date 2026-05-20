@@ -9,6 +9,10 @@ Design Principles:
 - Reusable across notebooks/reports
 """
 
+from .clustering import (
+    save_cluster_fairness_heatmap,
+    save_cluster_profile_bars,
+)
 from .comparisons import (
     plot_correlation_heatmap_grid,
     plot_drift_heatmap,
@@ -52,10 +56,6 @@ from .fairness_comparison import (
     save_top_n_binning_strategy_age_group_small_multiples,
     save_top_n_binning_strategy_summary,
     select_primary_fairness_row,
-)
-from .clustering import (
-    save_cluster_fairness_heatmap,
-    save_cluster_profile_bars,
 )
 from .style import (
     PALETTE_DATASET,
