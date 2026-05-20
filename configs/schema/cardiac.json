@@ -145,5 +145,5 @@
       "bmi": ["BMI"]
     }
   },
-  "cardiac_relevant_datasets": ["cleveland"]
+  "cardiac_relevant_datasets": ["cleveland", "kaggle_heart"]
 }

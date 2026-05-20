@@ -9,6 +9,10 @@ Design Principles:
 - Reusable across notebooks/reports
 """
 
+from .clustering import (
+    save_cluster_fairness_heatmap,
+    save_cluster_profile_bars,
+)
 from .comparisons import (
     plot_correlation_heatmap_grid,
     plot_drift_heatmap,
@@ -48,6 +52,7 @@ from .fairness_comparison import (
     save_group_performance_gap_bars,
     save_intersectional_heatmap,
     save_mitigation_delta_matrix,
+    save_model_overfit_gap_bars,
     save_top_n_binning_strategy_age_group_small_multiples,
     save_top_n_binning_strategy_summary,
     select_primary_fairness_row,
@@ -101,8 +106,11 @@ __all__ = [
     "save_cross_model_best_available_radar",
     "save_group_error_consequence_bars",
     "save_binning_strategy_delta_matrix",
+    "save_model_overfit_gap_bars",
     "save_top_n_binning_strategy_summary",
     "save_top_n_binning_strategy_age_group_small_multiples",
     "select_primary_fairness_row",
     "PALETTE_MODEL",
+    "save_cluster_profile_bars",
+    "save_cluster_fairness_heatmap",
 ]

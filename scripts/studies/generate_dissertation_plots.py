@@ -52,6 +52,12 @@ sys.path.insert(0, str(_ROOT / "src"))
 from fairxai.cli.runner_base import setup_study_logging
 from fairxai.comparison import build_metric_plot_frame, figure_filename, load_comparison_config
 from fairxai.comparison.metric_tables import build_fairness_evidence_summary
+from fairxai.experiments.data_io import resolve_dataset_dir, resolve_default_binning
+from fairxai.utils.config import load_yaml_config
+from fairxai.viz.clustering import (
+    save_cluster_fairness_heatmap,
+    save_cluster_profile_bars,
+)
 from fairxai.viz.fairness import (
     plot_bias_amplification_waterfall,
     plot_fairness_metric_heatmap,
@@ -67,6 +73,7 @@ from fairxai.viz.fairness_comparison import (
     save_group_performance_gap_bars,
     save_intersectional_heatmap,
     save_mitigation_delta_matrix,
+    save_model_overfit_gap_bars,
     save_top_n_binning_strategy_age_group_small_multiples,
     save_top_n_binning_strategy_summary,
     select_primary_fairness_row,
@@ -83,9 +90,24 @@ _RUNS_BASE = _ROOT / "output" / "cardiac" / "runs"
 _DATA_PROCESSED = _ROOT / "data" / "processed" / "cardiac"
 _OUT_BASE = _ROOT / "output" / "cardiac" / "studies" / "dissertation_figures"
 
+_PIPELINE_CFG_PATH = _ROOT / "configs" / "pipelines" / "cardiac.yaml"
+_DEFAULT_BINNING = (
+    resolve_default_binning(load_yaml_config(str(_PIPELINE_CFG_PATH)))
+    if _PIPELINE_CFG_PATH.exists()
+    else "fixed_10yr"
+)
+
 # Sensitive attribute names as used in fairness JSONs (with _cat) and in CSV columns (without)
 _SENSITIVE_ATTRS = ["age_group_cat", "sex_cat"]
 _FEATURE_COLS = ["trestbps", "chol", "thalach", "oldpeak", "ca"]
+
+
+def _find_processed_csv(dataset: str, suffix: str) -> Path | None:
+    """Locate a processed CSV under the canonical {dataset}_{binning}/ layout."""
+    path = (
+        resolve_dataset_dir(_DATA_PROCESSED, dataset, _DEFAULT_BINNING) / f"{dataset}_{suffix}.csv"
+    )
+    return path if path.exists() else None
 
 
 # ---------------------------------------------------------------------------
@@ -275,26 +297,37 @@ def _generate_transformation_plots(
             results_dir,
         )
 
-    # 6. Scaling effects - raw vs scaled using processed train CSV
-    raw_csv = _DATA_PROCESSED / "cleveland_train.csv"
-    scaled_csv = _DATA_PROCESSED / "cleveland_train_scaled.csv"
-    if raw_csv.exists() and scaled_csv.exists():
+    # 6. Scaling effects - raw vs scaled using processed train CSV (one plot per dataset)
+    scaling_datasets = (
+        sorted(full_df["dataset"].dropna().unique())
+        if full_df is not None and "dataset" in full_df.columns
+        else ["cleveland"]
+    )
+    for dataset in scaling_datasets:
+        raw_csv = _find_processed_csv(dataset, "train")
+        scaled_csv = _find_processed_csv(dataset, "train_scaled")
+        if raw_csv is None or scaled_csv is None:
+            logger.warning(
+                "[WARNING] scaling_effects: %s_train[_scaled].csv not found under %s",
+                dataset,
+                _DATA_PROCESSED,
+            )
+            continue
         raw_df = pd.read_csv(raw_csv)
         scaled_df = pd.read_csv(scaled_csv)
         feature_cols = [c for c in _FEATURE_COLS if c in raw_df.columns and c in scaled_df.columns]
         if feature_cols:
             result = plot_scaling_effects(
-                raw_df[feature_cols], scaled_df[feature_cols], out_dir / "scaling_effects.png"
+                raw_df[feature_cols],
+                scaled_df[feature_cols],
+                out_dir / f"{dataset}_scaling_effects.png",
             )
-            _report("scaling_effects", result)
+            _report(f"{dataset}_scaling_effects", result)
         else:
-            logger.warning("[WARNING] scaling_effects: no shared feature cols in raw/scaled CSVs")
-    else:
-        logger.warning(
-            "[WARNING] scaling_effects: cleveland_train.csv or cleveland_train_scaled.csv "
-            "not found under %s",
-            _DATA_PROCESSED,
-        )
+            logger.warning(
+                "[WARNING] scaling_effects: no shared feature cols in raw/scaled CSVs for %s",
+                dataset,
+            )
 
 
 def _generate_cross_model_plots(
@@ -582,6 +615,154 @@ def _generate_binning_sensitivity_plots(
 
 
 # ---------------------------------------------------------------------------
+# Model stability / overfit gap
+# ---------------------------------------------------------------------------
+
+
+def _generate_model_stability_plots(
+    run_dir: Path,
+    full_df: "pd.DataFrame | None",
+    out_dir: Path,
+    comparison_config: dict,
+) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _phase("model stability plots")
+
+    # --- overfit gap visualisation ---
+    overfit_csv = run_dir / "baseline" / "prediction_fairness" / "overfit_gap_table.csv"
+    if overfit_csv.exists():
+        overfit_df = _safe_read_csv(overfit_csv)
+        if overfit_df is not None and not overfit_df.empty:
+            result = save_model_overfit_gap_bars(overfit_df, out_dir / "model_overfit_gap_bars.png")
+            _report("model_overfit_gap_bars", result)
+        else:
+            logger.warning("[WARNING] model_overfit_gap_bars: overfit_gap_table.csv is empty")
+    else:
+        logger.warning(
+            "[WARNING] model_overfit_gap_bars: overfit_gap_table.csv not found at %s",
+            overfit_csv,
+        )
+
+    # --- baseline-only comparison table ---
+    if full_df is None or full_df.empty:
+        logger.warning("[WARNING] baseline_model_comparison: full_df missing")
+        return
+
+    mit_col = "mitigation_technique" if "mitigation_technique" in full_df.columns else None
+    if mit_col is None:
+        logger.warning("[WARNING] baseline_model_comparison: no mitigation_technique column")
+        return
+
+    baseline_df = full_df[full_df[mit_col].astype(str).str.lower() == "baseline"].copy()
+    if baseline_df.empty:
+        logger.warning("[WARNING] baseline_model_comparison: no baseline rows in full_df")
+        return
+
+    keep_cols = [
+        c
+        for c in [
+            "dataset",
+            "model_type",
+            "f1_value",
+            "recall_value",
+            "precision_value",
+            "auc_value",
+            "fairness_gap",
+            "dem_parity_age_group_max_diff",
+            "dem_parity_sex_max_diff",
+        ]
+        if c in baseline_df.columns
+    ]
+    best_rows = (
+        baseline_df.sort_values("f1_value", ascending=False)
+        .groupby(["dataset", "model_type"], as_index=False)
+        .first()
+    )
+    table = best_rows[keep_cols].copy()
+
+    # Merge overfit_risk if overfit_gap_table was loaded
+    if overfit_csv.exists():
+        odf = _safe_read_csv(overfit_csv)
+        if odf is not None and "overfit_risk" in odf.columns:
+            merge_key_left = "model_type"
+            merge_key_right = "model"
+            if merge_key_right in odf.columns:
+                table = table.merge(
+                    odf[["model", "overfit_risk"]].rename(columns={"model": merge_key_left}),
+                    on=merge_key_left,
+                    how="left",
+                )
+
+    out_csv = out_dir / "baseline_model_comparison.csv"
+    table.to_csv(out_csv, index=False)
+    _report("baseline_model_comparison", out_csv)
+
+
+# ---------------------------------------------------------------------------
+# Cluster evidence plots (Task 5)
+# ---------------------------------------------------------------------------
+
+_GROUPING_STUDIES_BASE = _ROOT / "output" / "cardiac" / "studies" / "grouping"
+
+
+def _resolve_latest_grouping_dir() -> Path | None:
+    """Return the most recent grouping study directory, or None if absent."""
+    if not _GROUPING_STUDIES_BASE.exists():
+        return None
+    latest_txt = _GROUPING_STUDIES_BASE / "latest.txt"
+    if latest_txt.exists():
+        study_id = latest_txt.read_text().strip()
+        candidate = _GROUPING_STUDIES_BASE / study_id
+        if candidate.is_dir():
+            return candidate
+    candidates = sorted(
+        [p for p in _GROUPING_STUDIES_BASE.iterdir() if p.is_dir()],
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
+def _generate_cluster_evidence_plots(out_dir: Path) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _phase("cluster evidence plots")
+
+    grouping_dir = _resolve_latest_grouping_dir()
+    if grouping_dir is None:
+        logger.warning(
+            "[WARNING] cluster_evidence: no grouping study found under %s — "
+            "run scripts/studies/run_grouping_analysis.py first",
+            _GROUPING_STUDIES_BASE,
+        )
+        return
+
+    for ds_dir in sorted(grouping_dir.iterdir()):
+        if not ds_dir.is_dir():
+            continue
+        dataset = ds_dir.name
+
+        fairness_csv = ds_dir / "fairness_by_cluster.csv"
+        if not fairness_csv.exists():
+            logger.warning(
+                "[WARNING] cluster_evidence: fairness_by_cluster.csv missing: %s", fairness_csv
+            )
+            continue
+
+        fairness_df = _safe_read_csv(fairness_csv)
+        if fairness_df is None or fairness_df.empty:
+            logger.warning("[WARNING] cluster_evidence: fairness_by_cluster.csv is empty")
+            continue
+
+        result = save_cluster_profile_bars(fairness_df, out_dir / f"{dataset}_cluster_profile.png")
+        _report(f"{dataset}_cluster_profile", result)
+
+        result = save_cluster_fairness_heatmap(
+            fairness_df, out_dir / f"{dataset}_cluster_fairness.png"
+        )
+        _report(f"{dataset}_cluster_fairness", result)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -659,6 +840,13 @@ def main() -> None:
         out_base / "fairness_comparison",
         comparison_config,
     )
+    _generate_model_stability_plots(
+        run_dir,
+        fairness_comparison_full_df,
+        out_base / "model_stability",
+        comparison_config,
+    )
+    _generate_cluster_evidence_plots(out_base / "cluster_evidence")
 
     logger.info("[SUCCESS] Dissertation figures generated: output_dir=%s", out_base)
 

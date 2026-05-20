@@ -37,9 +37,10 @@ def tiny_cardiac_processed(tmp_path):
         )
 
     processed = tmp_path / "processed"
-    processed.mkdir()
-    _make(n_train).to_csv(processed / "cleveland_train_scaled.csv", index=False)
-    _make(n_test).to_csv(processed / "cleveland_test_scaled.csv", index=False)
+    dataset_dir = processed / "cleveland"
+    dataset_dir.mkdir(parents=True)
+    _make(n_train).to_csv(dataset_dir / "cleveland_train_scaled.csv", index=False)
+    _make(n_test).to_csv(dataset_dir / "cleveland_test_scaled.csv", index=False)
     return processed
 
 

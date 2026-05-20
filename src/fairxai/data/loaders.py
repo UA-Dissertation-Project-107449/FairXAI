@@ -57,6 +57,7 @@ class CardiacDataLoader:
         df = self._apply_sensitive_standardization(df, dataset_name)
         df = self._apply_target_standardization(df, dataset_name)
         df = self._apply_feature_mapping(df, dataset_name)
+        df = self._apply_clinical_value_maps(df, dataset_name)
         self._log_unmapped_columns(df, dataset_name)
         self._log_missing_core_columns(df, dataset_name)
         df = self._apply_feature_rules(df, dataset_name)
@@ -215,6 +216,38 @@ class CardiacDataLoader:
             if drop_cols:
                 df = df.drop(columns=drop_cols)
 
+        return df
+
+    def _apply_clinical_value_maps(self, df: pd.DataFrame, dataset_name: str) -> pd.DataFrame:
+        """Encode string-coded clinical categoricals to the canonical numeric scheme.
+
+        Datasets such as Kaggle Heart store cp/restecg/exang/slope as strings
+        ('ATA', 'Normal', ...); Cleveland already uses numeric codes.  Only
+        object-dtype columns are mapped, so numeric source columns pass through
+        untouched.  Mappings come from ``value_map`` entries in the feature map.
+        """
+        if not self.feature_map:
+            return df
+
+        for entry in self.feature_map.get("common", {}).values():
+            canonical = entry.get("canonical")
+            value_map = entry.get("value_map")
+            if not canonical or not value_map or canonical not in df.columns:
+                continue
+            col = df[canonical]
+            if pd.api.types.is_numeric_dtype(col):
+                continue
+            normalized = col.astype(str).str.strip()
+            mapped = normalized.map({str(k): v for k, v in value_map.items()})
+            unmapped = sorted(normalized[mapped.isna() & col.notna()].unique())
+            if unmapped:
+                logging.warning(
+                    "[%s] %s: unmapped categorical values %s (set to NaN)",
+                    dataset_name,
+                    canonical,
+                    unmapped,
+                )
+            df[canonical] = mapped
         return df
 
     def _log_unmapped_columns(self, df: pd.DataFrame, dataset_name: str) -> None:

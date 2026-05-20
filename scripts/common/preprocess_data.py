@@ -408,6 +408,22 @@ def main():
                 )
                 continue
 
+            # Numeric ordinal encoding of age_group for use as a model feature.
+            # Mirrors sex_bin: the string age_group column stays for fairness
+            # grouping/plots; age_group_idx is the model-usable numeric form.
+            # Bin order is derived from mean age within each bin, so it is correct
+            # for every binning strategy without parsing label strings.
+            if "age_group" in df_clean.columns and "age_raw" in df_clean.columns:
+                age_order = (
+                    df_clean.groupby("age_group", observed=True)["age_raw"]
+                    .mean()
+                    .sort_values()
+                    .index.tolist()
+                )
+                age_rank = {group: idx for idx, group in enumerate(age_order)}
+                df_clean["age_group_idx"] = df_clean["age_group"].map(age_rank).astype(int)
+                logging.info("  age_group_idx encoded: %s", age_rank)
+
             # Step 2: Stratified train/test split
             logging.info("Stratified train/test split:")
             train_df, test_df = preprocessor.stratified_split(
@@ -472,10 +488,10 @@ def main():
             X_test_scaled_df = pd.DataFrame(X_test_scaled, columns=feature_names)
 
             sens_cols_train = available_sensitive(train_df, sensitive_attrs) + [
-                c for c in ["sex_extended", "sex_bin"] if c in train_df.columns
+                c for c in ["sex_extended", "sex_bin", "age_group_idx"] if c in train_df.columns
             ]
             sens_cols_test = available_sensitive(test_df, sensitive_attrs) + [
-                c for c in ["sex_extended", "sex_bin"] if c in test_df.columns
+                c for c in ["sex_extended", "sex_bin", "age_group_idx"] if c in test_df.columns
             ]
 
             # Avoid duplicate column names in scaled outputs (which pandas later

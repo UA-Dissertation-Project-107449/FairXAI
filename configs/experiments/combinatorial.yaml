@@ -16,7 +16,7 @@ accelerator: auto
 # Restore --max-samples or remove the default to run on full 70k (HPC recommended).
 datasets:
   - cleveland
-  # - kaggle_heart
+  - kaggle_heart
   # - cardio70k
 
 # Age binning strategies

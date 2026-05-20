@@ -38,12 +38,16 @@ from fairxai.experiments.data_io import (
     default_exclude_columns,
 )
 from fairxai.experiments.data_io import load_schema_config as load_schema_config_shared
+from fairxai.experiments.data_io import (
+    resolve_dataset_dir,
+    resolve_default_binning,
+)
 from fairxai.training.grid_search import run_hpo, save_hpo_results
 from fairxai.utils.config import load_yaml_config
 
 
 def _load_processed_data(dataset: str, binning: str, processed_dir: Path):
-    data_dir = processed_dir / f"{dataset}_{binning}"
+    data_dir = resolve_dataset_dir(processed_dir, dataset, binning)
     train_path = data_dir / f"{dataset}_train.csv"
     if not train_path.exists():
         raise FileNotFoundError(
@@ -75,8 +79,8 @@ def main():
     )
     parser.add_argument(
         "--binning",
-        default="fixed_10yr",
-        help="Binning strategy for processed data (default: fixed_10yr)",
+        default=None,
+        help="Binning strategy for processed data (default: runtime.default_binning in pipeline config)",
     )
     parser.add_argument(
         "--dry-run",
@@ -138,7 +142,7 @@ def main():
 
     datasets = args.datasets or pipeline_cfg["runtime"]["datasets"]
     model_types = args.model_types or list(hpo_cfg.get("grids", {}).keys())
-    binning = args.binning
+    binning = args.binning or resolve_default_binning(pipeline_cfg)
 
     scoring = hpo_cfg.get("scoring", "f1")
     cv_folds = int(hpo_cfg.get("cv_folds", 5))

@@ -50,7 +50,7 @@ clustering_methods:
     library: "sklearn"
     description: "Density-based clustering (finds arbitrary shapes)"
     parameters:
-      eps: [0.3, 0.5, 0.7, 1.0]  # Grid search
+      eps: [0.5, 1.0, 1.5, 2.0, 3.0, 5.0]  # Extended: 13D StandardScaler space has expected L2 ~5.1, original [0.3-1.0] found 0 clusters
       min_samples: [5, 10, 15]
       metric: "euclidean"
     selection_method: "silhouette"

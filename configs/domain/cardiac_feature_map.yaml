@@ -36,6 +36,13 @@ common:
   cp:
     canonical: cp
     aliases: [cp, ChestPainType]
+    # String-coded clinical categoricals (e.g. Kaggle Heart) -> Cleveland 0-based
+    # numeric scheme. Numeric source columns (Cleveland) pass through untouched.
+    value_map:
+      TA: 0    # typical angina
+      ATA: 1   # atypical angina
+      NAP: 2   # non-anginal pain
+      ASY: 3   # asymptomatic
   trestbps:
     canonical: trestbps
     aliases: [trestbps, RestingBP]
@@ -48,18 +55,29 @@ common:
   restecg:
     canonical: restecg
     aliases: [restecg, RestingECG]
+    value_map:
+      Normal: 0  # normal
+      ST: 1      # ST-T wave abnormality
+      LVH: 2     # left ventricular hypertrophy
   thalach:
     canonical: thalach
     aliases: [thalach, MaxHR]
   exang:
     canonical: exang
     aliases: [exang, ExerciseAngina]
+    value_map:
+      N: 0  # no
+      Y: 1  # yes
   oldpeak:
     canonical: oldpeak
     aliases: [oldpeak, Oldpeak]
   slope:
     canonical: slope
     aliases: [slope, ST_Slope]
+    value_map:
+      Up: 0    # upsloping
+      Flat: 1  # flat
+      Down: 2  # downsloping
   ca:
     canonical: ca
     aliases: [ca]

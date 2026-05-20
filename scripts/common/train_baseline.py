@@ -31,7 +31,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from fairxai.cli.runner_base import load_pipeline_config, resolve_project_root, setup_phase_logging
 from fairxai.data.feature_selection import build_feature_set
-from fairxai.experiments.data_io import build_schema_excludes, resolve_base_dataset
+from fairxai.experiments.data_io import (
+    build_schema_excludes,
+    resolve_base_dataset,
+    resolve_dataset_dir,
+    resolve_default_binning,
+)
 from fairxai.explainability.tabular import (
     build_lime_explainer,
     lime_explain_instance,
@@ -343,12 +348,6 @@ def _resolve_int_setting(
     return int(default_value)
 
 
-def _is_selected_dataset(dataset_name: str, selected_datasets: Optional[set[str]]) -> bool:
-    if not selected_datasets:
-        return True
-    return any(dataset_name == d or dataset_name.startswith(f"{d}_") for d in selected_datasets)
-
-
 def _apply_model_thread_override(
     model_class: Any, model_params: dict, model_n_jobs: Optional[int]
 ) -> dict:
@@ -616,18 +615,28 @@ def main():
     logging.info(f"  Model n_jobs override: {args.model_n_jobs}")
     logging.info(f"  CV n_jobs: {cv_n_jobs}")
 
-    # Find processed datasets
-    train_files = list(data_processed.glob("*_train_scaled.csv"))
-    selected_datasets = set(d.strip() for d in args.datasets) if args.datasets else None
-    if selected_datasets:
-        train_files = [
-            p
-            for p in train_files
-            if _is_selected_dataset(p.stem.replace("_train_scaled", ""), selected_datasets)
-        ]
+    # Find processed datasets via the shared canonical-layout resolver.
+    default_binning = resolve_default_binning(pipeline_cfg)
+    configured_datasets = list(pipeline_cfg.get("runtime", {}).get("datasets", []))
+    if args.datasets:
+        selected = {d.strip() for d in args.datasets}
+        configured_datasets = [d for d in configured_datasets if d in selected] or sorted(selected)
+
+    train_files = []
+    for dataset_name in configured_datasets:
+        dataset_dir = resolve_dataset_dir(data_processed, dataset_name, default_binning)
+        candidate = dataset_dir / f"{dataset_name}_train_scaled.csv"
+        if candidate.exists():
+            train_files.append(candidate)
+        else:
+            logging.warning(
+                "No processed train file for dataset=%s (looked in %s)",
+                dataset_name,
+                dataset_dir,
+            )
 
     if not train_files:
-        logging.error(f"No training datasets found in {data_processed}")
+        logging.error(f"No training datasets found under {data_processed}")
         logging.error(
             "Please run scripts/common/preprocess_data.py --pipeline %s first." % pipeline
         )
@@ -687,6 +696,14 @@ def main():
         )
         sensitive_cols = [col for col in sensitive_candidates if col in train_df.columns]
 
+        # Model-feature view: age_group is a string bin label (kept above for
+        # fairness grouping). Its model-usable form is the numeric ordinal
+        # age_group_idx, so build_feature_set must select that column instead.
+        model_sensitive_cols = [
+            "age_group_idx" if c == "age_group" and "age_group_idx" in train_df.columns else c
+            for c in sensitive_cols
+        ]
+
         base_dataset = resolve_base_dataset(schema_cfg, dataset_name)
         schema_exclude = build_schema_excludes(schema_cfg, base_dataset)
 
@@ -708,7 +725,7 @@ def main():
         if fs_mode != "rfe_top_k":
             X_train, feature_cols = build_feature_set(
                 X_train_full,
-                sensitive_attrs=sensitive_cols,
+                sensitive_attrs=model_sensitive_cols,
                 mode=fs_mode,
                 top_k=rfe_top_k,
                 trained_model=None,

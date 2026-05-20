@@ -348,6 +348,9 @@ def compare_experiments(run_id: str, verbose: int = 0):
     args.extend(_verbose_flags(verbose))
     _run_script(script, args, os.environ.copy())
 
+    grouping_script = ROOT_DIR / "scripts" / "studies" / "run_grouping_analysis.py"
+    _run_script(grouping_script, ["--run-id", run_id], os.environ.copy())
+
     plots_script = ROOT_DIR / "scripts" / "studies" / "generate_dissertation_plots.py"
     plots_args = ["--run-id", run_id, "--config", COMPARISON_CONFIG]
     _run_script(plots_script, plots_args, os.environ.copy())

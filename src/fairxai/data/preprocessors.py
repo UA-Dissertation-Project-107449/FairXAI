@@ -200,7 +200,10 @@ class CardiacPreprocessor:
             )
         )
 
-        # Sensitive / demographic columns — excluded to prevent leakage
+        # Sensitive / demographic columns — excluded from the scaled feature
+        # matrix. They are re-attached unscaled in the save step so downstream
+        # stages pick them up explicitly. sex_bin / age_group_idx are the
+        # numeric encodings of the demographic attributes.
         exclude_cols = list(
             dict.fromkeys(
                 exclude_cols
@@ -208,6 +211,7 @@ class CardiacPreprocessor:
                 + [
                     "sex_extended",
                     "sex_bin",
+                    "age_group_idx",
                 ]
             )
         )

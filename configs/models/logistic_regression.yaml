@@ -11,7 +11,7 @@ description: |
 hyperparameters:
   # Regularization
   penalty: "l2"
-  C: 1.0
+  C: 0.1  # Tightened from 1.0: prevents perfect training-set separation on small synthetic-balanced data (Cleveland + SMOTE/ROS/RUS/ADASYN)
   
   # Optimization
   solver: "lbfgs"
