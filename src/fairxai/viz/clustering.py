@@ -27,6 +27,45 @@ _CLUSTER_PALETTE = [
     "#CC6677",
 ]
 
+_MAX_CLUSTER_SHARE_FOR_EVIDENCE = 0.80
+
+
+def _remove_stale_output(out_path: Path, caller: str) -> None:
+    """Delete a previous figure when the current evidence is invalid."""
+    try:
+        if out_path.exists():
+            out_path.unlink()
+            logger.warning("[SKIP] %s: removed stale figure %s", caller, out_path)
+    except OSError as exc:
+        logger.warning("[SKIP] %s: could not remove stale figure %s: %s", caller, out_path, exc)
+
+
+def _has_invalid_cluster_balance(fairness_df: pd.DataFrame, caller: str) -> bool:
+    if "cluster_id" not in fairness_df.columns or "n_samples" not in fairness_df.columns:
+        return False
+    sizes = (
+        fairness_df.assign(
+            cluster_id=pd.to_numeric(fairness_df["cluster_id"], errors="coerce"),
+            n_samples=pd.to_numeric(fairness_df["n_samples"], errors="coerce"),
+        )
+        .dropna(subset=["cluster_id", "n_samples"])
+        .groupby("cluster_id")["n_samples"]
+        .first()
+    )
+    total = float(sizes.sum())
+    if total <= 0 or len(sizes) < 2:
+        logger.warning("[SKIP] %s: fewer than two valid clusters", caller)
+        return True
+    max_share = float(sizes.max() / total)
+    if max_share > _MAX_CLUSTER_SHARE_FOR_EVIDENCE:
+        logger.warning(
+            "[SKIP] %s: dominant cluster contains %.1f%% of samples; clustering evidence is fragile",
+            caller,
+            max_share * 100,
+        )
+        return True
+    return False
+
 
 def save_cluster_profile_bars(
     fairness_df: pd.DataFrame,
@@ -47,10 +86,15 @@ def save_cluster_profile_bars(
     required = {"cluster_id", "n_samples", "dp_max_diff"}
     if fairness_df is None or fairness_df.empty:
         logger.warning("[SKIP] save_cluster_profile_bars: empty dataframe")
+        _remove_stale_output(out_path, "save_cluster_profile_bars")
         return None
     if not required.issubset(fairness_df.columns):
         missing = required - set(fairness_df.columns)
         logger.warning("[SKIP] save_cluster_profile_bars: missing columns %s", missing)
+        _remove_stale_output(out_path, "save_cluster_profile_bars")
+        return None
+    if _has_invalid_cluster_balance(fairness_df, "save_cluster_profile_bars"):
+        _remove_stale_output(out_path, "save_cluster_profile_bars")
         return None
 
     df = fairness_df.copy()
@@ -140,10 +184,15 @@ def save_cluster_fairness_heatmap(
     required = {"cluster_id", "sensitive_attr", "dp_max_diff", "eo_tpr_diff", "eo_fpr_diff"}
     if fairness_df is None or fairness_df.empty:
         logger.warning("[SKIP] save_cluster_fairness_heatmap: empty dataframe")
+        _remove_stale_output(out_path, "save_cluster_fairness_heatmap")
         return None
     if not required.issubset(fairness_df.columns):
         missing = required - set(fairness_df.columns)
         logger.warning("[SKIP] save_cluster_fairness_heatmap: missing columns %s", missing)
+        _remove_stale_output(out_path, "save_cluster_fairness_heatmap")
+        return None
+    if _has_invalid_cluster_balance(fairness_df, "save_cluster_fairness_heatmap"):
+        _remove_stale_output(out_path, "save_cluster_fairness_heatmap")
         return None
 
     df = fairness_df.copy()

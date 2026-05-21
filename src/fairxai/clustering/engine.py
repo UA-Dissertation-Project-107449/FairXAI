@@ -18,10 +18,18 @@ from .models import ClusterDiagnostics, ClusterResult
 logger = logging.getLogger(__name__)
 
 _DEFAULT_EXCLUDE = ["heart_disease", "age_group", "sex", "ethnicity", "group_cluster"]
+_DEFAULT_MIN_SILHOUETTE = 0.05
+_DEFAULT_MAX_DBSCAN_NOISE_FRACTION = 0.30
 
 
 class ClusteringError(ValueError):
     """Raised when clustering cannot produce a valid solution."""
+
+    def __init__(
+        self, message: str, diagnostics: Optional[List[ClusterDiagnostics]] = None
+    ) -> None:
+        super().__init__(message)
+        self.diagnostics = diagnostics or []
 
 
 class ClusteringEngine:
@@ -111,11 +119,18 @@ class ClusteringEngine:
         if not candidates:
             raise ClusteringError(
                 "No clustering method produced a valid solution "
-                "(check data size, DBSCAN eps, or n_clusters grid)."
+                "(check data size, DBSCAN eps, or n_clusters grid).",
+                diagnostics=all_diagnostics,
             )
 
         # Pick overall winner: highest silhouette
         best_sil, best_labels, best_diag = max(candidates, key=lambda t: t[0])
+        if best_sil < _DEFAULT_MIN_SILHOUETTE:
+            raise ClusteringError(
+                "No clustering method produced a stable enough solution "
+                f"(best silhouette={best_sil:.4f}, minimum={_DEFAULT_MIN_SILHOUETTE:.2f}).",
+                diagnostics=all_diagnostics,
+            )
 
         group_cluster = pd.Series(best_labels, index=df.index, name="group_cluster", dtype=int)
 
@@ -239,6 +254,9 @@ class ClusteringEngine:
         params = cfg.get("parameters", {})
         eps_grid = params.get("eps", [0.3, 0.5, 0.7, 1.0])
         min_samples_grid = params.get("min_samples", [5, 10, 15])
+        max_noise_fraction = float(
+            params.get("max_noise_fraction", _DEFAULT_MAX_DBSCAN_NOISE_FRACTION)
+        )
 
         diagnostics = []
         best: Optional[tuple] = None
@@ -251,6 +269,7 @@ class ClusteringEngine:
                     # Filter noise points (label == -1) for silhouette
                     mask = labels_raw != -1
                     n_noise = (~mask).sum()
+                    noise_fraction = float(n_noise / n_samples) if n_samples else 1.0
                     unique_labels = np.unique(labels_raw[mask])
                     n_clusters = len(unique_labels)
 
@@ -268,20 +287,37 @@ class ClusteringEngine:
                     # Re-label so cluster ids are 0..k-1 (noise stays excluded)
                     labels_clean = labels_raw[mask]
                     sil = silhouette_score(X[mask], labels_clean)
+                    if noise_fraction > max_noise_fraction:
+                        diag = ClusterDiagnostics(
+                            method="dbscan",
+                            params={"eps": eps, "min_samples": min_s},
+                            n_clusters=n_clusters,
+                            silhouette=sil,
+                            note=(
+                                f"rejected: noise_fraction={noise_fraction:.1%} "
+                                f"> max_noise_fraction={max_noise_fraction:.1%}"
+                            ),
+                        )
+                        diagnostics.append(diag)
+                        continue
+
                     diag = ClusterDiagnostics(
                         method="dbscan",
                         params={"eps": eps, "min_samples": min_s},
-                        n_clusters=n_clusters,
+                        n_clusters=n_clusters + int(n_noise > 0),
                         silhouette=sil,
-                        note=f"{n_noise} noise points excluded",
+                        note=(
+                            f"{n_noise} noise points kept as noise cluster"
+                            if n_noise > 0
+                            else "no noise"
+                        ),
                     )
                     diagnostics.append(diag)
 
-                    # Remap full labels: noise → most common cluster
+                    # Keep DBSCAN noise separate instead of folding it into the largest cluster.
                     relabeled = labels_raw.copy()
                     if n_noise > 0:
-                        most_common = int(np.bincount(labels_raw[mask]).argmax())
-                        relabeled[~mask] = most_common
+                        relabeled[~mask] = n_clusters
 
                     if best is None or sil > best[0]:
                         best = (sil, relabeled, diag)

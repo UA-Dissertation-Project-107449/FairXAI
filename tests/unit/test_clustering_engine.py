@@ -77,6 +77,54 @@ class TestClusteringEngineErrors:
         with pytest.raises(ClusteringError):
             engine.fit(df)  # All numeric excluded or non-numeric
 
+    def test_dbscan_high_noise_candidate_is_rejected(self):
+        rng = np.random.default_rng(7)
+        cluster_a = rng.normal(0, 0.02, size=(6, 2))
+        cluster_b = rng.normal(3, 0.02, size=(6, 2))
+        noise = rng.uniform(-20, 20, size=(40, 2))
+        X = np.vstack([cluster_a, cluster_b, noise])
+        df = pd.DataFrame(X, columns=["feat_a", "feat_b"])
+        cfg = {
+            "dbscan": {
+                "parameters": {
+                    "eps": [0.25],
+                    "min_samples": [3],
+                    "max_noise_fraction": 0.30,
+                }
+            }
+        }
+        engine = ClusteringEngine(config=cfg)
+
+        with pytest.raises(ClusteringError) as exc:
+            engine.fit(df, feature_cols=["feat_a", "feat_b"])
+
+        notes = [d.note or "" for d in exc.value.diagnostics]
+        assert any("rejected: noise_fraction" in note for note in notes)
+
+    def test_dbscan_keeps_accepted_noise_as_separate_cluster(self):
+        rng = np.random.default_rng(9)
+        cluster_a = rng.normal(0, 0.03, size=(12, 2))
+        cluster_b = rng.normal(3, 0.03, size=(12, 2))
+        noise = np.array([[12.0, 12.0], [-12.0, -12.0]])
+        X = np.vstack([cluster_a, cluster_b, noise])
+        df = pd.DataFrame(X, columns=["feat_a", "feat_b"])
+        cfg = {
+            "dbscan": {
+                "parameters": {
+                    "eps": [0.35],
+                    "min_samples": [3],
+                    "max_noise_fraction": 0.30,
+                }
+            }
+        }
+        engine = ClusteringEngine(config=cfg)
+        result = engine.fit(df, feature_cols=["feat_a", "feat_b"])
+
+        counts = result.group_cluster.value_counts()
+        assert result.method == "dbscan"
+        assert counts.min() == 2
+        assert result.n_clusters == 3
+
 
 class TestClusteringEngineDiagnostics:
     def test_diagnostics_saved_to_csv(self, tmp_path):
