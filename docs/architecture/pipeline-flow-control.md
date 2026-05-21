@@ -30,15 +30,14 @@ load (1)
   └─ profile (2)
         ├─ recommend (3)                  [independent branch]
         └─ preprocess (4)
-              └─ hpo_study (5)            [optional]
-                    └─ feature_selection_study (6) [optional]
+              └─ hpo_study (5) and feature_selection_study (6) [optional; may run in parallel]
                           └─ selector_contract (internal wiring helper)
                                 └─ train (7)
                                       └─ assess (8)
-                                            ├─ attribute_binning (9)  [optional]
-                                            ├─ mitigation (10)        [optional]
-                                            └─ combinatorial (11)     [optional]
-                                                  └─ compare (12)      [optional]
+                                            ├─ attribute_binning (9) [optional]
+                                            ├─ mitigation (10)       [optional]
+                                            ├─ combinatorial (11)    [optional]
+                                            └─ compare (12)          [optional; waits for active experiment stages]
 ```
 
 ---
@@ -58,7 +57,7 @@ load (1)
 | Skip mitigation | `--no-mitigation` | `RUN_MITIGATION=false` | Skip stage 10 even if in active range. |
 | Skip combinatorial | `--no-combinatorial` | `RUN_COMBINATORIAL=false` | Skip stage 11 even if in active range. |
 | Skip comparison | `--no-comparison` | `RUN_COMPARISON=false` | Skip stage 12 even if in active range. |
-| Verbose | `-v` / `--verbose` | `VERBOSE=true` | Verbose logging. |
+| Verbose | `-v` / `--verbose` | `VERBOSE=0/1/2` | Verbosity level; bash also accepts legacy `true`/`false`. |
 
 ### Dataset and model override precedence
 
