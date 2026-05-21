@@ -11,8 +11,8 @@ from fairxai.comparison.metric_tables import (
     build_fairness_evidence_summary,
     build_group_metric_deltas,
 )
-from fairxai.viz.clustering import save_cluster_fairness_heatmap, save_cluster_profile_bars
 from fairxai.viz import fairness_comparison as fairness_comparison_viz
+from fairxai.viz.clustering import save_cluster_fairness_heatmap, save_cluster_profile_bars
 from fairxai.viz.fairness import (
     plot_bias_amplification_waterfall,
     plot_fairness_metric_heatmap,

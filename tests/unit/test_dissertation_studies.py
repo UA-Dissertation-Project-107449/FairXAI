@@ -12,7 +12,9 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from scripts.studies.generate_dissertation_plots import _generate_model_stability_plots
+from scripts.studies.generate_dissertation_plots import (  # noqa: E402
+    _generate_model_stability_plots,
+)
 
 
 def test_baseline_model_comparison_merges_overfit_by_dataset_and_model(tmp_path):
