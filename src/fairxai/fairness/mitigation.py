@@ -416,6 +416,44 @@ class MitigationEngine:
         self.inprocessing = InProcessingMitigation()
         self.postprocessing = PostProcessingMitigation()
 
+    @staticmethod
+    def _positive_class_scores(model, X_test) -> np.ndarray | None:
+        """Extract usable positive-class scores for AUC, if available."""
+        if model is None:
+            return None
+
+        # Local wrappers store the sklearn estimator in .model.
+        wrapped = getattr(model, "model", None)
+        if wrapped is not None and wrapped is not model:
+            scores = MitigationEngine._positive_class_scores(wrapped, X_test)
+            if scores is not None:
+                return scores
+
+        # Fairlearn in-processing models keep fitted base estimators in predictors_.
+        predictors = getattr(model, "predictors_", None)
+        if predictors is not None:
+            for predictor in predictors:
+                scores = MitigationEngine._positive_class_scores(predictor, X_test)
+                if scores is not None:
+                    return scores
+
+        try:
+            if hasattr(model, "predict_proba"):
+                proba = model.predict_proba(X_test)
+                proba = np.asarray(proba)
+                if proba.ndim > 1:
+                    proba = proba[:, 1]
+                return proba.astype(float)
+            if hasattr(model, "decision_function"):
+                scores = np.asarray(model.decision_function(X_test))
+                if scores.ndim > 1:
+                    scores = scores[:, 1]
+                return scores.astype(float)
+        except Exception as exc:
+            logger.warning("Could not extract positive-class scores: %s", exc)
+
+        return None
+
     def _compute_metrics(self, y_test, y_pred, y_proba=None) -> Dict[str, float]:
         """Compute standard evaluation metrics.
 
@@ -442,15 +480,22 @@ class MitigationEngine:
             "f1_score": float(f1_score(y_test, y_pred, zero_division=0)),
         }
 
-        # Add AUC-ROC if probabilities available
-        if y_proba is not None and len(np.unique(y_proba)) > 1:
+        # Add AUC-ROC if probability/score values are available.
+        # Missing AUC is NaN, not 0.0: zero is a real, catastrophic AUC value.
+        y_score = None
+        if y_proba is not None:
+            y_score = np.asarray(y_proba, dtype=float).reshape(-1)
+            if len(y_score) != len(y_test) or not np.isfinite(y_score).all():
+                y_score = None
+
+        if y_score is not None and len(np.unique(y_score)) > 1:
             try:
-                metrics["auc_roc"] = float(roc_auc_score(y_test, y_proba))
+                metrics["auc_roc"] = float(roc_auc_score(y_test, y_score))
             except ValueError:
-                logger.warning("Could not compute AUC-ROC, setting to 0.0")
-                metrics["auc_roc"] = 0.0
+                logger.warning("Could not compute AUC-ROC; leaving it unavailable")
+                metrics["auc_roc"] = np.nan
         else:
-            metrics["auc_roc"] = 0.0
+            metrics["auc_roc"] = np.nan
 
         return metrics
 
@@ -889,18 +934,8 @@ class MitigationEngine:
         # Predict on test set
         y_pred = model.predict(X_test)
 
-        # Get probabilities (Fairlearn models may have multiple predictors)
-        y_proba = None
-        try:
-            if hasattr(model, "predictors_") and len(model.predictors_) > 0:
-                predictor = model.predictors_[0]
-                if hasattr(predictor, "predict_proba"):
-                    y_proba = predictor.predict_proba(X_test)[:, 1]
-            elif hasattr(model, "predict_proba"):
-                y_proba = model.predict_proba(X_test)[:, 1]
-        except Exception as e:
-            logger.warning(f"Could not extract probabilities: {e}")
-            y_proba = None
+        # Get probability/score values (Fairlearn models may have multiple predictors).
+        y_proba = self._positive_class_scores(model, X_test)
 
         # Calculate metrics using helper method
         test_metrics = self._compute_metrics(y_test, y_pred, y_proba)
@@ -943,11 +978,7 @@ class MitigationEngine:
                     "skipping threshold optimizer and returning baseline predictions."
                 )
                 y_pred = base_model.predict(X_test)
-                y_proba = None
-                if hasattr(base_model, "model") and hasattr(base_model.model, "predict_proba"):
-                    y_proba = base_model.model.predict_proba(X_test)[:, 1]
-                elif hasattr(base_model, "predict_proba"):
-                    y_proba = base_model.predict_proba(X_test)[:, 1]
+                y_proba = self._positive_class_scores(base_model, X_test)
                 test_metrics = self._compute_metrics(y_test, y_pred, y_proba)
                 return {
                     "model": base_model,
@@ -982,12 +1013,11 @@ class MitigationEngine:
         # Predict on test set
         y_pred = postprocessor.predict(X_test, sensitive_features=sensitive_test[sensitive_attr])
 
-        # Get probabilities from base model
-        y_proba = None
-        if hasattr(base_model, "model") and hasattr(base_model.model, "predict_proba"):
-            y_proba = base_model.model.predict_proba(X_test)[:, 1]
-        elif hasattr(base_model, "predict_proba"):
-            y_proba = base_model.predict_proba(X_test)[:, 1]
+        # ThresholdOptimizer predicts labels only; use the underlying estimator's
+        # scores for AUC when available.
+        y_proba = self._positive_class_scores(estimator_for_post, X_test)
+        if y_proba is None:
+            y_proba = self._positive_class_scores(base_model, X_test)
 
         # Calculate metrics using helper method
         test_metrics = self._compute_metrics(y_test, y_pred, y_proba)

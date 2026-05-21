@@ -337,6 +337,13 @@ def build_fairness_evidence_summary(
         eligible = df
         selection_reason = "fallback: best available mitigation row"
 
+    eligible_with_auc = eligible[eligible["delta_auc"].notna()]
+    if not eligible_with_auc.empty:
+        eligible = eligible_with_auc
+        selection_reason = f"{selection_reason} and AUC available"
+    else:
+        selection_reason = f"{selection_reason}; AUC unavailable"
+
     eligible = eligible.sort_values(
         ["delta_fairness_gap", "delta_recall", "delta_f1"],
         ascending=[False, False, False],
@@ -378,6 +385,7 @@ def build_fairness_evidence_summary(
                 "delta_accuracy": row.get("delta_accuracy"),
                 "groups_improved": improved,
                 "groups_worsened": worsened,
+                "auc_unavailable": pd.isna(row.get("delta_auc")),
                 "selection_reason": selection_reason,
             }
         )

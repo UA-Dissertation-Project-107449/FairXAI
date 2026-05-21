@@ -260,12 +260,16 @@ def save_mitigation_delta_matrix(full_df: pd.DataFrame, output_file):
     max_abs = max(max_abs, 1.0)
 
     width, height = heatmap_size(plot_values.index, len(plot_values.columns), 16, 5)
+    cmap = plt.get_cmap("RdYlGn").copy()
+    cmap.set_bad("#D9D9D9")
+
     fig, ax = plt.subplots(figsize=(width, height))
     sns.heatmap(
         plot_values,
         annot=True,
         fmt=".1f",
-        cmap="RdYlGn",
+        cmap=cmap,
+        mask=plot_values.isna(),
         center=0,
         vmin=-max_abs,
         vmax=max_abs,
@@ -273,6 +277,7 @@ def save_mitigation_delta_matrix(full_df: pd.DataFrame, output_file):
         cbar_kws={"label": "Delta vs baseline (percentage points)"},
         ax=ax,
     )
+    ax.set_facecolor("#D9D9D9")
     ax.set_title("Mitigation Effects by Metric (positive = improvement)", fontsize=12)
     ax.set_xlabel("Metric")
     ax.set_ylabel("Mitigation")
@@ -906,12 +911,16 @@ def save_binning_strategy_delta_matrix(
     max_abs = max(max_abs, 1.0)
 
     width, height = heatmap_size(plot_values.index, len(plot_values.columns), 16, 5)
+    cmap = plt.get_cmap("RdYlGn").copy()
+    cmap.set_bad("#D9D9D9")
+
     fig, ax = plt.subplots(figsize=(width, height))
     sns.heatmap(
         plot_values,
         annot=True,
         fmt=".1f",
-        cmap="RdYlGn",
+        cmap=cmap,
+        mask=plot_values.isna(),
         center=0,
         vmin=-max_abs,
         vmax=max_abs,
@@ -919,6 +928,7 @@ def save_binning_strategy_delta_matrix(
         cbar_kws={"label": "Delta vs baseline (percentage points)"},
         ax=ax,
     )
+    ax.set_facecolor("#D9D9D9")
     ax.set_title(
         "Binning Strategy Effects by Metric\n(best mitigation per strategy; positive = improvement)",
         fontsize=12,
