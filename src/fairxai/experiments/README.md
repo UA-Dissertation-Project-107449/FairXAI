@@ -1,75 +1,48 @@
 # Experiments Module
 
-Experiment utilities for FairXAI: artifact versioning, binning analysis, and
-shared data I/O helpers used across experiment scripts.
+Reusable experiment helpers for attribute binning, versioning, and processed
+data resolution used by scripts under `scripts/experiments/` and `scripts/studies/`.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `versioning.py` | Experiment artifact management (manifests, results, predictions, models, XAI) |
-| `attribute_binning.py` | Config-driven binning strategy analysis and fairness impact scoring |
-| `age_binning.py` | Backward-compatibility shim (re-exports from `attribute_binning`) |
-| `data_io.py` | Shared schema loading and exclude-column helpers for experiment scripts |
-| `__init__.py` | Public re-exports for experiment APIs |
+| `attribute_binning.py` | Binning strategies, repair, scoring, summary reports |
+| `versioning.py` | Experiment output version/run directory helpers |
+| `data_io.py` | Processed dataset directory and default-binning resolution |
+| `__init__.py` | Public exports |
 
-## Key Components
+## Public API
 
+- `create_binning_strategy`
+- `apply_binning`
+- `sensitive_attribute_distribution`
+- `compute_fairness_metrics`
+- `analyze_strategy_comprehensive`
+- `compare_strategies`
+- `compute_strategy_score`
+- `generate_summary_report`
+- `validate_and_repair`
 - `ExperimentVersioning`
-  - Generates experiment IDs
-  - Saves and loads manifests/results/predictions/models
-  - Supports split-aware organization (`holdout` / `cv`) under dataset folders
-  - Creates summaries and supports run archiving patterns used by scripts
 
-- `attribute_binning` API
-  - `create_binning_strategy`
-  - `apply_binning`
-  - `analyze_strategy_comprehensive`
-  - `compare_strategies`
-  - `generate_summary_report`
-  - `validate_and_repair`
+## Config And Artifacts
 
-- `data_io` helpers
-  - `load_schema_config`
-  - `build_schema_excludes`
-  - `default_exclude_columns`
+- Attribute binning config: `configs/experiments/age_binning.yaml`
+- Combinatorial config: `configs/experiments/combinatorial.yaml`
+- Processed data: `data/processed/cardiac/<dataset>_<binning>/`
+- Run-scoped experiments: `output/cardiac/runs/<run_id>/experiments/`
+- Standalone studies: `output/cardiac/studies/<study_type>/`
 
-## Output Organization
-
-Experiment artifacts are expected under run directories such as:
-
-```text
-output/{pipeline}/{latest_run|runs/{run_id}}/experiments/
-├── manifests/{dataset}/{holdout|cv}/
-├── results/{dataset}/{holdout|cv}/
-├── predictions/{dataset}/{holdout|cv}/
-├── models/{dataset}/
-└── xai/{dataset}/{holdout|cv}/{shap|lime}/
-```
-
-## Configuration Inputs
-
-Typical config sources consumed by scripts using this module:
-
-- Experiment configs: `configs/experiments/*.yaml`
-- Pipeline configs: `configs/pipelines/*.yaml`
-- Schema mapping: `configs/schema/{pipeline}.json`
-
-## Usage Example
+## Usage
 
 ```python
-from pathlib import Path
-from fairxai.experiments import ExperimentVersioning, create_binning_strategy
+from fairxai.experiments import apply_binning, create_binning_strategy
 
-versioning = ExperimentVersioning(Path("output/cardiac/latest_run/experiments"))
-exp_id = versioning.generate_experiment_id()
-
-bins, labels = create_binning_strategy(df, "quantile_5", col="age_raw")
+bins, labels = create_binning_strategy(df, "fixed_10yr", col="age")
+df_binned = apply_binning(df, bins, labels, col="age", output_col="age_group_exp")
 ```
 
-## Notes
+## Related
 
-- `attribute_binning.py` is the canonical module; `age_binning.py` is a
-  backward-compatibility shim that re-exports everything from it.
-- Versioning methods are designed to be backward-compatible with recursive
-  loaders for nested output layouts.
+- Attribute binning reference: [../../../docs/reference/attribute-binning.md](../../../docs/reference/attribute-binning.md)
+- Results schema: [../../../docs/reference/results-schema.md](../../../docs/reference/results-schema.md)

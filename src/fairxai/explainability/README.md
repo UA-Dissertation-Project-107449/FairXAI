@@ -1,74 +1,56 @@
 # Explainability Module
 
-Model-agnostic explainability helpers for tabular models in FairXAI.
-The module wraps SHAP and LIME with a stable API and standardized return
-objects so scripts can consume explanations consistently.
+Tabular SHAP and LIME wrappers used by baseline and combinatorial training
+scripts. Counterfactual support remains an explicit placeholder.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `tabular.py` | SHAP and LIME explainers for tabular models, plus counterfactual placeholder |
-| `__init__.py` | Public re-exports for explainability APIs |
+| `tabular.py` | SHAP/LIME dataclasses and helper functions |
+| `__init__.py` | Public exports |
 
 ## Public API
 
-- `shap_explain_tabular(model, data, feature_names=None, max_samples=1000)`
-  - Computes SHAP values on tabular data.
-- `lime_explain_instance(model, data_row, training_data, feature_names=None, class_names=None, num_features=10)`
-  - Computes a LIME explanation for one instance.
-- `counterfactual_stub(*args, **kwargs)`
-  - Placeholder for future counterfactual support.
-
-## Data Classes
-
 - `ShapExplanation`
-  - `shap_values`, `base_values`, `expected_value`, `feature_names`, `data`
 - `LimeExplanation`
-  - `weights`, `intercept`, `score`, `local_pred`
+- `shap_explain_tabular`
+- `lime_explain_instance`
+- `counterfactual_stub`
 
-## Configuration
+## Config And Artifacts
 
-Explainability behavior is configured from YAML in caller scripts, not from
-module-level environment variables.
+XAI is enabled/configured by caller-level YAML:
 
-Typical pipeline config:
+- `configs/pipelines/cardiac.yaml`
+- `configs/experiments/combinatorial.yaml`
 
-```yaml
-xai:
-  enabled: true
-  cv_enabled: true
-  lime_instances: 3
-  cv_lime_instances: 3
-  global_max_samples: 1000
+Typical baseline output:
+
+```text
+output/cardiac/runs/<run_id>/baseline/xai/<dataset>/
+├── holdout/
+└── cv/
 ```
 
-Typical combinatorial config:
-
-```yaml
-xai:
-  enabled: true
-  max_samples: 200
-  lime_instances: 2
-```
-
-## Usage Example
+## Usage
 
 ```python
-from fairxai.explainability import shap_explain_tabular, lime_explain_instance
+from fairxai.explainability import shap_explain_tabular
 
-shap_exp = shap_explain_tabular(model, X_train, max_samples=500)
-lime_exp = lime_explain_instance(model, X_test.iloc[0], X_train)
+explanation = shap_explain_tabular(
+    model=model,
+    data=X_test,
+    feature_names=list(X_test.columns),
+)
 ```
 
-## Dependencies
+## Current Limit
 
-- `shap`
-- `lime`
-- `numpy`
-- `pandas`
+`counterfactual_stub` is intentionally present and unimplemented. The
+counterfactual workstream is deferred rather than silently absent.
 
-## Roadmap
+## Related
 
-- Counterfactual explanations are intentionally not implemented yet.
-- Planned implementation target: Q2 2026 (`counterfactual_stub`).
+- Plots: [../../../docs/reference/plots.md](../../../docs/reference/plots.md)
+- Roadmap: [../../../docs/planning/roadmap.md](../../../docs/planning/roadmap.md)

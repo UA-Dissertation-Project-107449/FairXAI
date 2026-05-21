@@ -1,66 +1,65 @@
 # Pipeline Module
 
-Pipeline orchestration helpers for staged FairXAI execution.
-
-This module defines stage metadata, stage resolution (`resume-from`/`go-until`),
-and checkpoint marker management used by orchestrators.
+Stage registry, aliases, checkpoint marker helpers, and resume validation for
+FairXAI orchestrators.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `stages.py` | Stage registry, resolution helpers, stage-range selection, checkpoint utilities |
-| `__init__.py` | Public re-exports of pipeline stage APIs |
+| `stages.py` | `PipelineStage`, ordered `STAGES`, resolution, ranges, checkpoints |
+| `__init__.py` | Public exports |
 
 ## Public API
 
-- Stage registry and lookups:
-  - `STAGES`
-  - `STAGE_BY_NAME`
-  - `STAGE_BY_NUMBER`
+- `STAGES`
+- `STAGE_BY_NAME`
+- `STAGE_BY_NUMBER`
+- `PipelineStage`
+- `resolve_stage`
+- `get_stage_range`
+- `validate_prior_stages`
+- `mark_stage_complete`
+- `get_completed_stages`
 
-- Data model:
-  - `PipelineStage`
+## Current Stages
 
-- Flow control helpers:
-  - `resolve_stage(identifier)`
-  - `get_stage_range(resume_from=None, go_until=None)`
-
-- Checkpoint helpers:
-  - `mark_stage_complete(run_root, stage)`
-  - `get_completed_stages(run_root)`
-  - `validate_prior_stages(run_root, target_stage, logger=None)`
-
-## Stage Semantics
-
-Stages are ordered and inclusive when selecting ranges:
-
-- `resume_from` starts at the specified stage
-- `go_until` stops after the specified stage
-
-Validation errors are raised if a range is invalid (e.g., start after end).
+| # | Name |
+|---|------|
+| 1 | `load` |
+| 2 | `profile` |
+| 3 | `recommend` |
+| 4 | `preprocess` |
+| 5 | `hpo_study` |
+| 6 | `feature_selection_study` |
+| 7 | `train` |
+| 8 | `assess` |
+| 9 | `attribute_binning` |
+| 10 | `mitigation` |
+| 11 | `combinatorial` |
+| 12 | `compare` |
 
 ## Checkpoint Contract
 
-Completion markers are written under:
+Checkpoint markers live under:
 
 ```text
-{run_root}/.checkpoints/
+output/cardiac/runs/<run_id>/.checkpoints/
 ```
 
-Each stage writes a marker file named with number and stage name (e.g.
-`2_profile.done`). Optional artifact glob checks can also validate stage
-completeness.
+Resume validation is marker-based. Some stages have artifacts, but checkpoint
+markers are the stable orchestration contract.
 
-## Usage Example
+## Usage
 
 ```python
 from fairxai.pipeline import get_stage_range, resolve_stage
 
-stages = get_stage_range(resume_from="profile", go_until="mitigation")
-for stage in stages:
-    print(stage.number, stage.name)
-
-stage = resolve_stage("phase3")
-print(stage.name)  # recommend
+stage = resolve_stage("train")
+window = get_stage_range(resume_from="profile", go_until="assess")
 ```
+
+## Related
+
+- Flow control docs: [../../../docs/architecture/pipeline-flow-control.md](../../../docs/architecture/pipeline-flow-control.md)
+- Cheat sheet: [../../../docs/guides/cheat-sheet.md](../../../docs/guides/cheat-sheet.md)

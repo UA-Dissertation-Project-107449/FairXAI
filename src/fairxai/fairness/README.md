@@ -1,75 +1,49 @@
 # Fairness Module
 
-Fairness evaluation and mitigation for model predictions in FairXAI.
-
-This module provides both post-prediction fairness metrics and mitigation
-techniques spanning pre-processing, in-processing, and post-processing stages.
+Fairness metrics and mitigation engines used by baseline assessment,
+mitigation comparison, combinatorial experiments, clustering, and similarity
+analysis.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `metrics.py` | Group and individual fairness metrics computation |
-| `mitigation.py` | Mitigation techniques and orchestration engine |
-| `__init__.py` | Public re-exports for fairness APIs |
+| `metrics.py` | Group fairness, calibration, individual fairness, summary helpers |
+| `mitigation.py` | Pre-, in-, post-processing mitigation engines |
+| `__init__.py` | Public exports |
 
 ## Public API
 
 - `FairnessMetrics`
-  - Computes demographic parity, equalized odds, and individual fairness metrics.
-
 - `PreProcessingMitigation`
-  - Data-level techniques (e.g., reweighting, SMOTE, ROS/RUS/ADASYN).
-
 - `InProcessingMitigation`
-  - Fairness-aware training with fairlearn reductions.
-
 - `PostProcessingMitigation`
-  - Decision-threshold optimization for fairness constraints.
-
 - `MitigationEngine`
-  - Unified orchestration to apply techniques by stage.
 
-## Fairness Concepts
+## Concepts
 
-- **Demographic parity**: predicted positive rate parity across groups
-- **Equalized odds**: parity of TPR/FPR across groups
-- **Individual fairness**: similar individuals receive similar predictions
+- Group fairness: demographic parity, equalized odds, equal opportunity, predictive parity.
+- Calibration: expected calibration error by group.
+- Individual fairness: k-nearest-neighbor prediction consistency.
+- Mitigation: reweighting, resampling, fairlearn reductions, threshold optimization, and supported combinations.
 
-## Mitigation Stages
+## Config And Artifacts
 
-| Stage | Typical techniques | Dependencies |
-|-------|--------------------|--------------|
-| Pre-processing | Reweighting, SMOTE, ROS, RUS, ADASYN | `imbalanced-learn`, `scikit-learn` |
-| In-processing | Exponentiated Gradient, Grid Search | `fairlearn` |
-| Post-processing | Threshold Optimizer | `fairlearn` |
+- Thresholds: `configs/recommendations/thresholds.yaml`
+- Mitigation config: `configs/experiments/mitigation.yaml`
+- Experiment outputs: `output/cardiac/runs/<run_id>/experiments/`
+- Baseline fairness outputs: `output/cardiac/runs/<run_id>/baseline/`
 
-## Usage Example
+## Usage
 
 ```python
-from fairxai.fairness import FairnessMetrics, MitigationEngine
+from fairxai.fairness import FairnessMetrics
 
 metrics = FairnessMetrics(sensitive_attributes=["age_group", "sex"])
-results = metrics.calculate_all_metrics(predictions_df)
-
-engine = MitigationEngine()
-mitigated = engine.apply_technique(
-    technique_name="exponentiated_gradient",
-    stage="in-processing",
-    X_train=X_train,
-    y_train=y_train,
-    X_test=X_test,
-    y_test=y_test,
-    sensitive_train=sensitive_train,
-    sensitive_test=sensitive_test,
-    sensitive_attr="sex",
-)
+report = metrics.calculate_all_metrics(prediction_df, feature_cols=["age", "chol"])
 ```
 
-## Dependencies
+## Related
 
-- `numpy`
-- `pandas`
-- `scikit-learn`
-- `imbalanced-learn`
-- `fairlearn`
+- Results schema: [../../../docs/reference/results-schema.md](../../../docs/reference/results-schema.md)
+- Dissertation evidence: [../../../docs/research/dissertation-evidence-check.md](../../../docs/research/dissertation-evidence-check.md)
