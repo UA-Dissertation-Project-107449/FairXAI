@@ -81,3 +81,11 @@ def test_bash_parser_accepts_scope_flags_before_stage_validation() -> None:
     assert "Unknown argument '--parallel-experiments'" not in combined
     assert "Unknown argument '--max-cores'" not in combined
     assert "Unknown argument '--hpo-search-n-jobs'" not in combined
+
+
+def test_prefect_compare_stage_forwards_dataset_scope_to_grouping() -> None:
+    source = PREFECT_FLOW.read_text(encoding="utf-8")
+
+    assert "def compare_experiments(run_id: str, datasets:" in source
+    assert 'grouping_args.extend(["--datasets", *datasets])' in source
+    assert "compare_experiments.submit(run_id, datasets, verbose" in source
