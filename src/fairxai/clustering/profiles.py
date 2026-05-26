@@ -122,7 +122,7 @@ class ClusterProfiler:
         self, df: pd.DataFrame, cluster_col: str, feature_cols: Optional[List[str]]
     ) -> List[str]:
         if feature_cols is not None:
-            return [c for c in feature_cols if c in df.columns]
+            return [c for c in feature_cols if c in df.columns and c != self.target_col]
         exclude = {cluster_col, self.target_col}
         return [c for c in df.select_dtypes(include="number").columns if c not in exclude]
 
