@@ -35,6 +35,8 @@ def detect_accelerator(requested: str = "auto") -> str:
         return "cuda" if _torch_device_available("cuda") else "cpu"
     if val == "rocm":
         return "rocm" if _torch_device_available("rocm") else "cpu"
+    if val != "auto":
+        return "cpu"
 
     if _torch_device_available("cuda"):
         return "cuda"
