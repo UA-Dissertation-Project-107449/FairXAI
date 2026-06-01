@@ -19,17 +19,45 @@ logger = logging.getLogger(__name__)
 _DISPARITY_P0_THRESHOLD = 3.0
 _DISPARITY_P1_THRESHOLD = 1.5
 _TOP_N_DOMINANT_FEATURES = 3
+_RETURN_ALL_FEATURES_THRESHOLD = 6
+_DEVIATION_EPSILON = 1e-9
+DEFAULT_CLUSTERING_METHOD = "auto"
+CLUSTERING_METHODS = (
+    DEFAULT_CLUSTERING_METHOD,
+    "kmeans",
+    "hierarchical",
+    "dbscan",
+    "gaussian_mixture",
+)
+
+
+def normalize_clustering_method(method: str | None) -> str:
+    resolved = (method or DEFAULT_CLUSTERING_METHOD).strip().lower()
+    if resolved not in CLUSTERING_METHODS:
+        raise ValueError(
+            f"Unsupported clustering method '{method}'. "
+            f"Choose one of: {', '.join(CLUSTERING_METHODS)}."
+        )
+    return resolved
+
+
+def _engine_config_for_method(method: str) -> dict[str, Any] | None:
+    if method == DEFAULT_CLUSTERING_METHOD:
+        return None
+    return {method: {}}
 
 
 def run_clustering(
     csv_path: str | Path,
     target_column: str,
     pca2d: list[list] | None = None,
+    method: str = DEFAULT_CLUSTERING_METHOD,
 ) -> dict[str, Any]:
     """Discover subgroups via unsupervised clustering and compute per-cluster statistics.
 
-    Tries KMeans, Hierarchical, DBSCAN, and GMM; selects the solution with the
-    highest silhouette score.
+    In ``auto`` mode, tries KMeans, Hierarchical, DBSCAN, and GMM, then selects
+    the solution with the highest silhouette score.  Method-specific runs only
+    fit that clustering family.
 
     Args:
         csv_path: Absolute path to the dataset CSV file.
@@ -37,10 +65,12 @@ def run_clustering(
         pca2d: Optional existing PCA 2D coords ``[[x, y, class_label], ...]``
             from a prior characterization run.  When supplied, cluster labels are
             overlaid on these coords so PCA is not recomputed.
+        method: ``auto`` or one method supported by :class:`ClusteringEngine`.
 
     Returns:
         JSON-serializable dict with cluster profiles and recommendations.
     """
+    requested_method = normalize_clustering_method(method)
     csv_path = Path(csv_path)
     df = pd.read_csv(csv_path)
 
@@ -51,7 +81,10 @@ def run_clustering(
     df[target_column] = pd.to_numeric(df[target_column], errors="coerce")
     df = df.dropna(subset=[target_column])
 
-    engine = ClusteringEngine()
+    engine = ClusteringEngine(
+        config=_engine_config_for_method(requested_method),
+        feature_exclude=[target_column],
+    )
     result = engine.fit(df, feature_cols=None)
 
     df["group_cluster"] = result.group_cluster.values
@@ -64,6 +97,7 @@ def run_clustering(
     recommendations = _generate_recommendations(clusters)
 
     return {
+        "requested_method": requested_method,
         "method": result.method,
         "n_clusters": result.n_clusters,
         "silhouette": round(result.silhouette, 4),
@@ -80,6 +114,10 @@ def _build_cluster_list(
     target_column: str,
 ) -> list[dict[str, Any]]:
     total = len(df)
+    feature_cols = list(report.feature_means.columns) if not report.feature_means.empty else []
+    global_stds = (
+        df[feature_cols].std(numeric_only=True) if feature_cols else pd.Series(dtype=float)
+    )
     clusters = []
     for cid in sorted(df["group_cluster"].dropna().unique()):
         cid = int(cid)
@@ -89,7 +127,7 @@ def _build_cluster_list(
         target_vals = pd.to_numeric(grp[target_column], errors="coerce").dropna()
         target_rate = round(float(target_vals.mean()), 4) if len(target_vals) > 0 else None
         narrative = report.narratives.get(cid, "")
-        dominant = _dominant_features(report, cid)
+        dominant = _dominant_features(report, cid, global_stds)
         clusters.append(
             {
                 "id": cid,
@@ -103,12 +141,31 @@ def _build_cluster_list(
     return clusters
 
 
-def _dominant_features(report: Any, cid: int) -> dict[str, float]:
+def _dominant_features(
+    report: Any,
+    cid: int,
+    global_stds: pd.Series,
+) -> dict[str, dict[str, float]]:
     if report.feature_means.empty or cid not in report.feature_means.index:
         return {}
     row = report.feature_means.loc[cid]
-    top = row.nlargest(_TOP_N_DOMINANT_FEATURES)
-    return {k: round(float(v), 3) for k, v in top.items()}
+    delta = row - report.global_means
+    scale = global_stds.reindex(delta.index).fillna(0.0).abs() + _DEVIATION_EPSILON
+    sigma = delta / scale
+    abs_score = sigma.abs()
+    n_features = len(row)
+    if n_features <= _RETURN_ALL_FEATURES_THRESHOLD:
+        ordered = abs_score.sort_values(ascending=False).index
+    else:
+        ordered = abs_score.nlargest(_TOP_N_DOMINANT_FEATURES).index
+    return {
+        feat: {
+            "mean": round(float(row[feat]), 3),
+            "baseline": round(float(report.global_means[feat]), 3),
+            "delta": round(float(sigma[feat]), 2),
+        }
+        for feat in ordered
+    }
 
 
 def _build_pca_clusters(

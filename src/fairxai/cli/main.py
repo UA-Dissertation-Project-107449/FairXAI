@@ -42,6 +42,12 @@ def _build_parser() -> argparse.ArgumentParser:
     clust.add_argument("--target-column", required=True)
     clust.add_argument("--datasets-dir", default=None)
     clust.add_argument(
+        "--method",
+        default="auto",
+        choices=["auto", "kmeans", "hierarchical", "dbscan", "gaussian_mixture"],
+        help="Clustering method to run. auto tries all supported methods and selects best.",
+    )
+    clust.add_argument(
         "--pca2d-json",
         default=None,
         help="JSON string of existing [[x,y,label],...] PCA coords to reuse",
@@ -118,6 +124,7 @@ def main(argv: list[str] | None = None) -> int:
                 csv_path=csv_path,
                 target_column=args.target_column,
                 pca2d=pca2d,
+                method=args.method,
             )
             print(json.dumps(result))
 
