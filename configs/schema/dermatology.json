@@ -1,0 +1,53 @@
+{
+  "datasets": {
+    "pad_ufes_20": {
+      "metadata_filename": "metadata.csv",
+      "relative_dir": "pad_ufes_20",
+      "source": "PAD-UFES-20",
+      "label": "diagnostic",
+      "target": "diagnostic",
+      "target_standardized": "skin_cancer",
+      "image_id_column": "img_id",
+      "image_globs": [
+        "images/*.png",
+        "images/imgs_part_*/*.png"
+      ],
+      "positive_labels": ["BCC", "SCC", "MEL"],
+      "negative_labels": ["ACK", "NEV", "SEK"],
+      "age_bins": [0, 20, 40, 60, 80, 120],
+      "age_labels": ["<20", "20-39", "40-59", "60-79", "80+"],
+      "include_features": [],
+      "exclude_features": ["diagnostic"],
+      "sensitive_attributes": {
+        "age": {
+          "type": "continuous",
+          "bins": [0, 20, 40, 60, 80, 120],
+          "labels": ["<20", "20-39", "40-59", "60-79", "80+"]
+        },
+        "gender": {
+          "type": "categorical",
+          "mapping": {
+            "FEMALE": "Female",
+            "MALE": "Male"
+          }
+        },
+        "fitspatrick": {
+          "type": "ordinal",
+          "groups": {
+            "I-II": [1, 2],
+            "III-IV": [3, 4],
+            "V-VI": [5, 6]
+          }
+        }
+      }
+    }
+  },
+  "unified_schema": {
+    "target": "skin_cancer",
+    "sensitive_attributes": ["age_group", "sex", "fitzpatrick_group"],
+    "identifier_columns": ["patient_id", "lesion_id"],
+    "image_column": "image_path",
+    "exclude_features": ["_dataset_source", "_dataset_file", "diagnostic"]
+  },
+  "dermatology_relevant_datasets": ["pad_ufes_20"]
+}

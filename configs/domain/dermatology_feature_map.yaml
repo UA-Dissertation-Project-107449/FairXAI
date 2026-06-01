@@ -1,0 +1,31 @@
+# Canonical feature mapping for dermatology datasets.
+
+sensitive:
+  age:
+    canonical: age_raw
+    aliases: [age]
+  sex:
+    canonical: sex
+    aliases: [gender]
+  fitzpatrick:
+    canonical: fitzpatrick
+    aliases: [fitspatrick, fitzpatrick]
+
+target:
+  skin_cancer:
+    canonical: skin_cancer
+    aliases: [diagnostic]
+
+common:
+  image_path:
+    canonical: image_path
+    aliases: [img_id]
+
+dataset_specific:
+  pad_ufes_20:
+    patient_id:
+      canonical: patient_id
+      aliases: [patient_id]
+    lesion_id:
+      canonical: lesion_id
+      aliases: [lesion_id]
