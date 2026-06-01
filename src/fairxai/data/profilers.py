@@ -25,6 +25,12 @@ _COMPLEXITY_EXCLUDE_COLS: list[str] = [
     "Sex",
     "gender",
     "id",
+    # image-pipeline metadata
+    "image_path",
+    "patient_id",
+    "lesion_id",
+    "diagnostic",
+    "diagnostic_label",
 ]
 
 
@@ -59,6 +65,20 @@ class DataProfiler:
         items = obj.items() if isinstance(obj, dict) else obj.to_dict().items()
         return {str(k): v for k, v in items}
 
+    @staticmethod
+    def _complexity_ready_frame(df: pd.DataFrame, target: str) -> pd.DataFrame:
+        """Fill numeric feature NaNs for sklearn-based complexity metrics only."""
+        prepared = df.copy()
+        numeric_cols = prepared.select_dtypes(include="number").columns
+        for col in numeric_cols:
+            if col == target or not prepared[col].isna().any():
+                continue
+            fill_value = prepared[col].median()
+            if pd.isna(fill_value):
+                fill_value = 0
+            prepared[col] = prepared[col].fillna(fill_value)
+        return prepared
+
     def profile_dataset(
         self, df: pd.DataFrame, target: str = "heart_disease", dataset_name: str = "unknown"
     ) -> Dict:
@@ -75,6 +95,8 @@ class DataProfiler:
         """
         available_attrs = available_sensitive(df, self.sensitive_attrs)
         subgroup_df = self._build_subgroup_frame(df, available_attrs)
+        complexity_df = self._complexity_ready_frame(df, target)
+        subgroup_complexity_df = self._complexity_ready_frame(subgroup_df, target)
 
         profile = {
             "dataset_name": dataset_name,
@@ -86,15 +108,15 @@ class DataProfiler:
             "label_imbalance_by_group": self._label_imbalance_by_group(df, target),
             "missing_value_analysis": self._missing_value_analysis(df),
             "complexity_metrics": compute_complexity_metrics(
-                df, target=target, exclude_cols=_COMPLEXITY_EXCLUDE_COLS
+                complexity_df, target=target, exclude_cols=_COMPLEXITY_EXCLUDE_COLS
             ),
             "group_complexity_metrics": self._group_complexity_metrics(
-                subgroup_df,
+                subgroup_complexity_df,
                 target=target,
                 sensitive_attrs=available_attrs,
             ),
             "intersection_complexity_metrics": self._intersection_complexity_metrics(
-                subgroup_df,
+                subgroup_complexity_df,
                 target=target,
                 sensitive_attrs=available_attrs,
             ),
