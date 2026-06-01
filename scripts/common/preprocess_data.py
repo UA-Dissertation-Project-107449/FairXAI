@@ -28,7 +28,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from fairxai.cli.runner_base import get_project_root, load_pipeline_config, setup_phase_logging
-from fairxai.data.preprocessors import CardiacPreprocessor
+from fairxai.data.preprocessors import CardiacPreprocessor, DermatologyPreprocessor
 from fairxai.data.profilers import DataProfiler
 from fairxai.data.schemas import available_sensitive, get_age_unit, preferred_sensitive
 from fairxai.experiments.attribute_binning import apply_binning, create_binning_strategy
@@ -173,6 +173,8 @@ def _apply_clinical_constraints(
 def _resolve_preprocessor(pipeline: str):
     if pipeline == "cardiac":
         return CardiacPreprocessor
+    if pipeline == "dermatology":
+        return DermatologyPreprocessor
     raise NotImplementedError(
         f"Pipeline '{pipeline}' is not yet supported by common preprocess_data."
     )
@@ -232,6 +234,7 @@ def main():
         project_root,
         "preprocessing.log",
         verbose=args.verbose,
+        log_subdir=pipeline,
         run_id=run_id,
         stage_name="preprocess",
     )
@@ -297,7 +300,9 @@ def main():
 
     logging.info(f"Found {len(dataset_files)} datasets to preprocess")
 
-    target_col = pipeline_cfg.get("training", {}).get("target", "heart_disease")
+    training_cfg = pipeline_cfg.get("training", {})
+    target_col = training_cfg.get("target", "heart_disease")
+    modality = training_cfg.get("modality", "tabular")
 
     # Process each dataset with each binning strategy
     for binning_strategy in binning_strategies:
@@ -423,6 +428,63 @@ def main():
                 age_rank = {group: idx for idx, group in enumerate(age_order)}
                 df_clean["age_group_idx"] = df_clean["age_group"].map(age_rank).astype(int)
                 logging.info("  age_group_idx encoded: %s", age_rank)
+
+            if modality == "image":
+                logging.info("Patient-level train/test split for image baseline:")
+                patient_col = pipeline_cfg.get("split", {}).get("group_column", "patient_id")
+                train_df, test_df = preprocessor.patient_stratified_split(
+                    df_clean,
+                    target=target_col,
+                    patient_col=patient_col,
+                    test_size=test_size,
+                    random_state=random_state,
+                    context_label=f"dataset={dataset_name}, binning={binning_strategy or 'default'}",
+                )
+                verification = preprocessor.verify_split_fairness(
+                    train_df, test_df, target=target_col
+                )
+
+                train_file = data_processed / f"{dataset_name}_train.csv"
+                test_file = data_processed / f"{dataset_name}_test.csv"
+                train_df.to_csv(train_file, index=False)
+                test_df.to_csv(test_file, index=False)
+                logging.info("[SUCCESS] Train set: %s", train_file)
+                logging.info("[SUCCESS] Test set: %s", test_file)
+
+                train_profile = profiler.profile_dataset(
+                    train_df, target=target_col, dataset_name=f"{dataset_name}_train"
+                )
+                test_profile = profiler.profile_dataset(
+                    test_df, target=target_col, dataset_name=f"{dataset_name}_test"
+                )
+                train_fairness_file = results_fairness / f"{dataset_name}_train.json"
+                test_fairness_file = results_fairness / f"{dataset_name}_test.json"
+                with open(train_fairness_file, "w") as f:
+                    json.dump(train_profile, f, indent=2, default=str)
+                with open(test_fairness_file, "w") as f:
+                    json.dump(test_profile, f, indent=2, default=str)
+
+                preprocessing_summary[dataset_name] = _stringify(
+                    {
+                        "original_samples": len(df),
+                        "cleaned_samples": len(df_clean),
+                        "train_samples": len(train_df),
+                        "test_samples": len(test_df),
+                        "n_features": 0,
+                        "missing_value_actions": actions,
+                        "split_verification": verification,
+                        "binning_strategy": binning_strategy,
+                        "modality": modality,
+                        "output_dir": str(data_processed),
+                    }
+                )
+                metadata_file = data_processed / "preprocessing_metadata.json"
+                preprocessor.save_metadata(str(metadata_file))
+                summary_file = data_processed / "preprocessing_summary.json"
+                with open(summary_file, "w") as f:
+                    json.dump(preprocessing_summary, f, indent=2, default=str)
+                logging.info("[SUCCESS] Image preprocessing complete: dataset=%s", dataset_name)
+                continue
 
             # Step 2: Stratified train/test split
             logging.info("Stratified train/test split:")

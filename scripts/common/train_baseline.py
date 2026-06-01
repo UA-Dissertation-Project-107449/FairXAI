@@ -45,6 +45,7 @@ from fairxai.explainability.tabular import (
 from fairxai.models import get_model_class
 from fairxai.models.baseline import generate_predictions_with_metadata
 from fairxai.models.cv_trainer import CVTrainer
+from fairxai.training.vision import train_image_baseline
 from fairxai.utils.config import load_yaml_config
 
 ALLOWED_TRAINING_METHODS = {"single_split", "kfold_cv"}
@@ -348,6 +349,36 @@ def _resolve_int_setting(
     return int(default_value)
 
 
+def _resolve_float_setting(
+    cli_value: Optional[float],
+    cfg: dict,
+    key: str,
+    default_value: float,
+) -> float:
+    """Resolve float setting with CLI > config > default precedence."""
+    if cli_value is not None:
+        return float(cli_value)
+    cfg_value = cfg.get(key)
+    if cfg_value is not None:
+        return float(cfg_value)
+    return float(default_value)
+
+
+def _resolve_str_setting(
+    cli_value: Optional[str],
+    cfg: dict,
+    key: str,
+    default_value: str,
+) -> str:
+    """Resolve string setting with CLI > config > default precedence."""
+    if cli_value:
+        return str(cli_value).strip()
+    cfg_value = cfg.get(key)
+    if cfg_value is not None:
+        return str(cfg_value).strip()
+    return default_value
+
+
 def _apply_model_thread_override(
     model_class: Any, model_params: dict, model_n_jobs: Optional[int]
 ) -> dict:
@@ -513,6 +544,38 @@ def main():
         default=None,
         help="Parallel workers for CV folds when XAI is disabled (CLI override).",
     )
+    parser.add_argument("--device", default=None, help="Device override: auto, cuda, rocm, cpu")
+    parser.add_argument("--epochs", type=int, default=None, help="Image trainer epochs override")
+    parser.add_argument("--batch-size", type=int, default=None, help="Image trainer batch size")
+    parser.add_argument("--learning-rate", type=float, default=None, help="Image trainer LR")
+    parser.add_argument("--image-size", type=int, default=None, help="Image input size")
+    parser.add_argument("--num-workers", type=int, default=None, help="Image DataLoader workers")
+    parser.add_argument(
+        "--pretrained",
+        dest="pretrained",
+        action="store_true",
+        default=None,
+        help="Use pretrained ImageNet weights for image model",
+    )
+    parser.add_argument(
+        "--no-pretrained",
+        dest="pretrained",
+        action="store_false",
+        help="Train image model without pretrained weights",
+    )
+    parser.add_argument(
+        "--freeze-backbone",
+        dest="freeze_backbone",
+        action="store_true",
+        default=None,
+        help="Freeze pretrained image backbone",
+    )
+    parser.add_argument(
+        "--no-freeze-backbone",
+        dest="freeze_backbone",
+        action="store_false",
+        help="Fine-tune pretrained image backbone",
+    )
     parser.add_argument(
         "-v", "--verbose", action="count", default=0, help="Verbosity: -v=info, -vv=debug"
     )
@@ -546,6 +609,7 @@ def main():
         project_root,
         "training_baseline.log",
         verbose=args.verbose,
+        log_subdir=pipeline,
         run_id=run_id,
         stage_name="train",
     )
@@ -571,6 +635,7 @@ def main():
 
     # Configuration
     training_cfg = pipeline_cfg.get("training", {})
+    target_col = training_cfg.get("target", "heart_disease")
     selector_recommendations = _load_selector_recommendations(args.selector_contract)
     selector_model_types = selector_recommendations.get("model_types")
     selector_feature_mode = selector_recommendations.get("feature_selection_mode")
@@ -622,6 +687,104 @@ def main():
         selected = {d.strip() for d in args.datasets}
         configured_datasets = [d for d in configured_datasets if d in selected] or sorted(selected)
 
+    if training_cfg.get("modality", "tabular") == "image":
+        image_cfg = training_cfg.get("image", {})
+        image_col = image_cfg.get("image_column", "image_path")
+        sensitive_cols = pipeline_cfg.get("fairness", {}).get(
+            "sensitive_attributes", ["age_group", "sex"]
+        )
+        device_request = _resolve_str_setting(args.device, image_cfg, "device", "auto")
+        epochs = _resolve_int_setting(args.epochs, image_cfg, "epochs", 5)
+        batch_size = _resolve_int_setting(args.batch_size, image_cfg, "batch_size", 32)
+        learning_rate = _resolve_float_setting(
+            args.learning_rate, image_cfg, "learning_rate", 0.0003
+        )
+        image_size = _resolve_int_setting(args.image_size, image_cfg, "image_size", 224)
+        num_workers = _resolve_int_setting(args.num_workers, image_cfg, "num_workers", 0)
+        freeze_backbone = _resolve_bool_setting(
+            args.freeze_backbone, image_cfg, "freeze_backbone", True
+        )
+        pretrained = _resolve_bool_setting(args.pretrained, image_cfg, "pretrained", True)
+
+        train_files = []
+        for dataset_name in configured_datasets:
+            dataset_dir = resolve_dataset_dir(data_processed, dataset_name, default_binning)
+            candidate = dataset_dir / f"{dataset_name}_train.csv"
+            if candidate.exists():
+                train_files.append(candidate)
+            else:
+                logging.warning(
+                    "No processed image train file for dataset=%s (looked in %s)",
+                    dataset_name,
+                    dataset_dir,
+                )
+
+        if not train_files:
+            logging.error("No image training datasets found under %s", data_processed)
+            logging.error(
+                "Please run scripts/common/preprocess_data.py --pipeline %s first.", pipeline
+            )
+            return
+
+        results_summary = {}
+        split_info = {}
+        for train_file in train_files:
+            dataset_name = train_file.stem.replace("_train", "")
+            test_file = train_file.parent / f"{dataset_name}_test.csv"
+            if not test_file.exists():
+                logging.warning("Test file not found for %s, skipping", dataset_name)
+                continue
+            train_df = pd.read_csv(train_file)
+            test_df = pd.read_csv(test_file)
+            split_info[dataset_name] = {
+                "n_train": len(train_df),
+                "n_test": len(test_df),
+                "test_size": pipeline_cfg.get("split", {}).get("test_size", 0.3),
+                "random_state": pipeline_cfg.get("split", {}).get("random_state", 42),
+                "target_column": target_col,
+                "group_column": pipeline_cfg.get("split", {}).get("group_column", "patient_id"),
+                "train_target_dist": (
+                    train_df[target_col].value_counts(normalize=True).round(4).to_dict()
+                ),
+                "test_target_dist": (
+                    test_df[target_col].value_counts(normalize=True).round(4).to_dict()
+                ),
+            }
+            results_summary.setdefault(dataset_name, {})
+            for model_type in model_types:
+                logging.info("[MODEL] Training image model=%s dataset=%s", model_type, dataset_name)
+                result = train_image_baseline(
+                    train_csv=train_file,
+                    test_csv=test_file,
+                    output_root=baseline_root,
+                    dataset_name=dataset_name,
+                    target_col=target_col,
+                    sensitive_cols=sensitive_cols,
+                    image_col=image_col,
+                    model_name=model_type,
+                    device_request=device_request,
+                    epochs=epochs,
+                    batch_size=batch_size,
+                    learning_rate=learning_rate,
+                    image_size=image_size,
+                    pretrained=pretrained,
+                    freeze_backbone=freeze_backbone,
+                    num_workers=num_workers,
+                    random_state=random_state,
+                )
+                results_summary[dataset_name][model_type] = result
+
+        results_file = experiments_dir / "training_results.json"
+        with open(results_file, "w") as f:
+            json.dump(results_summary, f, indent=2, default=str)
+        split_info_file = baseline_root / "split_info.json"
+        with open(split_info_file, "w") as f:
+            json.dump(split_info, f, indent=2, default=str)
+        logging.info("[PHASE] Image baseline training complete")
+        logging.info("Models saved to: %s", models_dir)
+        logging.info("Results saved to: %s", experiments_dir)
+        return
+
     train_files = []
     for dataset_name in configured_datasets:
         dataset_dir = resolve_dataset_dir(data_processed, dataset_name, default_binning)
@@ -667,11 +830,8 @@ def main():
         logging.info(f"  Test: {len(test_df)} samples")
         logging.info(f"  Feature-selection mode: {feature_selection_mode}")
 
-        # Separate features, target, and sensitive attributes
-        # Note: scaled files have both encoded and categorical versions
-        # We keep the encoded numerical versions for modeling
-        target_col = training_cfg.get("target", "heart_disease")
-
+        # Separate features, target, and sensitive attributes.
+        # Scaled files have both encoded and categorical versions; keep encoded numerical versions.
         # Capture split metadata for split_info.json
         _split_cfg = pipeline_cfg.get("split", {})
         split_info[dataset_name] = {
