@@ -59,6 +59,14 @@ orchestration = [
     "prefect>=3.0.0",     # (reqs: 3.6.15) workflow orchestration
 ]
 
+# VISION: PyTorch image baselines. Install torch/torchvision from the official
+# PyTorch selector for CUDA, ROCm, or CPU first, then install this extra.
+vision = [
+    "pillow>=10.0.0",
+    "torch>=2.2.0",
+    "torchvision>=0.17.0",
+]
+
 # GPU: RAPIDS cuML for GPU-accelerated ML — Pleiades CUDA 12.4
 # WARNING: cannot pip install on machines without NVIDIA GPU + CUDA toolkit
 # Install manually on HPC AFTER "module load cuda/12.4.0":
