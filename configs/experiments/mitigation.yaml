@@ -17,7 +17,18 @@ data:
   sensitive_attributes:
     - sex
     - age_group
+    - ethnicity
+    - group_cluster
   preprocessing: "configs/experiments/baseline.yaml"  # Use baseline preprocessing
+
+# Which sensitive attrs to impose a fairness constraint on, per technique:
+#   all    -> every available sensitive attr (thorough; default)
+#   [list] -> explicit subset, e.g. [sex, group_cluster]
+#   none   -> legacy: constrain on the first available attr only
+# Only attrs actually present in the loaded splits are used (group_cluster
+# appears only when the pre-train clustering step ran). On small datasets the
+# heaviest combos may fall back to a single split — a documented limitation.
+constraint_attrs: all
 
 baseline:
   model: "logistic_regression"
