@@ -8,12 +8,20 @@ from typing import Any
 
 import pandas as pd
 
-from fairxai.experiments.attribute_binning import apply_binning, create_binning_strategy
+from fairxai.experiments.attribute_binning import (
+    apply_binning,
+    compute_strategy_score,
+    create_binning_strategy,
+)
 
 logger = logging.getLogger(__name__)
 
 _DISPARITY_P0_THRESHOLD = 4.0
 _DISPARITY_P1_THRESHOLD = 2.0
+
+# Equal-thirds weighting: sample size, balance, and fairness contribute equally
+# to the overall strategy score (no component privileged).
+_SCORE_WEIGHTS = {"sample_size": 1 / 3, "balance": 1 / 3, "fairness": 1 / 3}
 
 SUPPORTED_STRATEGIES = [
     "equal_width_3",
@@ -66,6 +74,8 @@ def run_binning(
 
     bin_stats = _compute_bin_stats(df_binned, "_bin_group", target_column)
     summary = _compute_summary(bin_stats)
+    summary["strategy_score"] = _compute_strategy_score(bin_stats, strategy)
+    summary["score_weights"] = {k: round(v, 4) for k, v in _SCORE_WEIGHTS.items()}
     recommendations = _generate_recommendations(attribute, strategy, summary)
 
     return {
@@ -134,6 +144,45 @@ def _compute_summary(bin_stats: list[dict[str, Any]]) -> dict[str, Any]:
         "max_bin": max_bin,
         "min_bin": min_bin,
     }
+
+
+def _compute_strategy_score(bin_stats: list[dict[str, Any]], strategy: str) -> float | None:
+    """Score a binning strategy with equal (1/3) weighting of its components.
+
+    Reuses :func:`compute_strategy_score` so the WebApp surfaces the same
+    equal-thirds score used by the offline experiment report.  The component
+    metrics are derived from the per-bin counts and target rates:
+
+    - ``min_group_size`` / ``mean_group_size`` — statistical power.
+    - ``group_balance_cv`` — coefficient of variation of bin counts (evenness).
+    - ``max_sp_difference`` — max absolute positive-rate gap across bins.
+
+    Returns ``None`` when fewer than two populated bins exist (score undefined).
+    """
+    counts = [b["count"] for b in bin_stats if b["count"] > 0]
+    rates = [b["target_rate"] for b in bin_stats if b["target_rate"] is not None]
+    if len(counts) < 2 or len(rates) < 2:
+        return None
+
+    mean_count = sum(counts) / len(counts)
+    if mean_count <= 0:
+        return None
+    variance = sum((c - mean_count) ** 2 for c in counts) / len(counts)
+    cv = (variance**0.5) / mean_count
+
+    metrics = {
+        "min_group_size": min(counts),
+        "mean_group_size": mean_count,
+        "group_balance_cv": cv,
+        "max_sp_difference": max(rates) - min(rates),
+    }
+    score = compute_strategy_score(
+        {"strategy": strategy, "fairness_metrics": metrics},
+        _SCORE_WEIGHTS["sample_size"],
+        _SCORE_WEIGHTS["balance"],
+        _SCORE_WEIGHTS["fairness"],
+    )
+    return round(float(score), 4)
 
 
 def _generate_recommendations(
