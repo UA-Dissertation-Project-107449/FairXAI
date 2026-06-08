@@ -641,6 +641,36 @@ else
     echo "[6/12] feature_selection_study — SKIPPED (outside active range)"
 fi
 
+# ---- Optional pre-train clustering (inject group_cluster before training) ----
+# Off by default. Enable via env RUN_GROUPING=1 or grouping.enabled in the
+# pipeline config. Fits clustering on TRAIN only and assigns test by nearest
+# centroid (leakage guard), writing group_cluster into the split CSVs so the
+# trainer treats clusters as a sensitive attribute. Idempotent.
+GROUPING_ENABLED=$(python3 - "$ROOT_DIR" <<'GROUPING_PY'
+import sys
+import yaml
+from pathlib import Path
+
+cfg = yaml.safe_load((Path(sys.argv[1]) / "configs/pipelines/cardiac.yaml").read_text()) or {}
+print("true" if (cfg.get("grouping", {}) or {}).get("enabled", False) else "false")
+GROUPING_PY
+)
+RUN_GROUPING=${RUN_GROUPING:-$GROUPING_ENABLED}
+# Normalize truthy values (1/true/yes/on, any case) → "true".
+shopt -s nocasematch
+[[ "$RUN_GROUPING" =~ ^(1|true|yes|on)$ ]] && RUN_GROUPING=true || RUN_GROUPING=false
+shopt -u nocasematch
+
+if should_run 7 && [[ "$RUN_GROUPING" == "true" ]]; then
+    echo "[CLUSTER] Discovering subgroups (train-only) -> group_cluster"
+    python3 "$ROOT_DIR/scripts/cardiac/cluster_subgroups.py" \
+        --pipeline cardiac --config "$GROUPING_CONFIG" \
+        "${DATASET_ARGS[@]}" $VERBOSE_FLAG
+    echo ""
+elif should_run 7; then
+    echo "[CLUSTER] subgroup discovery — SKIPPED (set RUN_GROUPING=1 or grouping.enabled=true)"
+fi
+
 # Wiring helper for stages that consume study recommendations
 if should_run 7 || { should_run 11 && [[ "$RUN_COMBINATORIAL" == "true" ]]; }; then
     echo "[WIRING] Building selector contract from study artifacts"

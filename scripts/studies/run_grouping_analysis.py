@@ -273,24 +273,34 @@ def run_dataset(
     }
 
     # -- 1. Clustering engine ------------------------------------------
-    logger.info("[PHASE] clustering")
-    try:
-        engine = ClusteringEngine(config=method_cfg, feature_exclude=feat_exclude)
-        cluster_result = engine.fit(df)
-        engine.save_diagnostics(cluster_result, ds_out)
+    # Idempotency guard: when group_cluster is already present (written by the
+    # pre-train cluster step, fit on TRAIN only), do NOT re-cluster here. This
+    # study fits on the concatenated train+test frame, which would overwrite the
+    # leakage-safe pre-train labels with leaky ones.
+    if "group_cluster" in df.columns:
+        logger.info(
+            "[PHASE] clustering — SKIPPED (group_cluster already present; "
+            "reusing pre-train labels to avoid a leaky re-fit)"
+        )
+    else:
+        logger.info("[PHASE] clustering")
+        try:
+            engine = ClusteringEngine(config=method_cfg, feature_exclude=feat_exclude)
+            cluster_result = engine.fit(df)
+            engine.save_diagnostics(cluster_result, ds_out)
 
-        # Write cluster_assignments.csv
-        assignments = cluster_result.to_assignments_df()
-        assignments.to_csv(ds_out / "cluster_assignments.csv")
-        logger.info("[SUCCESS] cluster_assignments.csv clusters=%d", cluster_result.n_clusters)
+            # Write cluster_assignments.csv
+            assignments = cluster_result.to_assignments_df()
+            assignments.to_csv(ds_out / "cluster_assignments.csv")
+            logger.info("[SUCCESS] cluster_assignments.csv clusters=%d", cluster_result.n_clusters)
 
-        # Persist group_cluster to canonical processed CSV and split sources.
-        df["group_cluster"] = cluster_result.group_cluster.values
-        _persist_group_cluster(df, processed_path, source_meta)
+            # Persist group_cluster to canonical processed CSV and split sources.
+            df["group_cluster"] = cluster_result.group_cluster.values
+            _persist_group_cluster(df, processed_path, source_meta)
 
-    except ClusteringError as exc:
-        logger.error("clustering failed for %s: %s", dataset, exc)
-        return  # Can't proceed without cluster labels
+        except ClusteringError as exc:
+            logger.error("clustering failed for %s: %s", dataset, exc)
+            return  # Can't proceed without cluster labels
 
     # -- 2. Per-cluster fairness (requires predictions) ----------------
     logger.info("[PHASE] cluster fairness")

@@ -34,6 +34,16 @@ training:
 fairness:
   sensitive_attributes: [age_group, sex, ethnicity, group_cluster]
 
+# Optional: discover patient subgroups via clustering BEFORE training and treat
+# them as a sensitive attribute (group_cluster). Off by default → pipeline is
+# byte-for-byte the current behavior. Enable via this flag or env RUN_GROUPING=1.
+# Clustering is fit on the TRAIN split only (leakage guard); test rows are
+# assigned by nearest centroid. See docs/analysis/GROUPING_INTO_TRAINING.md.
+grouping:
+  enabled: false
+  cluster_on: train_only
+  methods: [kmeans, hierarchical, dbscan, gaussian_mixture]
+
 xai:
   enabled: true
   cv_enabled: true

@@ -146,6 +146,29 @@ def preprocess_data(
 
 
 @task
+def cluster_subgroups(
+    run_id: str,
+    datasets: Optional[list[str]] = None,
+    verbose: int = 0,
+):
+    """Pre-train clustering: write group_cluster into the splits (leakage-safe).
+
+    Runs between preprocess (4) and train (7), mirroring the bash pipeline's
+    optional [CLUSTER] step. Idempotent.
+    """
+    logger = get_run_logger()
+    logger.info("[CLUSTER] Discovering subgroups (train-only) -> group_cluster")
+    script = ROOT_DIR / "scripts" / "cardiac" / "cluster_subgroups.py"
+    args = ["--pipeline", "cardiac", "--config", "configs/experiments/clustering.yaml"]
+    if datasets:
+        args.extend(["--datasets", *datasets])
+    args.extend(_verbose_flags(verbose))
+    env = os.environ.copy()
+    env["RUN_ID"] = run_id
+    _run_script(script, args, env)
+
+
+@task
 def run_hpo_study(
     datasets: Optional[list[str]] = None,
     model_types: Optional[list[str]] = None,
@@ -373,6 +396,7 @@ def cardiac_pipeline(
     run_mitigation: bool = True,
     run_combinatorial: bool = True,
     run_comparison: bool = True,
+    run_grouping: Optional[bool] = None,
     verbose: int = 0,
     resume_from: Optional[str] = None,
     go_until: Optional[str] = None,
@@ -400,6 +424,17 @@ def cardiac_pipeline(
 
     studies_cfg = pipeline_cfg.get("studies") or {}
     scheduling_cfg = pipeline_cfg.get("scheduling") or {}
+
+    # Optional pre-train clustering. Precedence: explicit param > env RUN_GROUPING
+    # > config grouping.enabled. Matches the bash pipeline's truthy handling.
+    if run_grouping is not None:
+        run_grouping_enabled = bool(run_grouping)
+    else:
+        env_grouping = os.getenv("RUN_GROUPING")
+        if env_grouping is not None:
+            run_grouping_enabled = env_grouping.strip().lower() in ("1", "true", "yes", "on")
+        else:
+            run_grouping_enabled = bool((pipeline_cfg.get("grouping") or {}).get("enabled", False))
 
     skip_studies_cfg = bool(studies_cfg.get("skip", False))
     resolved_skip_studies = skip_studies if skip_studies is not None else skip_studies_cfg
@@ -547,6 +582,7 @@ def cardiac_pipeline(
     logger.info(f"Mitigation enabled: {run_mitigation}")
     logger.info(f"Combinatorial enabled: {run_combinatorial}")
     logger.info(f"Comparison enabled: {run_comparison}")
+    logger.info(f"Grouping (pre-train clustering) enabled: {run_grouping_enabled}")
     logger.info(f"Comparison config: {COMPARISON_CONFIG}")
     logger.info(f"Datasets override: {datasets if datasets else 'config/default'}")
     logger.info(f"Model types override: {model_types if model_types else 'config/default'}")
@@ -568,6 +604,7 @@ def cardiac_pipeline(
     profile_task = None
     recommendations_task = None
     preprocess_data_task = None
+    cluster_subgroups_task = None
     hpo_study_task = None
     feature_selection_study_task = None
     selector_contract_task = None
@@ -606,6 +643,14 @@ def cardiac_pipeline(
         )
     else:
         logger.info("[4/12] preprocess - skipped (outside active range)")
+
+    # Optional pre-train clustering (between preprocess and train). Gated on
+    # run_grouping_enabled; must finish before train reads the splits.
+    if _should_run(7) and run_grouping_enabled:
+        wait = [preprocess_data_task] if preprocess_data_task else []
+        cluster_subgroups_task = cluster_subgroups.submit(run_id, datasets, verbose, wait_for=wait)
+    elif _should_run(7):
+        logger.info("[CLUSTER] subgroup discovery - skipped (run_grouping disabled)")
 
     parallel_studies_enabled = (
         resolved_parallel_studies
@@ -689,6 +734,9 @@ def cardiac_pipeline(
             wait = [preprocess_data_task]
         else:
             wait = []
+        # group_cluster must be written into the splits before training reads them.
+        if cluster_subgroups_task:
+            wait = [*wait, cluster_subgroups_task]
         train_baseline_model_task = train_baseline_model.submit(
             run_id,
             datasets,
@@ -982,6 +1030,20 @@ Examples:
     p.add_argument("--no-mitigation", action="store_true", help="Skip mitigation stage.")
     p.add_argument("--no-combinatorial", action="store_true", help="Skip combinatorial stage.")
     p.add_argument("--no-comparison", action="store_true", help="Skip comparison stage.")
+    grouping_group = p.add_mutually_exclusive_group()
+    grouping_group.add_argument(
+        "--grouping",
+        dest="run_grouping",
+        action="store_true",
+        help="Enable pre-train clustering (group_cluster as a sensitive attribute).",
+    )
+    grouping_group.add_argument(
+        "--no-grouping",
+        dest="run_grouping",
+        action="store_false",
+        help="Disable pre-train clustering even if grouping.enabled=true in config.",
+    )
+    p.set_defaults(run_grouping=None)
     p.add_argument(
         "--datasets",
         nargs="+",
@@ -1018,6 +1080,7 @@ if __name__ == "__main__":
         run_mitigation=not args.no_mitigation,
         run_combinatorial=not args.no_combinatorial,
         run_comparison=not args.no_comparison,
+        run_grouping=args.run_grouping,
         verbose=args.verbose,
         resume_from=args.resume_from,
         go_until=args.go_until,
