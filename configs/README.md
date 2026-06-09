@@ -1,65 +1,58 @@
 # Configs
 
-Configuration files for pipelines, datasets, and experiments.
+Configuration files for FairXAI pipelines, model families, experiments, domain metadata, profiling, and recommendation thresholds.
+
+See [../docs/README.md](../docs/README.md) for the full docs index.
 
 ## Structure
 
-```
+```text
 configs/
-├── datasets/               # Dataset registry (PLANNED -- not yet wired into code)
-├── domain/                 # Domain metadata: feature maps, clinical constraints, sex mappings
-├── experiments/            # Experiment configs: binning, mitigation, combinatorial, baseline
-├── models/                 # One file per model type -- authoritative source for hyperparameters
-├── pipelines/              # Pipeline runtime settings (paths, XAI, split)
-├── profiling/              # Profiling tunables (complexity metrics, random seed, solver)
-├── recommendations/        # Fairness triage thresholds
-└── schema/                 # Unified JSON schema definitions (do not modify format)
+├── datasets/          # Dataset registry placeholder and future domain registry
+├── domain/            # Domain metadata, feature maps, constraints, labels
+├── experiments/       # Experiment and study configs
+├── models/            # One YAML file per model type
+├── pipelines/         # Pipeline runtime settings
+├── profiling/         # Complexity/profiling tunables
+├── recommendations/   # Fairness triage thresholds
+└── schema/            # WebApp-compatible schema JSON
 ```
 
-## Usage
+## Runtime Use
 
-- **Pipeline runners** load `pipelines/<name>.yaml` for paths, model type list, and XAI settings.
-- **Model hyperparameters** live in `models/<type>.yaml`. Runners load these at runtime;
-  experiment configs only define variant overrides on top.
-- **Experiment configs** (`experiments/`) are self-contained: each one can be run independently.
-  They reference `domain/cardiac.yaml` as a base but do not inherit from each other.
-- **Domain configs** (`domain/`) define dataset paths, feature mappings, clinical constraints,
-  and sex/age normalisation constants.
-- **Profiling tunables** (max samples, random seed, solver) live in `profiling/complexity.yaml`.
-- **Fairness thresholds** (min_recall, max_fairness_violation) are the canonical source in
-  `recommendations/thresholds.yaml`; experiment configs duplicate them intentionally so each
-  config is independently runnable.
+- `pipelines/cardiac.yaml` controls cardiac datasets, paths, sensitive attributes, XAI, scheduling, and default binning.
+- `models/*.yaml` are the authoritative model hyperparameter defaults.
+- `experiments/*.yaml` configure HPO, feature selection, attribute binning, mitigation, combinatorial, comparison, and clustering/grouping studies.
+- `domain/cardiac.yaml` contains clinical constraints, sex/age mappings, and domain labels.
+- `profiling/complexity.yaml` configures complexity metric runtime behavior.
+- `recommendations/thresholds.yaml` is the central triage/fairness threshold file.
+- `schema/cardiac.json` supports standardized dataset metadata and WebApp-compatible ingestion.
 
-## Model configs (`models/`)
-
-| File | Class | Notes |
-|------|-------|-------|
-| `logistic_regression.yaml` | `sklearn.linear_model.LogisticRegression` | Used as baseline for mitigation sweep |
-| `random_forest.yaml` | `sklearn.ensemble.RandomForestClassifier` | Scale-invariant; uses SHAP TreeExplainer |
-| `svm.yaml` | `sklearn.svm.SVC` | Requires standard scaling; SHAP skipped by default |
-| `xgboost.yaml` | `xgboost.XGBClassifier` | `device` injected at runtime from accelerator setting |
-
-## Experiment configs (`experiments/`)
+## Experiment Configs
 
 | File | Status | Purpose |
 |------|--------|---------|
-| `baseline.yaml` | Active | Single LR baseline experiment |
-| `age_binning.yaml` | Active | Attribute binning strategy sweep (26 strategies across 5 method families) |
-| `mitigation.yaml` | Active | Fairness mitigation techniques comparison |
-| `combinatorial.yaml` | Active | Full cross-product sweep (dataset × binning × mitigation × model) |
-| `hpo.yaml` | Active | Hyperparameter optimization (grid/random search per model). Run before combinatorial. |
-| `feature_selection_study.yaml` | Active | Sensitive-attribute ablation (6 feature selection modes on small datasets) |
-| `clustering.yaml` | **DEFERRED** | Subgroup discovery via clustering (design complete, not implemented) |
+| `baseline.yaml` | Active | Baseline experiment defaults |
+| `hpo.yaml` | Active | Grid/random search settings per model |
+| `feature_selection_study.yaml` | Active | Sensitive-attribute ablation settings |
+| `age_binning.yaml` | Active | Attribute/age binning strategy sweep |
+| `mitigation.yaml` | Active | Fairness mitigation comparison |
+| `combinatorial.yaml` | Active | Dataset x binning x mitigation x model experiment matrix |
+| `comparison.yaml` | Active | Canonical comparison outputs and dissertation figures |
+| `clustering.yaml` | Active exploratory | Clustering/grouping study settings |
 
-## Domain configs (`domain/`)
+## Model Configs
 
-`domain/cardiac.yaml` includes a `clinical_constraints` block that controls physiological
-validity filtering during preprocessing. Rows violating these constraints (e.g. heart rate > 300,
-age < 0) are dropped or flagged before model training. This runs in `scripts/common/preprocess_data.py`
-via `_apply_clinical_constraints()`. Missing features are skipped silently so the same config
-works across all three cardiac datasets.
+| File | Model |
+|------|-------|
+| `logistic_regression.yaml` | `sklearn.linear_model.LogisticRegression` |
+| `random_forest.yaml` | `sklearn.ensemble.RandomForestClassifier`, optional cuML path |
+| `svm.yaml` | `sklearn.svm.SVC` |
+| `xgboost.yaml` | `xgboost.XGBClassifier`, optional CUDA device |
 
 ## Notes
 
-- `schema/` is not modified by config refactors — format is fixed for WebApp compatibility.
-- **Dermatology pipeline**: data acquisition scaffolded; pipeline not yet implemented. Cardiac only.
+- Config files should stay declarative. Runtime behavior belongs in `src/` or `scripts/`.
+- `schema/` format should remain stable for WebApp compatibility.
+- Dermatology is scaffolded but not an active end-to-end pipeline.
+- Architecture and flow-control details live in [../docs/architecture/pipeline-flow-control.md](../docs/architecture/pipeline-flow-control.md).

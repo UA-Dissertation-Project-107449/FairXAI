@@ -91,3 +91,8 @@ bins, labels = create_binning_strategy(df, "quantile_5", col="age_raw")
   backward-compatibility shim that re-exports everything from it.
 - Versioning methods are designed to be backward-compatible with recursive
   loaders for nested output layouts.
+
+## Related
+
+- Attribute binning reference: [../../../docs/reference/attribute-binning.md](../../../docs/reference/attribute-binning.md)
+- Results schema: [../../../docs/reference/results-schema.md](../../../docs/reference/results-schema.md)

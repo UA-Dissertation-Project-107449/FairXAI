@@ -410,7 +410,7 @@ def run_combinatorial_experiments(
 
 
 @task
-def compare_experiments(run_id: str, verbose: int = 0):
+def compare_experiments(run_id: str, datasets: Optional[list[str]] = None, verbose: int = 0):
     """Compares experiments."""
     logger = get_run_logger()
     logger.info("[PHASE 12/12] Experiment comparison and dissertation plots")
@@ -420,7 +420,10 @@ def compare_experiments(run_id: str, verbose: int = 0):
     _run_script(script, args, os.environ.copy())
 
     grouping_script = ROOT_DIR / "scripts" / "studies" / "run_grouping_analysis.py"
-    _run_script(grouping_script, ["--run-id", run_id], os.environ.copy())
+    grouping_args = ["--run-id", run_id]
+    if datasets:
+        grouping_args.extend(["--datasets", *datasets])
+    _run_script(grouping_script, grouping_args, os.environ.copy())
 
     plots_script = ROOT_DIR / "scripts" / "studies" / "generate_dissertation_plots.py"
     plots_args = ["--run-id", run_id, "--config", COMPARISON_CONFIG]
@@ -935,7 +938,7 @@ def cardiac_pipeline(
                 ]
             if not wait and assess_predictions_task:
                 wait = [assess_predictions_task]
-            comparison_task = compare_experiments.submit(run_id, verbose, wait_for=wait)
+            comparison_task = compare_experiments.submit(run_id, datasets, verbose, wait_for=wait)
         else:
             logger.info("[12/12] compare - skipped (disabled)")
             _mark_skipped(12, "disabled")

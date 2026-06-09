@@ -36,6 +36,83 @@ from fairxai.experiments.versioning import ExperimentVersioning
 SCORE_WEIGHTS = {"f1_value": 0.40, "recall_value": 0.30, "accuracy_value": 0.20, "auc_value": 0.10}
 
 
+def _auc_from_prediction_file(versioning: ExperimentVersioning, row: dict) -> float | None:
+    """Recover AUC from saved probability scores, if those scores are real."""
+    from sklearn.metrics import roc_auc_score
+
+    split_dir = "cv" if row.get("training_method") == "kfold_cv" else "holdout"
+    pred_path = (
+        versioning.latest_dir
+        / "predictions"
+        / str(row.get("dataset"))
+        / split_dir
+        / f"predictions_{row.get('experiment_id')}.csv"
+    )
+    if not pred_path.exists():
+        return None
+
+    try:
+        pred_df = pd.read_csv(pred_path)
+    except Exception as exc:
+        logging.debug("Could not read prediction file for AUC repair %s: %s", pred_path, exc)
+        return None
+
+    if not {"y_true", "y_proba"}.issubset(pred_df.columns):
+        return None
+
+    y_true = pd.to_numeric(pred_df["y_true"], errors="coerce")
+    y_score = pd.to_numeric(pred_df["y_proba"], errors="coerce")
+    valid = y_true.notna() & y_score.notna()
+    if valid.sum() < 2 or y_true[valid].nunique() < 2 or y_score[valid].nunique() < 2:
+        return None
+
+    # Old runs sometimes wrote hard labels into y_proba when no probabilities
+    # were available. Do not turn labels into fake probability-based AUC.
+    score_values = set(y_score[valid].unique())
+    if score_values.issubset({0.0, 1.0}) and "y_pred" in pred_df.columns:
+        y_pred = pd.to_numeric(pred_df.loc[valid, "y_pred"], errors="coerce")
+        if y_pred.notna().all() and np.array_equal(
+            y_score[valid].to_numpy(dtype=float),
+            y_pred.to_numpy(dtype=float),
+        ):
+            return None
+
+    try:
+        return float(roc_auc_score(y_true[valid], y_score[valid]))
+    except ValueError:
+        return None
+
+
+def _repair_auc_if_placeholder(row: dict, versioning: ExperimentVersioning) -> None:
+    """Replace placeholder AUC=0.0 with recovered AUC or NaN."""
+    row.setdefault("auc_repaired_from_predictions", False)
+    value = row.get("auc_value", row.get("auc_roc"))
+    try:
+        auc = float(value)
+    except (TypeError, ValueError):
+        auc = np.nan
+
+    if pd.isna(auc):
+        row["auc_value"] = np.nan
+        row["auc_roc"] = np.nan
+        row["auc_unavailable_reason"] = "missing_probability_scores"
+        return
+
+    if auc != 0.0:
+        return
+
+    repaired = _auc_from_prediction_file(versioning, row)
+    if repaired is not None:
+        row["auc_value"] = repaired
+        row["auc_roc"] = repaired
+        row["auc_repaired_from_predictions"] = True
+        return
+
+    row["auc_value"] = np.nan
+    row["auc_roc"] = np.nan
+    row["auc_unavailable_reason"] = "missing_probability_scores"
+
+
 def load_all_results(versioning: ExperimentVersioning) -> pd.DataFrame:
     """
     Load all experiment results and combine into DataFrame.
@@ -119,6 +196,7 @@ def load_all_results(versioning: ExperimentVersioning) -> pd.DataFrame:
                 row["recall"] = row.get("recall_value", row.get("recall"))
                 row["f1_score"] = row.get("f1_value", row.get("f1_score"))
                 row["auc_roc"] = row.get("auc_value", row.get("auc_roc"))
+                _repair_auc_if_placeholder(row, versioning)
 
                 # Add fairness metrics
                 fairness = results.get("fairness_metrics", {})

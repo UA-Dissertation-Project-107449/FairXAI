@@ -1285,7 +1285,7 @@ def run_cv_experiment(
             y_pred = _coerce_label_vector(result["predictions"]["y_pred"])
             y_proba_raw = result["predictions"]["y_proba"]
             if y_proba_raw is None:
-                y_proba = y_pred.astype(float)
+                y_proba = np.full(len(y_pred), np.nan)
             else:
                 y_proba = _coerce_probability_vector(y_proba_raw)
 

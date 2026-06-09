@@ -299,6 +299,12 @@ def run_dataset(
             _persist_group_cluster(df, processed_path, source_meta)
 
         except ClusteringError as exc:
+            # Diagnostics-on-failure: even when no valid solution emerges, persist
+            # the per-candidate diagnostics so the failed run is still auditable.
+            if getattr(exc, "diagnostics", None):
+                diag_path = ds_out / "cluster_diagnostics.csv"
+                pd.DataFrame([d.to_dict() for d in exc.diagnostics]).to_csv(diag_path, index=False)
+                logger.info("[SUCCESS] cluster_diagnostics saved to %s", diag_path)
             logger.error("clustering failed for %s: %s", dataset, exc)
             return  # Can't proceed without cluster labels
 

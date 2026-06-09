@@ -93,3 +93,9 @@ print(result.method, result.n_clusters, result.silhouette)
 - `numpy`
 - `pandas`
 - `scikit-learn`
+
+## Related
+
+- Similarity module: [../similarity/README.md](../similarity/README.md)
+- Plot guide: [../../../docs/reference/plots.md](../../../docs/reference/plots.md)
+- Roadmap/status: [../../../docs/planning/roadmap.md](../../../docs/planning/roadmap.md)

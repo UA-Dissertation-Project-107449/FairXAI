@@ -1,79 +1,31 @@
 # Profiling Module
 
-Complexity and overlap profiling utilities used to characterize datasets before
-or alongside model training.
-
-This module computes class-overlap, neighborhood, linearity, and imbalance
-signals that feed downstream fairness analysis and recommendation workflows.
-
-Metric implementations are aligned with Domain_characterization behavior while
-remaining fully implemented inside FairXAI.
+Complexity metrics, profiling configuration, and WebApp-compatible dataset
+characterization.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `complexity.py` | Complexity metric implementations and metric registry helpers |
-| `config.py` | `ComplexityConfig` dataclass and `load_complexity_config()` loader (reads `configs/profiling/complexity.yaml`) |
-| `domain_characterization.py` | WebApp-compatible characterization API and EBM difficulty scoring |
-| `METRIC_NOTES.md` | Deep metric definitions, legacy-equivalence notes, and reproducibility guide |
-| `__init__.py` | Public re-exports for profiling APIs |
+| `complexity.py` | Complexity metric implementations and registry helpers |
+| `config.py` | `ComplexityConfig` and YAML loader |
+| `domain_characterization.py` | CSV-to-JSON characterization API and EBM difficulty |
+| `METRIC_NOTES.md` | Metric behavior and reproducibility notes |
+| `__init__.py` | Public exports |
 
 ## Public API
 
-- `compute_complexity_metrics(df, target='heart_disease', ...)`
-  - Computes supported metrics from numeric features.
-- `get_supported_complexity_metrics(include_aliases=False)`
-  - Returns canonical metric names (and optional imbalance aliases).
-- `is_complexity_metric_key(metric_name)`
-  - Validates whether a key is a primary metric or alias.
-- `is_primary_complexity_metric(metric_name)`
-  - Checks canonical metric membership.
+- `compute_complexity_metrics`
+- `get_supported_complexity_metrics`
+- `is_complexity_metric_key`
+- `is_primary_complexity_metric`
 - `ComplexityConfig`
-  - Typed configuration for tunables (max samples, random seed, solver, etc.).
-- `load_complexity_config(path=None)`
-  - Loads `ComplexityConfig` from YAML (defaults to `configs/profiling/complexity.yaml`).
-- `characterize_dataset(filename, output_dir, ...)`
-  - Computes compatibility metrics and writes `<jobId>.json` for WebApp consumption.
+- `load_complexity_config`
+- `characterize_dataset`
 
-## Domain Characterization Output
+## Metrics
 
-`characterize_dataset` writes JSON in the shape:
-
-```json
-{
-  "jobId": "<file_stem>",
-  "metrics": {
-    "nSamples": 0,
-    "nFeatures": 0,
-    "nClasses": 0,
-    "F2Imbalance": 0.0,
-    "F3Imbalance": 0.0,
-    "F4Imbalance": 0.0,
-    "L1Imbalance": 0.0,
-    "L2Imbalance": 0.0,
-    "L3Imbalance": 0.0,
-    "N2Imbalance": 0.0,
-    "N3Imbalance": 0.0,
-    "N4Imbalance": 0.0,
-    "T1Imbalance": 0.0,
-    "RaugImbalance": 0.0,
-    "BayesImbalance": 0.0,
-    "ebmDifficulty": 0.0
-  }
-}
-```
-
-## EBM Runtime Requirement
-
-EBM inference is loaded from `src/fairxai/profiling/models/ebm_model.joblib`.
-
-Runtime requirement:
-- `interpret` must be available in the active Python environment (included in `.[experiment]` / `.[hpc]`).
-
-## Supported Metrics
-
-Primary metric keys exposed today:
+Primary keys include:
 
 - `F2`, `F3`, `F4`
 - `N2`, `N3`, `N4`
@@ -82,32 +34,35 @@ Primary metric keys exposed today:
 - `T1`
 - `BayesImbalance`
 
-Imbalance aliases are also exposed (e.g., `F2Imbalance`, `N3Imbalance`).
+Compatibility aliases such as `F2Imbalance` are also emitted for WebApp
+contracts and legacy consumers.
 
-For full formulas, per-metric behavior details, and migration rationale, see
-`METRIC_NOTES.md`.
+## Config And Artifacts
 
-## Design Notes
+- Config: `configs/profiling/complexity.yaml`
+- Optional EBM model: `src/fairxai/profiling/models/ebm_model.joblib`
+- Profiling outputs: `output/cardiac/runs/<run_id>/profiling/`
+- Standalone fallback: `output/cardiac/profiling/`
 
-- Numeric-only feature selection is handled internally.
-- Binary-target requirements are validated before metric computation.
-- Optional sklearn dependency (`LogisticRegression`) is guarded for robustness.
-
-## Usage Example
+## Usage
 
 ```python
 from fairxai.profiling import compute_complexity_metrics
 
-profile = compute_complexity_metrics(df, target="heart_disease")
-print(profile.get("F2"), profile.get("N3"))
+metrics = compute_complexity_metrics(df, target="heart_disease")
 ```
 
-## Dependencies
+```python
+from fairxai.profiling import characterize_dataset
 
-- `numpy`
-- `pandas`
-- `scikit-learn` (optional for specific metrics)
+payload = characterize_dataset(
+    filename="cleveland_standardized.csv",
+    datasets_dir="data/raw/cardiac",
+    output_dir="/tmp/fairxai_characterize",
+)
+```
 
-## See Also
+## Related
 
-- `METRIC_NOTES.md` for detailed implementation notes and divergence analysis.
+- Metric notes: [METRIC_NOTES.md](METRIC_NOTES.md)
+- Notebook inputs: [../../../notebooks/README.md](../../../notebooks/README.md)

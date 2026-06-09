@@ -1,7 +1,7 @@
 # FairXAI Documentation & Structure Style Guide
 
 This guide defines the minimum documentation and structure expectations for
-modules under `src/fairxai`.
+Markdown docs and modules under `src/fairxai`.
 
 ## 1) Module-Level Requirements
 
@@ -14,6 +14,19 @@ Each module folder (e.g., `fairness/`, `models/`) must include:
   - Configuration dependencies
   - Short usage example
   - External dependencies (when relevant)
+
+Top-level folders (`configs/`, `scripts/`, `data/`, `notebooks/`) should link
+back to `docs/README.md`.
+
+## 1b) Docs Directory Layout
+
+Use the grouped docs layout:
+
+- `architecture/` for design decisions, module maps, and flow control
+- `guides/` for daily workflows and style/testing guidance
+- `reference/` for stable schemas, plotting APIs, and experiment contracts
+- `research/` for dissertation evidence notes
+- `planning/` for roadmap and status notes
 
 ## 2) Python File-Level Requirements
 
