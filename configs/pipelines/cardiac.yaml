@@ -43,6 +43,23 @@ grouping:
   enabled: false
   cluster_on: train_only
   methods: [kmeans, hierarchical, dbscan, gaussian_mixture]
+  # Validity gate: every method runs, but a solution is rejected if it has fewer
+  # than min_clusters or any cluster below the min size. Disqualifies the whole
+  # degenerate solution (e.g. lopsided DBSCAN: 88% in one cluster + tiny rest) so
+  # a balanced method wins; if none qualify, group_cluster is simply not injected.
+  # Effective min size = max(min_cluster_size_abs, ceil(frac * n_train)):
+  # cleveland (~240) keeps 20; larger datasets scale up by 5%.
+  min_clusters: 2
+  min_cluster_size_abs: 20
+  min_cluster_size_frac: 0.05
+
+# Post-assess similarity analysis (individual fairness). Analysis-only — needs
+# predictions, never affects training. Off by default → enable via this flag or
+# env RUN_SIMILARITY=1. Per model: scaled k-NN consistency + per-sensitive-group
+# breakdown + violation-density map under <run>/baseline/individual_fairness/.
+similarity:
+  enabled: false
+  k: [5, 10, 20]
 
 xai:
   enabled: true

@@ -169,6 +169,29 @@ def cluster_subgroups(
 
 
 @task
+def similarity_analysis(
+    run_id: str,
+    datasets: Optional[list[str]] = None,
+    verbose: int = 0,
+):
+    """Post-assess similarity: per-model individual fairness (analysis only).
+
+    Runs after assess (8), mirroring the bash pipeline's optional [SIMILARITY]
+    step. Needs predictions, never affects training.
+    """
+    logger = get_run_logger()
+    logger.info("[SIMILARITY] Per-model individual fairness (scaled k-NN consistency)")
+    script = ROOT_DIR / "scripts" / "cardiac" / "similarity_analysis.py"
+    args = ["--pipeline", "cardiac", "--run-id", run_id]
+    if datasets:
+        args.extend(["--datasets", *datasets])
+    args.extend(_verbose_flags(verbose))
+    env = os.environ.copy()
+    env["RUN_ID"] = run_id
+    _run_script(script, args, env)
+
+
+@task
 def run_hpo_study(
     datasets: Optional[list[str]] = None,
     model_types: Optional[list[str]] = None,
@@ -397,6 +420,7 @@ def cardiac_pipeline(
     run_combinatorial: bool = True,
     run_comparison: bool = True,
     run_grouping: Optional[bool] = None,
+    run_similarity: Optional[bool] = None,
     verbose: int = 0,
     resume_from: Optional[str] = None,
     go_until: Optional[str] = None,
@@ -435,6 +459,19 @@ def cardiac_pipeline(
             run_grouping_enabled = env_grouping.strip().lower() in ("1", "true", "yes", "on")
         else:
             run_grouping_enabled = bool((pipeline_cfg.get("grouping") or {}).get("enabled", False))
+
+    # Optional post-assess similarity. Precedence: explicit param > env
+    # RUN_SIMILARITY > config similarity.enabled. Matches the bash pipeline.
+    if run_similarity is not None:
+        run_similarity_enabled = bool(run_similarity)
+    else:
+        env_similarity = os.getenv("RUN_SIMILARITY")
+        if env_similarity is not None:
+            run_similarity_enabled = env_similarity.strip().lower() in ("1", "true", "yes", "on")
+        else:
+            run_similarity_enabled = bool(
+                (pipeline_cfg.get("similarity") or {}).get("enabled", False)
+            )
 
     skip_studies_cfg = bool(studies_cfg.get("skip", False))
     resolved_skip_studies = skip_studies if skip_studies is not None else skip_studies_cfg
@@ -583,6 +620,7 @@ def cardiac_pipeline(
     logger.info(f"Combinatorial enabled: {run_combinatorial}")
     logger.info(f"Comparison enabled: {run_comparison}")
     logger.info(f"Grouping (pre-train clustering) enabled: {run_grouping_enabled}")
+    logger.info(f"Similarity (post-assess individual fairness) enabled: {run_similarity_enabled}")
     logger.info(f"Comparison config: {COMPARISON_CONFIG}")
     logger.info(f"Datasets override: {datasets if datasets else 'config/default'}")
     logger.info(f"Model types override: {model_types if model_types else 'config/default'}")
@@ -610,6 +648,7 @@ def cardiac_pipeline(
     selector_contract_task = None
     train_baseline_model_task = None
     assess_predictions_task = None
+    similarity_analysis_task = None
     age_task = None
     mitigation_task = None
     combinatorial_task = None
@@ -757,6 +796,16 @@ def cardiac_pipeline(
     else:
         logger.info("[8/12] assess - skipped (outside active range)")
 
+    # Optional post-assess similarity (analysis only). Needs predictions from
+    # stage 7/8; gated by run_similarity_enabled. Mirrors bash [SIMILARITY].
+    if _should_run(8) and run_similarity_enabled:
+        wait = [assess_predictions_task] if assess_predictions_task else []
+        similarity_analysis_task = similarity_analysis.submit(
+            run_id, datasets, verbose, wait_for=wait
+        )
+    elif _should_run(8):
+        logger.info("[SIMILARITY] individual fairness - skipped (run_similarity disabled)")
+
     # Stage 9-11 scheduling anchor for serial mode
     serial_experiment_anchor = assess_predictions_task
 
@@ -861,6 +910,10 @@ def cardiac_pipeline(
         if future is not None:
             _checkpoint(stage_num, future)
 
+    # Non-numbered injected step: ensure similarity finishes before we summarize.
+    if similarity_analysis_task is not None:
+        similarity_analysis_task.wait()
+
     # --- Log summary --------------------------------------------------------
     run_log_dir = ROOT_DIR / "logs" / "cardiac" / "runs" / run_id
     log_summary = summarize_run_logs(run_log_dir)
@@ -891,6 +944,8 @@ def cardiac_pipeline(
         logger.info(f"  - Selector contract:  {run_root}/recommendations/selector_contract.json")
     if _should_run(7):
         logger.info(f"  - Baseline:           {run_root}/baseline")
+    if similarity_analysis_task:
+        logger.info(f"  - Individual fairness: {run_root}/baseline/individual_fairness")
     if age_task:
         logger.info(f"  - Attr binning:       {run_root}/experiments/attribute_binning")
     if mitigation_task:
@@ -1044,6 +1099,20 @@ Examples:
         help="Disable pre-train clustering even if grouping.enabled=true in config.",
     )
     p.set_defaults(run_grouping=None)
+    similarity_group = p.add_mutually_exclusive_group()
+    similarity_group.add_argument(
+        "--similarity",
+        dest="run_similarity",
+        action="store_true",
+        help="Enable post-assess similarity analysis (per-model individual fairness).",
+    )
+    similarity_group.add_argument(
+        "--no-similarity",
+        dest="run_similarity",
+        action="store_false",
+        help="Disable similarity analysis even if similarity.enabled=true in config.",
+    )
+    p.set_defaults(run_similarity=None)
     p.add_argument(
         "--datasets",
         nargs="+",
@@ -1081,6 +1150,7 @@ if __name__ == "__main__":
         run_combinatorial=not args.no_combinatorial,
         run_comparison=not args.no_comparison,
         run_grouping=args.run_grouping,
+        run_similarity=args.run_similarity,
         verbose=args.verbose,
         resume_from=args.resume_from,
         go_until=args.go_until,

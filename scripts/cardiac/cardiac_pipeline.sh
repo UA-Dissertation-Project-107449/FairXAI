@@ -704,6 +704,36 @@ else
     echo "[8/12] assess — SKIPPED (outside active range)"
 fi
 
+# ---- Optional post-assess similarity analysis (individual fairness) ----------
+# Off by default. Enable via env RUN_SIMILARITY=1 or similarity.enabled in the
+# pipeline config. Analysis-only: per-model scaled k-NN consistency + per-group
+# breakdown + density map under <run>/baseline/individual_fairness/. Needs the
+# predictions produced by stage 7/8 → runs after assess.
+SIMILARITY_ENABLED=$(python3 - "$ROOT_DIR" <<'SIMILARITY_PY'
+import sys
+import yaml
+from pathlib import Path
+
+cfg = yaml.safe_load((Path(sys.argv[1]) / "configs/pipelines/cardiac.yaml").read_text()) or {}
+print("true" if (cfg.get("similarity", {}) or {}).get("enabled", False) else "false")
+SIMILARITY_PY
+)
+RUN_SIMILARITY=${RUN_SIMILARITY:-$SIMILARITY_ENABLED}
+# Normalize truthy values (1/true/yes/on, any case) → "true".
+shopt -s nocasematch
+[[ "$RUN_SIMILARITY" =~ ^(1|true|yes|on)$ ]] && RUN_SIMILARITY=true || RUN_SIMILARITY=false
+shopt -u nocasematch
+
+if should_run 8 && [[ "$RUN_SIMILARITY" == "true" ]]; then
+    echo "[SIMILARITY] Per-model individual fairness (scaled k-NN consistency)"
+    python3 "$ROOT_DIR/scripts/cardiac/similarity_analysis.py" \
+        --pipeline cardiac --run-id "$RUN_ID" \
+        "${DATASET_ARGS[@]}" $VERBOSE_FLAG
+    echo ""
+elif should_run 8; then
+    echo "[SIMILARITY] individual fairness — SKIPPED (set RUN_SIMILARITY=1 or similarity.enabled=true)"
+fi
+
 # Stage 9 — Attribute binning (optional)
 ARCHIVE_EXPERIMENTS=true
 PARALLEL_EXPERIMENTS_HANDLED=false
