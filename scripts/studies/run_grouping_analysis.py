@@ -42,7 +42,7 @@ from fairxai.clustering import (
     FairnessPerCluster,
 )
 from fairxai.experiments.data_io import resolve_dataset_dir, resolve_default_binning
-from fairxai.similarity import SimilarityEngine, ViolationDensityMapper
+from fairxai.similarity import run_similarity_for_predictions
 from fairxai.utils.config import load_yaml_config
 
 logger = logging.getLogger(__name__)
@@ -353,6 +353,9 @@ def run_dataset(
     profiler.save_report(report, ds_out / "subgroup_profiles.md")
 
     # -- 4. Similarity (k-NN individual fairness) ----------------------
+    # Delegates to the shared post-assess core so the study and the gated
+    # pipeline step (scripts/cardiac/similarity_analysis.py) stay in lockstep
+    # (scaled distance, per-sensitive-group breakdown, density map).
     logger.info("[PHASE] similarity")
     k_values = list(
         (config.get("fairness_analysis", {}) or {})
@@ -374,21 +377,20 @@ def run_dataset(
     )
 
     if sim_df is not None and pred_col in sim_df.columns:
-        sim_engine = SimilarityEngine(k_values=k_values, pred_col=pred_col)
-        sim_result = sim_engine.compute(sim_df, feature_cols=numeric_cols)
-        _report("similarity_fairness_scores", sim_result.rows if sim_result.rows else None)
-        sim_engine.save_scores(sim_result, ds_out)
-
-        # Violation density map (requires predictions + features)
-        mapper = ViolationDensityMapper(k=min(k_values))
-        map_result = mapper.compute(
+        sensitive_attrs = [
+            c
+            for c in ["age_group", "age_group_cat", "sex", "sex_cat", "ethnicity", "group_cluster"]
+            if c in sim_df.columns
+        ]
+        summary = run_similarity_for_predictions(
             sim_df,
             feature_cols=numeric_cols,
+            sensitive_attrs=sensitive_attrs,
+            k_values=k_values,
+            out_dir=ds_out,
             pred_col=pred_col,
-            output_file=ds_out / "violation_density_map.png",
-            similarity_engine=sim_engine,
         )
-        _report("violation_density_map", map_result.output_file)
+        _report("similarity_fairness_scores", summary)
     else:
         logger.info(
             "[INFO] similarity: no %r column found (run stage 5 first). Skipping.", pred_col
