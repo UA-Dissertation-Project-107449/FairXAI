@@ -192,6 +192,31 @@ def similarity_analysis(
 
 
 @task
+def age_binning_analysis(
+    run_id: str,
+    datasets: Optional[list[str]] = None,
+    verbose: int = 0,
+):
+    """Post-mitigation age-binning fairness sensitivity sweep (analysis only).
+
+    Runs after mitigation (10), mirroring the bash pipeline's optional
+    [AGE-BINNING] step. Recomputes per-age-bin fairness under several binning
+    strategies (Axis B) and pairs baseline vs mitigated preds (Axis A). Needs
+    predictions; never affects training.
+    """
+    logger = get_run_logger()
+    logger.info("[AGE-BINNING] Fairness sensitivity sweep (before/after × strategies)")
+    script = ROOT_DIR / "scripts" / "cardiac" / "age_binning_analysis.py"
+    args = ["--pipeline", "cardiac", "--run-id", run_id]
+    if datasets:
+        args.extend(["--datasets", *datasets])
+    args.extend(_verbose_flags(verbose))
+    env = os.environ.copy()
+    env["RUN_ID"] = run_id
+    _run_script(script, args, env)
+
+
+@task
 def run_hpo_study(
     datasets: Optional[list[str]] = None,
     model_types: Optional[list[str]] = None,
@@ -421,6 +446,7 @@ def cardiac_pipeline(
     run_comparison: bool = True,
     run_grouping: Optional[bool] = None,
     run_similarity: Optional[bool] = None,
+    run_age_binning: Optional[bool] = None,
     verbose: int = 0,
     resume_from: Optional[str] = None,
     go_until: Optional[str] = None,
@@ -471,6 +497,19 @@ def cardiac_pipeline(
         else:
             run_similarity_enabled = bool(
                 (pipeline_cfg.get("similarity") or {}).get("enabled", False)
+            )
+
+    # Optional post-mitigation age-binning sweep. Precedence: explicit param > env
+    # RUN_AGE_BINNING > config age_binning_sensitivity.enabled. Matches bash.
+    if run_age_binning is not None:
+        run_age_binning_enabled = bool(run_age_binning)
+    else:
+        env_age_binning = os.getenv("RUN_AGE_BINNING")
+        if env_age_binning is not None:
+            run_age_binning_enabled = env_age_binning.strip().lower() in ("1", "true", "yes", "on")
+        else:
+            run_age_binning_enabled = bool(
+                (pipeline_cfg.get("age_binning_sensitivity") or {}).get("enabled", False)
             )
 
     skip_studies_cfg = bool(studies_cfg.get("skip", False))
@@ -621,6 +660,7 @@ def cardiac_pipeline(
     logger.info(f"Comparison enabled: {run_comparison}")
     logger.info(f"Grouping (pre-train clustering) enabled: {run_grouping_enabled}")
     logger.info(f"Similarity (post-assess individual fairness) enabled: {run_similarity_enabled}")
+    logger.info(f"Age-binning sensitivity sweep enabled: {run_age_binning_enabled}")
     logger.info(f"Comparison config: {COMPARISON_CONFIG}")
     logger.info(f"Datasets override: {datasets if datasets else 'config/default'}")
     logger.info(f"Model types override: {model_types if model_types else 'config/default'}")
@@ -650,6 +690,7 @@ def cardiac_pipeline(
     assess_predictions_task = None
     similarity_analysis_task = None
     age_task = None
+    age_binning_analysis_task = None
     mitigation_task = None
     combinatorial_task = None
     comparison_task = None
@@ -843,6 +884,17 @@ def cardiac_pipeline(
     else:
         logger.info("[10/12] mitigation - skipped (outside active range)")
 
+    # Optional post-mitigation age-binning sweep (analysis only). Pairs baseline
+    # vs mitigated predictions per age bin, so it waits on mitigation (the "after"
+    # sets) when present. Mirrors bash [AGE-BINNING].
+    if _should_run(10) and run_age_binning_enabled:
+        wait = [t for t in [mitigation_task, assess_predictions_task] if t]
+        age_binning_analysis_task = age_binning_analysis.submit(
+            run_id, datasets, verbose, wait_for=wait
+        )
+    elif _should_run(10):
+        logger.info("[AGE-BINNING] sensitivity sweep - skipped (run_age_binning disabled)")
+
     # Stage 11 - Combinatorial (optional + gated)
     if _should_run(11):
         if run_combinatorial:
@@ -914,6 +966,10 @@ def cardiac_pipeline(
     if similarity_analysis_task is not None:
         similarity_analysis_task.wait()
 
+    # Non-numbered injected step: ensure the age-binning sweep finishes too.
+    if age_binning_analysis_task is not None:
+        age_binning_analysis_task.wait()
+
     # --- Log summary --------------------------------------------------------
     run_log_dir = ROOT_DIR / "logs" / "cardiac" / "runs" / run_id
     log_summary = summarize_run_logs(run_log_dir)
@@ -946,6 +1002,8 @@ def cardiac_pipeline(
         logger.info(f"  - Baseline:           {run_root}/baseline")
     if similarity_analysis_task:
         logger.info(f"  - Individual fairness: {run_root}/baseline/individual_fairness")
+    if age_binning_analysis_task:
+        logger.info(f"  - Age-binning sweep:  {run_root}/baseline/age_binning_sensitivity")
     if age_task:
         logger.info(f"  - Attr binning:       {run_root}/experiments/attribute_binning")
     if mitigation_task:
@@ -1113,6 +1171,20 @@ Examples:
         help="Disable similarity analysis even if similarity.enabled=true in config.",
     )
     p.set_defaults(run_similarity=None)
+    age_binning_group = p.add_mutually_exclusive_group()
+    age_binning_group.add_argument(
+        "--age-binning",
+        dest="run_age_binning",
+        action="store_true",
+        help="Enable post-mitigation age-binning fairness sensitivity sweep.",
+    )
+    age_binning_group.add_argument(
+        "--no-age-binning",
+        dest="run_age_binning",
+        action="store_false",
+        help="Disable age-binning sweep even if age_binning_sensitivity.enabled=true.",
+    )
+    p.set_defaults(run_age_binning=None)
     p.add_argument(
         "--datasets",
         nargs="+",
@@ -1151,6 +1223,7 @@ if __name__ == "__main__":
         run_comparison=not args.no_comparison,
         run_grouping=args.run_grouping,
         run_similarity=args.run_similarity,
+        run_age_binning=args.run_age_binning,
         verbose=args.verbose,
         resume_from=args.resume_from,
         go_until=args.go_until,

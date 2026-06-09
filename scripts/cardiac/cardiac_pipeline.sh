@@ -814,6 +814,37 @@ else
     echo "[10/12] mitigation — SKIPPED (outside active range)"
 fi
 
+# ---- Optional post-mitigation age-binning fairness sensitivity sweep ---------
+# Off by default. Enable via env RUN_AGE_BINNING=1 or age_binning_sensitivity.enabled
+# in the pipeline config. Analysis-only: predictions are independent of the age
+# binning, so per-age-bin fairness is recomputed POST-HOC under several strategies
+# (Axis B) and baseline "before" is paired vs mitigated "after" (Axis A). Runs after
+# mitigation (so the "after" sets exist) → output under
+# <run>/baseline/age_binning_sensitivity/.
+AGE_BINNING_ENABLED=$(python3 - "$ROOT_DIR" <<'AGE_BINNING_PY'
+import sys
+import yaml
+from pathlib import Path
+
+cfg = yaml.safe_load((Path(sys.argv[1]) / "configs/pipelines/cardiac.yaml").read_text()) or {}
+print("true" if (cfg.get("age_binning_sensitivity", {}) or {}).get("enabled", False) else "false")
+AGE_BINNING_PY
+)
+RUN_AGE_BINNING=${RUN_AGE_BINNING:-$AGE_BINNING_ENABLED}
+shopt -s nocasematch
+[[ "$RUN_AGE_BINNING" =~ ^(1|true|yes|on)$ ]] && RUN_AGE_BINNING=true || RUN_AGE_BINNING=false
+shopt -u nocasematch
+
+if should_run 10 && [[ "$RUN_AGE_BINNING" == "true" ]]; then
+    echo "[AGE-BINNING] Fairness sensitivity sweep (before/after × binning strategies)"
+    python3 "$ROOT_DIR/scripts/cardiac/age_binning_analysis.py" \
+        --pipeline cardiac --run-id "$RUN_ID" \
+        "${DATASET_ARGS[@]}" $VERBOSE_FLAG
+    echo ""
+elif should_run 10; then
+    echo "[AGE-BINNING] sensitivity sweep — SKIPPED (set RUN_AGE_BINNING=1 or age_binning_sensitivity.enabled=true)"
+fi
+
 # Stage 11 — Combinatorial (optional)
 if should_run 11; then
     if [[ "$PARALLEL_EXPERIMENTS_HANDLED" == "true" ]]; then

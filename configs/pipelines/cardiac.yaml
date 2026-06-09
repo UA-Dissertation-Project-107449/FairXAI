@@ -61,6 +61,20 @@ similarity:
   enabled: false
   k: [5, 10, 20]
 
+# Post-mitigation age-binning fairness sensitivity sweep (analysis-only). Predictions
+# are independent of the age binning (age_group is not a feature), so per-age-bin
+# fairness is recomputed POST-HOC under several strategies with no retrain:
+#   Axis B — binning sensitivity (is a gap a bucketing artifact?), per baseline model;
+#   Axis A — mitigation effect (baseline "before" vs mitigated "after"), per bin.
+# Requires age_raw carried into predictions (train_baseline + mitigation do this).
+# Off by default → enable via this flag or env RUN_AGE_BINNING=1. Output under
+# <run>/baseline/age_binning_sensitivity/<dataset>/{<model>,before_after/<regime>}/.
+age_binning_sensitivity:
+  enabled: false
+  strategies: [quantile_3, fixed_5yr, fixed_10yr, equal_width_4]
+  k: 5
+  min_bin_size: 20
+
 xai:
   enabled: true
   cv_enabled: true
