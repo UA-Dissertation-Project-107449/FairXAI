@@ -10,6 +10,7 @@ shared data I/O helpers used across experiment scripts.
 | `versioning.py` | Experiment artifact management (manifests, results, predictions, models, XAI) |
 | `attribute_binning.py` | Config-driven binning strategy analysis and fairness impact scoring |
 | `age_binning.py` | Backward-compatibility shim (re-exports from `attribute_binning`) |
+| `age_binning_sensitivity.py` | Post-hoc age-binning fairness sensitivity sweep (analysis only) |
 | `data_io.py` | Shared schema loading and exclude-column helpers for experiment scripts |
 | `__init__.py` | Public re-exports for experiment APIs |
 
@@ -28,6 +29,23 @@ shared data I/O helpers used across experiment scripts.
   - `compare_strategies`
   - `generate_summary_report`
   - `validate_and_repair`
+
+- `age_binning_sensitivity` API (analysis only — never affects training)
+  - `compute_age_binning_sensitivity(predictions, strategies, feature_cols, ...)` —
+    recomputes per-age-bin fairness across **regimes × strategies** on *given*
+    predictions (no retrain, since age is not a model feature). Tidy grid:
+    `regime, strategy, bin, n, positive_rate, dp_gap, eo_tpr_gap, eo_fpr_gap,
+    mean_consistency, low_n`. Two axes: **A** mitigation effect (before vs after,
+    fixed strategy), **B** binning sensitivity (vary strategy, fixed preds).
+  - `before_after_deltas(grid, metric)` — Axis A pivot (`delta = after - before`).
+  - `run_age_binning(run_root, dataset, strategies, out_base, ...)` — loads baseline
+    + persisted mitigation predictions, writes Axis B per model and Axis A
+    before/after per mitigation regime.
+  - Needs continuous `age_raw` carried into predictions (baseline + mitigation do
+    this; `*_raw` is excluded from the k-NN distance everywhere). Reuses
+    `create_binning_strategy`/`apply_binning`, `FairnessMetrics`,
+    `SimilarityEngine.per_group_consistency`. See root
+    `AGE_BINNING_FAIRNESS_SENSITIVITY.md`.
 
 - `data_io` helpers
   - `load_schema_config`

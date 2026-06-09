@@ -219,6 +219,7 @@ def generate_predictions_with_metadata(
     y: pd.Series,
     sensitive_attrs: pd.DataFrame,
     threshold: float = 0.5,
+    extra_meta: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
     Generate predictions with probabilities and metadata.
@@ -229,6 +230,10 @@ def generate_predictions_with_metadata(
         y: True labels
         sensitive_attrs: DataFrame with sensitive attributes (age_group, sex)
         threshold: Decision threshold
+        extra_meta: Optional analysis-only metadata carried alongside predictions
+            (e.g. continuous ``age_raw`` for post-hoc re-binning). Unlike
+            ``sensitive_attrs`` these are NOT fairness-grouping keys and NOT
+            model features — they are passengers for downstream analysis.
 
     Returns:
         DataFrame with predictions, probabilities, metadata, and features
@@ -245,6 +250,11 @@ def generate_predictions_with_metadata(
     # Add sensitive attributes
     for col in sensitive_attrs.columns:
         predictions[col] = sensitive_attrs[col].values
+
+    # Add analysis-only metadata (carried, never a feature or grouping key)
+    if extra_meta is not None:
+        for col in extra_meta.columns:
+            predictions[col] = extra_meta[col].values
 
     # Add features for individual fairness calculation
     for col in X.columns:

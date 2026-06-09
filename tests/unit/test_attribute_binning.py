@@ -217,8 +217,12 @@ def test_run_binning_equal_width_binary_returns_2_bins(tmp_path):
     )
 
 
-def test_run_binning_quantile_binary_collapses(tmp_path):
-    """quantile_3 on binary produces 1 bin — documents suppressed-by-backend behaviour."""
+def test_run_binning_quantile_binary_uses_identity_fallback(tmp_path):
+    """quantile_3 on binary now yields 2 bins via the cardinality fallback.
+
+    Previously the low-level qcut collapsed binary to 1 bin; the cardinality
+    guard in create_binning_strategy now routes it to one-bin-per-value.
+    """
     from fairxai.integration.binning import run_binning
 
     csv = tmp_path / "binary.csv"
@@ -228,10 +232,63 @@ def test_run_binning_quantile_binary_collapses(tmp_path):
         csv, target_column="target", attribute="feature", strategy="quantile_3", min_group_size=0
     )
 
-    assert len(result["bins"]) <= 2
-    # When only 1 bin, disparity_ratio must be None (can't compare 1 bin to itself)
-    if len(result["bins"]) == 1:
-        assert result["summary"]["disparity_ratio"] is None
+    assert len(result["bins"]) == 2
+    assert [b["pct"] for b in result["bins"]] == [50.0, 50.0]
+
+
+# ---------------------------------------------------------------------------
+# Cardinality fallback (create_binning_strategy)
+# ---------------------------------------------------------------------------
+
+
+def _uniform_card_df(n_values: int, reps: int = 20) -> pd.DataFrame:
+    """Perfectly uniform integer feature: ``n_values`` distinct, ``reps`` each."""
+    feature = np.repeat(np.arange(n_values), reps)
+    target = np.tile([0, 1], (n_values * reps) // 2)
+    return pd.DataFrame({"feature": feature, "target": target})
+
+
+def test_cardinality_fallback_when_bins_exceed_distinct():
+    """n_distinct <= n_bins → one bin per distinct value (categorical fallback)."""
+    df = _low_card_df()  # 3 distinct values
+    bins, _ = create_binning_strategy(df, "quantile_5", col="feature", min_group_size=0)
+    # 3 distinct values -> 3 bins, not 5
+    assert len(bins) - 1 == 3
+
+
+def test_cardinality_fallback_binary_two_bins():
+    """Binary column routes to a clean 2-bin split instead of collapsing to 1."""
+    df = _binary_df(n=100)
+    bins, _ = create_binning_strategy(df, "quantile_3", col="feature", min_group_size=0)
+    assert len(bins) - 1 == 2
+
+
+def test_cardinality_fallback_membership_is_balanced():
+    """5 uniform values into quantile_7 falls back to 5 equal bins (20% each)."""
+    import tempfile
+
+    from fairxai.integration.binning import run_binning
+
+    df = _uniform_card_df(n_values=5, reps=20)  # 100 rows, 20 per value
+    with tempfile.TemporaryDirectory() as d:
+        csv = f"{d}/uniform.csv"
+        df.to_csv(csv, index=False)
+        result = run_binning(
+            csv,
+            target_column="target",
+            attribute="feature",
+            strategy="quantile_7",
+            min_group_size=0,
+        )
+    assert len(result["bins"]) == 5
+    assert [b["pct"] for b in result["bins"]] == [20.0, 20.0, 20.0, 20.0, 20.0]
+
+
+def test_no_fallback_when_distinct_exceeds_bins():
+    """n_distinct > n_bins keeps the requested bin count (no categorical fallback)."""
+    df = _uniform_card_df(n_values=10, reps=10)  # 10 distinct
+    bins, _ = create_binning_strategy(df, "quantile_5", col="feature", min_group_size=0)
+    assert len(bins) - 1 == 5
 
 
 def test_run_binning_continuous_full_output_schema(tmp_path):

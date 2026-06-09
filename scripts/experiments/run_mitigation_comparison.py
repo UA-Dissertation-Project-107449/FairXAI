@@ -162,7 +162,12 @@ def load_dataset(
     logging.info(f"  Features: {X_train.shape[1]}")
     logging.info(f"  Sensitive attributes: {list(sensitive_train.columns)}")
 
-    return X_train, y_train, sensitive_train, X_test, y_test, sensitive_test
+    # Analysis-only metadata for the test split: continuous `*_raw` columns
+    # (e.g. age_raw) carried for the post-hoc age-binning fairness sweep.
+    meta_cols = [c for c in test_raw_df.columns if c.endswith("_raw")]
+    meta_test = test_raw_df[meta_cols].copy() if meta_cols else None
+
+    return X_train, y_train, sensitive_train, X_test, y_test, sensitive_test, meta_test
 
 
 def train_baseline(
@@ -213,6 +218,9 @@ def apply_mitigation_techniques(
     baseline_model,
     techniques_config,
     base_model_params=None,
+    constraint_attrs="all",
+    meta_test=None,
+    predictions_dir=None,
 ):
     """
     Apply all mitigation techniques and collect results.
@@ -224,111 +232,167 @@ def apply_mitigation_techniques(
         dataset_name: Dataset identifier
         baseline_model: Trained baseline model for post-processing
         techniques_config: Dict of techniques to test
+        constraint_attrs: Which sensitive attrs to constrain on per technique.
+            ``"all"`` (default) runs each technique once per available sensitive
+            attr (thorough); a list restricts to that subset; ``"none"`` keeps
+            the legacy single-attr behavior (first available attr).
 
     Returns:
-        List of result dictionaries
+        List of result dictionaries (one per technique × constraint attr).
     """
     engine = MitigationEngine(random_state=42)
     results = []
 
+    available_attrs = list(sensitive_test.columns)
+    resolved_attrs = _resolve_constraint_attrs(constraint_attrs, available_attrs)
+    if not resolved_attrs:
+        logging.warning(
+            "No sensitive attributes available for mitigation on %s — skipping techniques.",
+            dataset_name,
+        )
+        return results
+    logging.info(
+        "[MITIGATION] dataset=%s constraint attrs=%s (mode=%s)",
+        dataset_name,
+        resolved_attrs,
+        constraint_attrs,
+    )
+
     for technique_name, config in techniques_config.items():
         stage = config["stage"]
 
-        logging.info(
-            "[MITIGATION] Testing technique=%s stage=%s dataset=%s",
-            technique_name,
-            stage,
-            dataset_name,
-        )
-
-        try:
-            sensitive_attr = next((c for c in sensitive_test.columns), None)
-            if sensitive_attr is None:
-                raise ValueError("No sensitive attributes available for mitigation")
-            # Apply technique
-            if stage == "post-processing":
-                result = engine.apply_technique(
-                    technique_name=technique_name,
-                    stage=stage,
-                    X_train=X_train,
-                    y_train=y_train,
-                    X_test=X_test,
-                    y_test=y_test,
-                    sensitive_train=sensitive_train,
-                    sensitive_test=sensitive_test,
-                    sensitive_attr=sensitive_attr,
-                    base_model=baseline_model,
-                )
-            else:
-                result = engine.apply_technique(
-                    technique_name=technique_name,
-                    stage=stage,
-                    X_train=X_train,
-                    y_train=y_train,
-                    X_test=X_test,
-                    y_test=y_test,
-                    sensitive_train=sensitive_train,
-                    sensitive_test=sensitive_test,
-                    sensitive_attr=sensitive_attr,
-                    base_model_params=base_model_params,
-                )
-
-            # Generate predictions DataFrame for fairness assessment
-            y_proba = result["predictions"]["y_proba"]
-            if y_proba is None:
-                # Use predictions as fallback if no probabilities
-                y_proba = result["predictions"]["y_pred"]
-                logging.warning(
-                    f"No probabilities available for {technique_name}, using predictions"
-                )
-
-            predictions_df = pd.DataFrame(
-                {
-                    "y_true": y_test.values,
-                    "y_pred": result["predictions"]["y_pred"],
-                    "y_proba": y_proba,
-                }
-            )
-            for col in sensitive_test.columns:
-                predictions_df[col] = sensitive_test[col].values
-
-            # Add model features for individual fairness calculation
-            for col in X_test.columns:
-                predictions_df[col] = X_test[col].values
-
-            # Calculate fairness metrics
-            # Use actual model features (numeric) for individual fairness, not sensitive attrs
-            fairness_calc = FairnessMetrics(list(sensitive_test.columns))
-            fairness_results = fairness_calc.calculate_all_metrics(
-                predictions_df, feature_cols=list(X_test.columns)
-            )
-
-            # Compile result
-            results.append(
-                {
-                    "dataset": dataset_name,
-                    "technique": technique_name,
-                    "stage": stage,
-                    "test_metrics": result["test_metrics"],
-                    "fairness": fairness_results,
-                    "metadata": result["metadata"],
-                }
-            )
-
+        for sensitive_attr in resolved_attrs:
             logging.info(
-                "[SUCCESS] Mitigation complete dataset=%s technique=%s stage=%s",
-                dataset_name,
+                "[MITIGATION] technique=%s stage=%s constraint=%s dataset=%s",
                 technique_name,
                 stage,
+                sensitive_attr,
+                dataset_name,
             )
-            logging.info(f"  Accuracy: {result['test_metrics']['accuracy']:.3f}")
-            logging.info(f"  Recall: {result['test_metrics']['recall']:.3f}")
 
-        except Exception as e:
-            logging.error(f"Failed to apply {technique_name}: {e}")
-            logging.exception(e)
+            try:
+                # Apply technique
+                if stage == "post-processing":
+                    result = engine.apply_technique(
+                        technique_name=technique_name,
+                        stage=stage,
+                        X_train=X_train,
+                        y_train=y_train,
+                        X_test=X_test,
+                        y_test=y_test,
+                        sensitive_train=sensitive_train,
+                        sensitive_test=sensitive_test,
+                        sensitive_attr=sensitive_attr,
+                        base_model=baseline_model,
+                    )
+                else:
+                    result = engine.apply_technique(
+                        technique_name=technique_name,
+                        stage=stage,
+                        X_train=X_train,
+                        y_train=y_train,
+                        X_test=X_test,
+                        y_test=y_test,
+                        sensitive_train=sensitive_train,
+                        sensitive_test=sensitive_test,
+                        sensitive_attr=sensitive_attr,
+                        base_model_params=base_model_params,
+                    )
+
+                # Generate predictions DataFrame for fairness assessment
+                y_proba = result["predictions"]["y_proba"]
+                if y_proba is None:
+                    # Use predictions as fallback if no probabilities
+                    y_proba = result["predictions"]["y_pred"]
+                    logging.warning(
+                        f"No probabilities available for {technique_name}, using predictions"
+                    )
+
+                predictions_df = pd.DataFrame(
+                    {
+                        "y_true": y_test.values,
+                        "y_pred": result["predictions"]["y_pred"],
+                        "y_proba": y_proba,
+                    }
+                )
+                for col in sensitive_test.columns:
+                    predictions_df[col] = sensitive_test[col].values
+
+                # Add model features for individual fairness calculation
+                for col in X_test.columns:
+                    predictions_df[col] = X_test[col].values
+
+                # Carry analysis-only `*_raw` metadata (e.g. age_raw) for the
+                # post-hoc age-binning sweep; never a feature or grouping key.
+                if meta_test is not None:
+                    for col in meta_test.columns:
+                        predictions_df[col] = meta_test[col].values
+
+                # Persist the mitigated per-sample predictions ("after" regime)
+                # so the age-binning sensitivity sweep can pair them vs baseline.
+                if predictions_dir is not None:
+                    predictions_dir.mkdir(parents=True, exist_ok=True)
+                    pred_path = (
+                        predictions_dir / f"{dataset_name}_{technique_name}_{sensitive_attr}.csv"
+                    )
+                    predictions_df.to_csv(pred_path, index=False)
+
+                # Calculate fairness metrics across ALL sensitive attrs (measurement
+                # is unchanged; only the imposed constraint varies per loop).
+                fairness_calc = FairnessMetrics(list(sensitive_test.columns))
+                fairness_results = fairness_calc.calculate_all_metrics(
+                    predictions_df, feature_cols=list(X_test.columns)
+                )
+
+                # Compile result
+                results.append(
+                    {
+                        "dataset": dataset_name,
+                        "technique": technique_name,
+                        "constraint_attr": sensitive_attr,
+                        "stage": stage,
+                        "test_metrics": result["test_metrics"],
+                        "fairness": fairness_results,
+                        "metadata": result["metadata"],
+                    }
+                )
+
+                logging.info(
+                    "[SUCCESS] Mitigation complete dataset=%s technique=%s constraint=%s stage=%s",
+                    dataset_name,
+                    technique_name,
+                    sensitive_attr,
+                    stage,
+                )
+                logging.info(f"  Accuracy: {result['test_metrics']['accuracy']:.3f}")
+                logging.info(f"  Recall: {result['test_metrics']['recall']:.3f}")
+
+            except Exception as e:
+                logging.error(
+                    f"Failed to apply {technique_name} (constraint={sensitive_attr}): {e}"
+                )
+                logging.exception(e)
 
     return results
+
+
+def _resolve_constraint_attrs(constraint_attrs, available_attrs):
+    """Resolve the ``constraint_attrs`` config into a list of attr names.
+
+    ``"all"`` / falsy-but-not-list → every available attr; a list → that subset
+    intersected with availability (order preserved); ``"none"`` → first attr
+    only (legacy). Returns ``[]`` when nothing is available.
+    """
+    if not available_attrs:
+        return []
+    if isinstance(constraint_attrs, (list, tuple)):
+        chosen = [a for a in constraint_attrs if a in available_attrs]
+        return chosen or available_attrs[:1]
+    mode = str(constraint_attrs or "all").lower()
+    if mode == "none":
+        return available_attrs[:1]
+    # "all" (default) or any unrecognized scalar → thorough.
+    return list(available_attrs)
 
 
 def create_comparison_table(all_results):
@@ -361,6 +425,7 @@ def create_comparison_table(all_results):
         row = {
             "dataset": result["dataset"],
             "technique": result["technique"],
+            "constraint_attr": result.get("constraint_attr", ""),
             "stage": result["stage"],
             "accuracy": metrics["accuracy"],
             "precision": metrics["precision"],
@@ -492,6 +557,13 @@ def run_analysis(
 
     sensitive_attrs = experiment_cfg.get("data", {}).get("sensitive_attributes", ["sex"])
 
+    # Which sensitive attrs to impose a fairness constraint on, per technique:
+    #   "all"  -> every available sensitive attr (thorough; default)
+    #   [list] -> an explicit subset (1-by-1 or combinations)
+    #   "none" -> legacy behavior: constrain on the first available attr only
+    constraint_attrs_cfg = experiment_cfg.get("constraint_attrs", "all")
+    logging.info("Mitigation constraint_attrs mode: %s", constraint_attrs_cfg)
+
     use_run_id = bool(run_id or os.getenv("RUN_ID") or os.getenv("PREFECT__RUNTIME__FLOW_RUN_ID"))
     run_id = resolve_run_id(run_id) if use_run_id else None
 
@@ -596,8 +668,8 @@ def run_analysis(
             dataset_dir = resolve_dataset_dir(data_dir, dataset_name, default_binning)
 
             # Load data — processed files carry the canonical target column
-            X_train, y_train, sensitive_train, X_test, y_test, sensitive_test = load_dataset(
-                dataset_name, dataset_dir, schema_cfg, target_col, sensitive_attrs
+            X_train, y_train, sensitive_train, X_test, y_test, sensitive_test, meta_test = (
+                load_dataset(dataset_name, dataset_dir, schema_cfg, target_col, sensitive_attrs)
             )
 
             # Train baseline
@@ -628,6 +700,9 @@ def run_analysis(
                 baseline["model"],
                 implemented,
                 base_model_params=model_params,
+                constraint_attrs=constraint_attrs_cfg,
+                meta_test=meta_test,
+                predictions_dir=output_dir / "predictions",
             )
 
             all_results.extend(mitigation_results)

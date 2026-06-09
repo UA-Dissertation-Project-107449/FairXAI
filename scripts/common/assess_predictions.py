@@ -20,10 +20,37 @@ import pandas as pd
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root / "src"))
 
-from fairxai.cli.runner_base import setup_phase_logging
+from fairxai.cli.runner_base import load_pipeline_config, setup_phase_logging
 from fairxai.fairness.metrics import FairnessMetrics, summarize_fairness_results
 
 _KNOWN_MODELS = ["logistic_regression", "random_forest", "svm", "xgboost"]
+
+# Map a config sensitive-attribute name to the decoded column produced by
+# decode_sensitive_attributes(). age_group / sex are decoded from scaled values;
+# ethnicity / group_cluster are categorical and pass through as *_cat strings.
+_SENSITIVE_DECODE_MAP = {
+    "age_group": "age_group_cat",
+    "sex": "sex_cat",
+    "ethnicity": "ethnicity_cat",
+    "group_cluster": "group_cluster_cat",
+}
+_DEFAULT_SENSITIVE = ["age_group", "sex"]
+
+
+def resolve_sensitive_columns(df: pd.DataFrame, configured: list) -> list:
+    """Resolve configured sensitive attrs to decoded columns present in *df*.
+
+    Falls back to the raw name when no decoded variant exists. Configured names
+    whose source column is absent are silently dropped.
+    """
+    resolved = []
+    for name in configured:
+        decoded = _SENSITIVE_DECODE_MAP.get(name, name)
+        if decoded in df.columns:
+            resolved.append(decoded)
+        elif name in df.columns:
+            resolved.append(name)
+    return resolved
 
 
 def _split_dataset_model(combined: str, known_models: list = _KNOWN_MODELS) -> tuple:
@@ -165,6 +192,12 @@ def decode_sensitive_attributes(df: pd.DataFrame) -> pd.DataFrame:
             # Fallback
             df["sex_cat"] = df["sex"].apply(lambda x: "Male" if x > 0 else "Female")
 
+    # Categorical sensitive attrs — no scaled decode, just a string passthrough.
+    if "group_cluster" in df.columns:
+        df["group_cluster_cat"] = df["group_cluster"].astype("Int64").astype(str)
+    if "ethnicity" in df.columns:
+        df["ethnicity_cat"] = df["ethnicity"].astype(str)
+
     return df
 
 
@@ -174,6 +207,7 @@ def assess_dataset_fairness(
     test_file: Path,
     output_dir: Path,
     metrics_calculator: FairnessMetrics,
+    configured_sensitive: list = None,
 ) -> Dict:
     """
     Assess fairness for a single dataset's predictions.
@@ -202,16 +236,20 @@ def assess_dataset_fairness(
     train_df = decode_sensitive_attributes(train_df)
     test_df = decode_sensitive_attributes(test_df)
 
-    # Check if decoding worked
-    if "age_group_cat" in train_df.columns and "sex_cat" in train_df.columns:
-        logging.info("Decoded sensitive attributes:")
-        logging.info(f"Age groups: {train_df['age_group_cat'].value_counts().to_dict()}")
-        logging.info(f"Sex: {train_df['sex_cat'].value_counts().to_dict()}")
-
-        # Use decoded columns
-        metrics_calculator.sensitive_attributes = ["age_group_cat", "sex_cat"]
+    # Resolve sensitive attributes from the pipeline config (honors
+    # group_cluster / ethnicity when present), falling back to age_group + sex.
+    configured = configured_sensitive or _DEFAULT_SENSITIVE
+    resolved = resolve_sensitive_columns(train_df, configured)
+    if resolved:
+        metrics_calculator.sensitive_attributes = resolved
+        logging.info("Sensitive attributes for fairness: %s", resolved)
+        for col in resolved:
+            if col in train_df.columns:
+                logging.info("  %s: %s", col, train_df[col].value_counts().to_dict())
     else:
-        logging.warning("Could not decode sensitive attributes, using scaled values")
+        logging.warning(
+            "Could not resolve any configured sensitive attributes; using scaled values"
+        )
 
     results = {"dataset": dataset_name, "train_metrics": {}, "test_metrics": {}, "comparison": {}}
 
@@ -223,12 +261,20 @@ def assess_dataset_fairness(
         "threshold",
         "age_group",
         "sex",
+        "ethnicity",
+        "group_cluster",
         "confidence",
         "near_threshold",
         "age_group_cat",
         "sex_cat",
+        "ethnicity_cat",
+        "group_cluster_cat",
     ]
-    feature_cols = [col for col in train_df.columns if col not in exclude_cols]
+    # `*_raw` are analysis-only metadata (continuous source of a sensitive attr,
+    # e.g. age_raw) the model never saw — keep them out of the k-NN distance.
+    feature_cols = [
+        col for col in train_df.columns if col not in exclude_cols and not col.endswith("_raw")
+    ]
 
     if not feature_cols:
         logging.warning("No feature columns found for individual fairness")
@@ -274,6 +320,7 @@ def assess_cv_fairness(
     cv_file: Path,
     output_dir: Path,
     metrics_calculator: FairnessMetrics,
+    configured_sensitive: list = None,
 ) -> Dict:
     """Assess fairness for CV out-of-fold predictions."""
     logging.info("[DATASET] Assessing CV fairness dataset_model=%s", dataset_name)
@@ -282,8 +329,11 @@ def assess_cv_fairness(
     logging.info("Loaded CV predictions: %d samples", len(cv_df))
 
     cv_df = decode_sensitive_attributes(cv_df)
-    if "age_group_cat" in cv_df.columns and "sex_cat" in cv_df.columns:
-        metrics_calculator.sensitive_attributes = ["age_group_cat", "sex_cat"]
+    configured = configured_sensitive or _DEFAULT_SENSITIVE
+    resolved = resolve_sensitive_columns(cv_df, configured)
+    if resolved:
+        metrics_calculator.sensitive_attributes = resolved
+        logging.info("CV sensitive attributes for fairness: %s", resolved)
 
     exclude_cols = [
         "fold",
@@ -300,8 +350,12 @@ def assess_cv_fairness(
         "near_threshold",
         "age_group_cat",
         "sex_cat",
+        "ethnicity_cat",
+        "group_cluster_cat",
     ]
-    feature_cols = [col for col in cv_df.columns if col not in exclude_cols]
+    feature_cols = [
+        col for col in cv_df.columns if col not in exclude_cols and not col.endswith("_raw")
+    ]
     if not feature_cols:
         feature_cols = None
 
@@ -566,7 +620,19 @@ def main():
     )
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    # Initialize fairness calculator
+    # Resolve configured sensitive attributes from the pipeline config so
+    # group_cluster / ethnicity are honored when present (per-cluster fairness).
+    try:
+        pipeline_cfg = load_pipeline_config(project_root, pipeline)
+        configured_sensitive = (pipeline_cfg.get("fairness", {}) or {}).get(
+            "sensitive_attributes", _DEFAULT_SENSITIVE
+        )
+    except Exception as exc:  # noqa: BLE001 — config is optional, fall back safely
+        logging.warning("Could not load pipeline config (%s); using default sensitive attrs", exc)
+        configured_sensitive = _DEFAULT_SENSITIVE
+    logging.info("Configured sensitive attributes: %s", configured_sensitive)
+
+    # Initialize fairness calculator (per-dataset override happens downstream).
     metrics_calculator = FairnessMetrics(sensitive_attributes=["age_group_cat", "sex_cat"])
 
     # Find all prediction files (new path: results/predictions/{ds}_{m}_train.csv)
@@ -606,7 +672,12 @@ def main():
 
         try:
             results = assess_dataset_fairness(
-                combined_name, train_file, test_file, results_dir, metrics_calculator
+                combined_name,
+                train_file,
+                test_file,
+                results_dir,
+                metrics_calculator,
+                configured_sensitive=configured_sensitive,
             )
             nested_results.setdefault(dataset, {}).setdefault(model, {})["single_split"] = results
         except Exception as e:
@@ -630,7 +701,13 @@ def main():
         combined_name = cv_file.stem.replace("_cv", "")
         dataset, model = _split_dataset_model(combined_name)
         try:
-            cv_results = assess_cv_fairness(combined_name, cv_file, results_dir, metrics_calculator)
+            cv_results = assess_cv_fairness(
+                combined_name,
+                cv_file,
+                results_dir,
+                metrics_calculator,
+                configured_sensitive=configured_sensitive,
+            )
             nested_results.setdefault(dataset, {}).setdefault(model, {})["kfold_cv"] = cv_results
         except Exception as e:
             logging.exception(f"Failed to assess CV file {combined_name}: {e}")

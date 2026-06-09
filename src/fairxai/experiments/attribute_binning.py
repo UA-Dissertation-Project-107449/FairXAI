@@ -259,8 +259,35 @@ def create_binning_strategy(
     # Adaptive flag — forces stricter repair for fixed strategies
     adaptive = cfg.get("adaptive", method in ("adaptive_quantile",))
 
+    # -- Cardinality guard (data-driven methods only) ------------------------
+    # Quantile / equal-width / jenks need n_distinct >> n_bins to land
+    # near-equal bins. When a column has too few distinct values, binning is
+    # degenerate (e.g. 5 values into 7 bins, or 5 values into 3 bins -> forced
+    # 40/40/20). Fall back to one bin per distinct value (treat as categorical).
+    force_identity = False
+    if method in ("quantile", "equal_width", "jenks", "adaptive_quantile"):
+        requested_bins = int(cfg.get("n_bins", kwargs.get("n_bins", 5)))
+        n_distinct = int(df[col].nunique(dropna=True))
+        if n_distinct <= requested_bins:
+            logger.warning(
+                f"  strategy '{strategy_name}': column '{col}' has {n_distinct} "
+                f"distinct value(s) <= requested {requested_bins} bins — binning is "
+                f"degenerate; using one bin per distinct value (categorical fallback)."
+            )
+            force_identity = True
+        elif n_distinct < 2 * requested_bins:
+            logger.warning(
+                f"  strategy '{strategy_name}': column '{col}' has low granularity "
+                f"({n_distinct} distinct values for {requested_bins} bins) — bins will "
+                f"not be equal-sized."
+            )
+
+    # -- Categorical fallback (one bin per distinct value) -------------------
+    if force_identity:
+        bins, labels = _categorical_identity_bins(df[col])
+
     # -- Fixed edges ---------------------------------------------------------
-    if method == "fixed":
+    elif method == "fixed":
         bins = list(cfg["bins"])
         labels = list(cfg["labels"]) if cfg.get("labels") else None
 
@@ -391,6 +418,30 @@ def _jenks_bins(
     # Widen endpoints slightly to ensure all values are captured
     edges[0] -= 0.001
     edges[-1] += 0.001
+    return edges, None
+
+
+def _categorical_identity_bins(series: pd.Series) -> Tuple[List[float], None]:
+    """Build edges that isolate every distinct value into its own bin.
+
+    Used as the cardinality fallback when a column has too few distinct values
+    for the requested number of bins (binning would be degenerate).  Each
+    distinct value lands in exactly one bin, so the column is effectively
+    treated as categorical.  Edges are placed at the midpoints between sorted
+    unique values, with the endpoints widened slightly so
+    ``pd.cut(..., include_lowest=True)`` captures the extremes.
+
+    Returns ``(edges, None)`` — labels are auto-generated downstream, matching
+    the quantile / equal-width convention.
+    """
+    uniques = sorted(float(v) for v in series.dropna().unique())
+    if len(uniques) < 2:
+        # Single distinct value — one all-encompassing bin.
+        v = uniques[0] if uniques else 0.0
+        return [v - 0.001, v + 0.001], None
+
+    midpoints = [(lo + hi) / 2.0 for lo, hi in zip(uniques[:-1], uniques[1:])]
+    edges = [uniques[0] - 0.001, *midpoints, uniques[-1] + 0.001]
     return edges, None
 
 
@@ -903,9 +954,9 @@ def compare_strategies(results: List[Dict], by_dataset: bool = True) -> pd.DataF
 
 def compute_strategy_score(
     result: Dict,
-    sample_size_weight: float = 0.40,
-    balance_weight: float = 0.30,
-    fairness_weight: float = 0.30,
+    sample_size_weight: float = 1 / 3,
+    balance_weight: float = 1 / 3,
+    fairness_weight: float = 1 / 3,
 ) -> float:
     """
     Compute overall score for a binning strategy.
@@ -928,7 +979,7 @@ def compute_strategy_score(
         Weights should sum to 1.0 for interpretable scores
 
     Example:
-        >>> score = compute_strategy_score(result, 0.4, 0.3, 0.3)
+        >>> score = compute_strategy_score(result, 1 / 3, 1 / 3, 1 / 3)
         >>> print(f"Strategy score: {score:.3f}")
     """
     metrics = result["fairness_metrics"]
@@ -981,7 +1032,7 @@ def generate_summary_report(
     logger.info(f"Generating summary report: {output_file}")
 
     if scoring_weights is None:
-        scoring_weights = {"sample_size": 0.40, "balance": 0.30, "fairness": 0.30}
+        scoring_weights = {"sample_size": 1 / 3, "balance": 1 / 3, "fairness": 1 / 3}
 
     # Compute scores for ranking
     for result in results:
@@ -1010,9 +1061,9 @@ def generate_summary_report(
     report.append(f"- **Total configurations**: {len(results)}\n")
 
     report.append("## Scoring Weights\n")
-    report.append(f"- Sample Size: {scoring_weights['sample_size']:.0%}")
-    report.append(f"- Group Balance: {scoring_weights['balance']:.0%}")
-    report.append(f"- Fairness Sensitivity: {scoring_weights['fairness']:.0%}\n")
+    report.append(f"- Sample Size: {scoring_weights['sample_size']:.1%}")
+    report.append(f"- Group Balance: {scoring_weights['balance']:.1%}")
+    report.append(f"- Fairness Sensitivity: {scoring_weights['fairness']:.1%}\n")
 
     report.append("## Comparison Table\n")
     report.append("```")

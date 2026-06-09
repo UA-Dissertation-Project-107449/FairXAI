@@ -278,12 +278,19 @@ def run_analysis(
             },
         )
 
-    # Get scoring weights from config
+    # Get scoring weights from config.  Equal thirds by default (no component
+    # privileged).  Reads the nested ``scoring.weights`` block; falls back to
+    # the legacy flat keys for backward compatibility.
     scoring_cfg = experiment_cfg.get("scoring", {})
+    weights_cfg = scoring_cfg.get("weights", {})
     scoring_weights = {
-        "sample_size": scoring_cfg.get("sample_size_weight", 0.40),
-        "balance": scoring_cfg.get("group_balance_weight", 0.30),
-        "fairness": scoring_cfg.get("fairness_sensitivity_weight", 0.30),
+        "sample_size": weights_cfg.get(
+            "min_group_size", scoring_cfg.get("sample_size_weight", 1 / 3)
+        ),
+        "balance": weights_cfg.get("group_balance", scoring_cfg.get("group_balance_weight", 1 / 3)),
+        "fairness": weights_cfg.get(
+            "fairness_sensitivity", scoring_cfg.get("fairness_sensitivity_weight", 1 / 3)
+        ),
     }
 
     logging.info("Scoring weights:")

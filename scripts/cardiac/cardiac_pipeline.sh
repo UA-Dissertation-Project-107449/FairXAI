@@ -641,6 +641,36 @@ else
     echo "[6/12] feature_selection_study — SKIPPED (outside active range)"
 fi
 
+# ---- Optional pre-train clustering (inject group_cluster before training) ----
+# Off by default. Enable via env RUN_GROUPING=1 or grouping.enabled in the
+# pipeline config. Fits clustering on TRAIN only and assigns test by nearest
+# centroid (leakage guard), writing group_cluster into the split CSVs so the
+# trainer treats clusters as a sensitive attribute. Idempotent.
+GROUPING_ENABLED=$(python3 - "$ROOT_DIR" <<'GROUPING_PY'
+import sys
+import yaml
+from pathlib import Path
+
+cfg = yaml.safe_load((Path(sys.argv[1]) / "configs/pipelines/cardiac.yaml").read_text()) or {}
+print("true" if (cfg.get("grouping", {}) or {}).get("enabled", False) else "false")
+GROUPING_PY
+)
+RUN_GROUPING=${RUN_GROUPING:-$GROUPING_ENABLED}
+# Normalize truthy values (1/true/yes/on, any case) → "true".
+shopt -s nocasematch
+[[ "$RUN_GROUPING" =~ ^(1|true|yes|on)$ ]] && RUN_GROUPING=true || RUN_GROUPING=false
+shopt -u nocasematch
+
+if should_run 7 && [[ "$RUN_GROUPING" == "true" ]]; then
+    echo "[CLUSTER] Discovering subgroups (train-only) -> group_cluster"
+    python3 "$ROOT_DIR/scripts/cardiac/cluster_subgroups.py" \
+        --pipeline cardiac --config "$GROUPING_CONFIG" \
+        "${DATASET_ARGS[@]}" $VERBOSE_FLAG
+    echo ""
+elif should_run 7; then
+    echo "[CLUSTER] subgroup discovery — SKIPPED (set RUN_GROUPING=1 or grouping.enabled=true)"
+fi
+
 # Wiring helper for stages that consume study recommendations
 if should_run 7 || { should_run 11 && [[ "$RUN_COMBINATORIAL" == "true" ]]; }; then
     echo "[WIRING] Building selector contract from study artifacts"
@@ -672,6 +702,36 @@ if should_run 8; then
     echo ""
 else
     echo "[8/12] assess — SKIPPED (outside active range)"
+fi
+
+# ---- Optional post-assess similarity analysis (individual fairness) ----------
+# Off by default. Enable via env RUN_SIMILARITY=1 or similarity.enabled in the
+# pipeline config. Analysis-only: per-model scaled k-NN consistency + per-group
+# breakdown + density map under <run>/baseline/individual_fairness/. Needs the
+# predictions produced by stage 7/8 → runs after assess.
+SIMILARITY_ENABLED=$(python3 - "$ROOT_DIR" <<'SIMILARITY_PY'
+import sys
+import yaml
+from pathlib import Path
+
+cfg = yaml.safe_load((Path(sys.argv[1]) / "configs/pipelines/cardiac.yaml").read_text()) or {}
+print("true" if (cfg.get("similarity", {}) or {}).get("enabled", False) else "false")
+SIMILARITY_PY
+)
+RUN_SIMILARITY=${RUN_SIMILARITY:-$SIMILARITY_ENABLED}
+# Normalize truthy values (1/true/yes/on, any case) → "true".
+shopt -s nocasematch
+[[ "$RUN_SIMILARITY" =~ ^(1|true|yes|on)$ ]] && RUN_SIMILARITY=true || RUN_SIMILARITY=false
+shopt -u nocasematch
+
+if should_run 8 && [[ "$RUN_SIMILARITY" == "true" ]]; then
+    echo "[SIMILARITY] Per-model individual fairness (scaled k-NN consistency)"
+    python3 "$ROOT_DIR/scripts/cardiac/similarity_analysis.py" \
+        --pipeline cardiac --run-id "$RUN_ID" \
+        "${DATASET_ARGS[@]}" $VERBOSE_FLAG
+    echo ""
+elif should_run 8; then
+    echo "[SIMILARITY] individual fairness — SKIPPED (set RUN_SIMILARITY=1 or similarity.enabled=true)"
 fi
 
 # Stage 9 — Attribute binning (optional)
@@ -752,6 +812,37 @@ if should_run 10; then
     fi
 else
     echo "[10/12] mitigation — SKIPPED (outside active range)"
+fi
+
+# ---- Optional post-mitigation age-binning fairness sensitivity sweep ---------
+# Off by default. Enable via env RUN_AGE_BINNING=1 or age_binning_sensitivity.enabled
+# in the pipeline config. Analysis-only: predictions are independent of the age
+# binning, so per-age-bin fairness is recomputed POST-HOC under several strategies
+# (Axis B) and baseline "before" is paired vs mitigated "after" (Axis A). Runs after
+# mitigation (so the "after" sets exist) → output under
+# <run>/baseline/age_binning_sensitivity/.
+AGE_BINNING_ENABLED=$(python3 - "$ROOT_DIR" <<'AGE_BINNING_PY'
+import sys
+import yaml
+from pathlib import Path
+
+cfg = yaml.safe_load((Path(sys.argv[1]) / "configs/pipelines/cardiac.yaml").read_text()) or {}
+print("true" if (cfg.get("age_binning_sensitivity", {}) or {}).get("enabled", False) else "false")
+AGE_BINNING_PY
+)
+RUN_AGE_BINNING=${RUN_AGE_BINNING:-$AGE_BINNING_ENABLED}
+shopt -s nocasematch
+[[ "$RUN_AGE_BINNING" =~ ^(1|true|yes|on)$ ]] && RUN_AGE_BINNING=true || RUN_AGE_BINNING=false
+shopt -u nocasematch
+
+if should_run 10 && [[ "$RUN_AGE_BINNING" == "true" ]]; then
+    echo "[AGE-BINNING] Fairness sensitivity sweep (before/after × binning strategies)"
+    python3 "$ROOT_DIR/scripts/cardiac/age_binning_analysis.py" \
+        --pipeline cardiac --run-id "$RUN_ID" \
+        "${DATASET_ARGS[@]}" $VERBOSE_FLAG
+    echo ""
+elif should_run 10; then
+    echo "[AGE-BINNING] sensitivity sweep — SKIPPED (set RUN_AGE_BINNING=1 or age_binning_sensitivity.enabled=true)"
 fi
 
 # Stage 11 — Combinatorial (optional)

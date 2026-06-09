@@ -31,9 +31,11 @@ class SimilarityEngine:
         self,
         k_values: Optional[List[int]] = None,
         pred_col: str = "y_pred",
+        standardize: bool = True,
     ) -> None:
         self.k_values = k_values or [5, 10, 20]
         self.pred_col = pred_col
+        self.standardize = standardize
         self._fm = FairnessMetrics()
 
     # ------------------------------------------------------------------
@@ -73,7 +75,11 @@ class SimilarityEngine:
                 continue
             try:
                 result = self._fm.individual_fairness_consistency(
-                    df, feature_cols=valid_cols, pred_col=self.pred_col, k=k
+                    df,
+                    feature_cols=valid_cols,
+                    pred_col=self.pred_col,
+                    k=k,
+                    standardize=self.standardize,
                 )
                 rows.append(
                     SimilarityRow(
@@ -117,23 +123,42 @@ class SimilarityEngine:
         """Return per-sample consistency scores for a single k.
 
         Used by :class:`~fairxai.similarity.density.ViolationDensityMapper`.
+        Delegates to :class:`FairnessMetrics` so the same (optionally scaled)
+        distance is used here and in :meth:`compute`.
 
         Returns:
             1-D float array of length ``len(df)``, values in [0, 1].
         """
-        from scipy.spatial.distance import pdist, squareform
-
         valid_cols = [c for c in feature_cols if c in df.columns]
-        X = df[valid_cols].values
-        y_pred = df[self.pred_col].values
-        n = len(X)
+        return self._fm._per_sample_consistency(df, valid_cols, self.pred_col, k, self.standardize)
 
-        distances = squareform(pdist(X, metric="euclidean"))
-        consistencies = np.empty(n, dtype=float)
+    def per_group_consistency(
+        self,
+        df: pd.DataFrame,
+        feature_cols: List[str],
+        group_cols: List[str],
+        k: int = 5,
+    ) -> dict:
+        """Per-sensitive-group k-NN consistency, one block per group column.
 
-        for i in range(n):
-            nearest = np.argsort(distances[i])[: k + 1]
-            nearest = nearest[nearest != i][:k]
-            consistencies[i] = (y_pred[nearest] == y_pred[i]).sum() / k
+        Neighbours are global; scores are aggregated per group value. A low score
+        for a group flags an individual-fairness gap for that subgroup.
 
-        return consistencies
+        Returns:
+            ``{group_col: {group_value: {"mean_consistency", "min_consistency",
+            "n"}}}`` for each present, non-constant-free group column.
+        """
+        valid_cols = [c for c in feature_cols if c in df.columns]
+        out: dict = {}
+        for gcol in group_cols:
+            if gcol not in df.columns:
+                continue
+            out[gcol] = self._fm.individual_fairness_by_group(
+                df,
+                feature_cols=valid_cols,
+                group_col=gcol,
+                pred_col=self.pred_col,
+                k=k,
+                standardize=self.standardize,
+            )
+        return out

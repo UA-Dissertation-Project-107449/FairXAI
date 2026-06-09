@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from math import ceil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -43,10 +44,26 @@ class ClusteringEngine:
         self,
         config: Optional[Dict[str, Any]] = None,
         feature_exclude: Optional[List[str]] = None,
+        min_clusters: int = 2,
+        min_cluster_size_abs: int = 1,
+        min_cluster_size_frac: float = 0.0,
     ) -> None:
         self._config = config or {}
         self._extra_exclude = set(feature_exclude or [])
         self._scaler = StandardScaler()
+        # Validity gate (defaults are a no-op → WebApp byte-identical). A solution
+        # is valid only if it has >= min_clusters and every cluster holds at least
+        # max(min_cluster_size_abs, ceil(min_cluster_size_frac * n)) samples.
+        self.min_clusters = min_clusters
+        self.min_cluster_size_abs = min_cluster_size_abs
+        self.min_cluster_size_frac = min_cluster_size_frac
+
+    def _effective_min_cluster_size(self, n_samples: int) -> int:
+        return max(self.min_cluster_size_abs, ceil(self.min_cluster_size_frac * n_samples))
+
+    def _is_valid_solution(self, labels: "np.ndarray", min_size: int) -> bool:
+        uniq, counts = np.unique(labels, return_counts=True)
+        return len(uniq) >= self.min_clusters and counts.min() >= min_size
 
     # ------------------------------------------------------------------
     # Public API
@@ -114,8 +131,22 @@ class ClusteringEngine:
                 "(check data size, DBSCAN eps, or n_clusters grid)."
             )
 
-        # Pick overall winner: highest silhouette
-        best_sil, best_labels, best_diag = max(candidates, key=lambda t: t[0])
+        # Validity gate: drop degenerate solutions (single effective cluster, or
+        # any cluster below the min size). Disqualifies the whole solution so a
+        # lopsided DBSCAN (e.g. 88% in one cluster + tiny rest) can't win on
+        # silhouette over a balanced KMeans. Defaults make this a no-op.
+        min_size = self._effective_min_cluster_size(n_samples)
+        valid = [c for c in candidates if self._is_valid_solution(np.asarray(c[1]), min_size)]
+        if not valid:
+            raise ClusteringError(
+                f"No clustering solution met the validity gate "
+                f"(min_clusters={self.min_clusters}, min_cluster_size={min_size} "
+                f"= max({self.min_cluster_size_abs}, ceil({self.min_cluster_size_frac}*{n_samples}))). "
+                "All candidates were degenerate (single dominant cluster or sub-threshold groups)."
+            )
+
+        # Pick overall winner among valid solutions: highest silhouette.
+        best_sil, best_labels, best_diag = max(valid, key=lambda t: t[0])
 
         group_cluster = pd.Series(best_labels, index=df.index, name="group_cluster", dtype=int)
 

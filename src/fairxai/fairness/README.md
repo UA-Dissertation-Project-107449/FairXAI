@@ -17,6 +17,13 @@ techniques spanning pre-processing, in-processing, and post-processing stages.
 
 - `FairnessMetrics`
   - Computes demographic parity, equalized odds, and individual fairness metrics.
+  - `individual_fairness_consistency(..., standardize=True)` - k-NN prediction
+    consistency. Features are **z-scored before distance** (default) so
+    high-magnitude columns (e.g. `chol`) don't dominate the neighbourhood vs
+    `sex ∈ {0,1}`; pass `standardize=False` for raw distance.
+  - `individual_fairness_by_group(df, feature_cols, group_col, ...)` - the same
+    consistency aggregated **per sensitive-group** (`mean/std/min/max/n`); a low
+    score for a group flags an individual-fairness gap for that subgroup.
 
 - `PreProcessingMitigation`
   - Data-level techniques (e.g., reweighting, SMOTE, ROS/RUS/ADASYN).

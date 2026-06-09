@@ -301,8 +301,43 @@ class FairnessMetrics:
 
         return results
 
+    def _per_sample_consistency(
+        self,
+        df: pd.DataFrame,
+        feature_cols: List[str],
+        pred_col: str,
+        k: int,
+        standardize: bool,
+    ) -> np.ndarray:
+        """k-NN prediction consistency per sample, in [0, 1].
+
+        When ``standardize`` is True, features are z-scored before computing
+        Euclidean distance so that no single high-magnitude feature dominates the
+        neighbourhood (e.g. cholesterol ~240 vs sex in {0, 1}).
+        """
+        X = df[feature_cols].values.astype(float)
+        if standardize:
+            from sklearn.preprocessing import StandardScaler
+
+            X = StandardScaler().fit_transform(X)
+        y_pred = df[pred_col].values
+
+        distances = squareform(pdist(X, metric="euclidean"))
+        consistencies = np.empty(len(df), dtype=float)
+        for i in range(len(df)):
+            # k+1 nearest (includes self), then drop self.
+            nearest = np.argsort(distances[i])[: k + 1]
+            nearest = nearest[nearest != i][:k]
+            consistencies[i] = (y_pred[nearest] == y_pred[i]).sum() / k
+        return consistencies
+
     def individual_fairness_consistency(
-        self, df: pd.DataFrame, feature_cols: List[str], pred_col: str = "y_pred", k: int = 5
+        self,
+        df: pd.DataFrame,
+        feature_cols: List[str],
+        pred_col: str = "y_pred",
+        k: int = 5,
+        standardize: bool = True,
     ) -> Dict:
         """
         Calculate individual fairness via k-nearest neighbor consistency.
@@ -315,39 +350,60 @@ class FairnessMetrics:
             feature_cols: List of feature column names
             pred_col: Name of prediction column
             k: Number of nearest neighbors to consider
+            standardize: z-score features before distance (default True) so
+                high-magnitude features don't dominate the neighbourhood.
 
         Returns:
             Dictionary with consistency metrics
         """
-        # Extract features
-        X = df[feature_cols].values
-        y_pred = df[pred_col].values
-
-        # Compute pairwise distances
-        distances = squareform(pdist(X, metric="euclidean"))
-
-        # For each sample, find k nearest neighbors (excluding itself)
-        consistencies = []
-        for i in range(len(df)):
-            # Get k+1 nearest (including itself), then exclude itself
-            nearest_indices = np.argsort(distances[i])[: k + 1]
-            nearest_indices = nearest_indices[nearest_indices != i][:k]
-
-            # Check prediction consistency
-            same_prediction = (y_pred[nearest_indices] == y_pred[i]).sum()
-            consistency = same_prediction / k
-            consistencies.append(consistency)
+        consistencies = self._per_sample_consistency(df, feature_cols, pred_col, k, standardize)
 
         results = {
             "metric": "individual_fairness_consistency",
             "k": k,
-            "mean_consistency": np.mean(consistencies),
-            "std_consistency": np.std(consistencies),
-            "min_consistency": np.min(consistencies),
-            "median_consistency": np.median(consistencies),
+            "standardize": standardize,
+            "mean_consistency": float(np.mean(consistencies)),
+            "std_consistency": float(np.std(consistencies)),
+            "min_consistency": float(np.min(consistencies)),
+            "median_consistency": float(np.median(consistencies)),
         }
 
         return results
+
+    def individual_fairness_by_group(
+        self,
+        df: pd.DataFrame,
+        feature_cols: List[str],
+        group_col: str,
+        pred_col: str = "y_pred",
+        k: int = 5,
+        standardize: bool = True,
+    ) -> Dict[str, Dict]:
+        """Per-group individual fairness consistency.
+
+        Neighbours are drawn from the **whole** dataset (consistency is a global
+        k-NN property); results are then aggregated per ``group_col`` value, so a
+        low score for a group means its members tend to sit near differently
+        predicted neighbours — an individual-fairness gap for that subgroup.
+
+        Returns:
+            ``{group_value: {"mean_consistency", "min_consistency", "n"}}``.
+        """
+        consistencies = self._per_sample_consistency(df, feature_cols, pred_col, k, standardize)
+        groups = df[group_col].values
+
+        out: Dict[str, Dict] = {}
+        for g in pd.unique(groups):
+            mask = groups == g
+            scores = consistencies[mask]
+            out[str(g)] = {
+                "mean_consistency": float(np.mean(scores)),
+                "std_consistency": float(np.std(scores)),
+                "min_consistency": float(np.min(scores)),
+                "max_consistency": float(np.max(scores)),
+                "n": int(mask.sum()),
+            }
+        return out
 
     def calculate_all_metrics(
         self, df: pd.DataFrame, feature_cols: Optional[List[str]] = None
