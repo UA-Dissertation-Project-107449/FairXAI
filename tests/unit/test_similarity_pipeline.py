@@ -41,6 +41,16 @@ def test_resolve_feature_cols_drops_meta_and_sensitive():
     assert "group_cluster" not in cols and "sex_cat" not in cols
 
 
+def test_resolve_feature_cols_drops_raw_metadata():
+    """`*_raw` columns are analysis metadata (continuous source of a sensitive
+    attribute), never k-NN features — the model never saw them."""
+    df = _pred_df()
+    df["age_raw"] = range(len(df))
+    cols = resolve_feature_cols(df, exclude=["sex_cat", "group_cluster"])
+    assert "age_raw" not in cols
+    assert "feat" in cols
+
+
 def test_run_for_predictions_writes_scores_and_per_group(tmp_path):
     df = _pred_df()
     out = tmp_path / "logreg"
