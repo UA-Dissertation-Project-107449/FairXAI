@@ -122,6 +122,28 @@ def test_cluster_and_persist_writes_scaled_variant(tmp_path):
         assert GROUP_CLUSTER_COL in cols, f"{fname} missing {GROUP_CLUSTER_COL}"
 
 
+def test_cluster_and_persist_skips_when_validity_gate_fails(tmp_path):
+    """No valid clustering (min size impossibly large) → skip, no group_cluster."""
+    train_df = _two_blob_df(n_per=40, seed=8)
+    test_df = _two_blob_df(n_per=15, seed=9)
+    ds_dir = _write_splits(tmp_path, "toy", "fixed_10yr", train_df, test_df)
+
+    result = cluster_and_persist(
+        dataset="toy",
+        processed_dir=tmp_path,
+        binning="fixed_10yr",
+        method_cfg={"kmeans": {}},
+        feature_exclude=["heart_disease", GROUP_CLUSTER_COL],
+        out_dir=tmp_path / "out",
+        min_cluster_size_abs=10_000,  # no solution can satisfy this
+    )
+
+    assert result is None
+    # group_cluster must NOT have been written to the splits.
+    assert GROUP_CLUSTER_COL not in pd.read_csv(ds_dir / "toy_train.csv").columns
+    assert GROUP_CLUSTER_COL not in pd.read_csv(ds_dir / "toy_test.csv").columns
+
+
 def test_cluster_and_persist_missing_splits_returns_none(tmp_path):
     """No split files → graceful None (no crash)."""
     result = cluster_and_persist(

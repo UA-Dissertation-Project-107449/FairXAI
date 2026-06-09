@@ -62,6 +62,47 @@ class TestClusteringEngineKMeans:
         assert set(result.feature_cols) == {"feat_a", "feat_b"}
 
 
+class TestClusteringEngineValidityGate:
+    """min_cluster_size / min_clusters disqualify degenerate solutions.
+
+    Defaults must be a no-op so the WebApp adapter is byte-for-byte unchanged.
+    """
+
+    def test_default_params_do_not_filter(self):
+        df = _make_df(n=60)
+        cfg = {"kmeans": {"parameters": {"n_clusters": [3], "n_init": 5, "random_state": 42}}}
+        engine = ClusteringEngine(config=cfg)  # defaults: abs=1, frac=0.0
+        result = engine.fit(df, feature_cols=["feat_a", "feat_b"])
+        assert result.n_clusters >= 2
+
+    def test_min_cluster_size_too_large_raises(self):
+        """No solution can have clusters larger than n → everything disqualified."""
+        df = _make_df(n=60)
+        cfg = {"kmeans": {"parameters": {"n_clusters": [3], "n_init": 5, "random_state": 42}}}
+        engine = ClusteringEngine(config=cfg, min_cluster_size_abs=10_000)
+        with pytest.raises(ClusteringError):
+            engine.fit(df, feature_cols=["feat_a", "feat_b"])
+
+    def test_effective_threshold_uses_fraction(self):
+        """max(abs, frac*n): frac=0.9 on 60 rows → 54 > any 3-way split → raises."""
+        df = _make_df(n=60)
+        cfg = {"kmeans": {"parameters": {"n_clusters": [3], "n_init": 5, "random_state": 42}}}
+        engine = ClusteringEngine(config=cfg, min_cluster_size_abs=1, min_cluster_size_frac=0.9)
+        with pytest.raises(ClusteringError):
+            engine.fit(df, feature_cols=["feat_a", "feat_b"])
+
+    def test_modest_threshold_still_passes_balanced(self):
+        """A balanced 3-way split of 90 rows survives a min size of 20."""
+        df = _make_df(n=90, n_clusters=3)
+        cfg = {"kmeans": {"parameters": {"n_clusters": [3], "n_init": 5, "random_state": 42}}}
+        engine = ClusteringEngine(config=cfg, min_cluster_size_abs=20)
+        result = engine.fit(df, feature_cols=["feat_a", "feat_b"])
+        import numpy as np
+
+        _, counts = np.unique(result.group_cluster.to_numpy(), return_counts=True)
+        assert counts.min() >= 20
+
+
 class TestClusteringEngineErrors:
     def test_n_clusters_gt_n_samples_raises_clean_error(self):
         """When all k values exceed n_samples, ClusteringError is raised."""
