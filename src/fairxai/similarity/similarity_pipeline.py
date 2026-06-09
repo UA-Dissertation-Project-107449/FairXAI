@@ -42,7 +42,7 @@ def resolve_feature_cols(df: pd.DataFrame, exclude: Optional[List[str]] = None) 
     exclude_set = set(exclude or []) | _META_COLS
     cols = []
     for c in df.select_dtypes(include="number").columns:
-        if c in exclude_set or c.endswith("_cat"):
+        if c in exclude_set or c.endswith("_cat") or c.endswith("_raw"):
             continue
         cols.append(c)
     return cols

@@ -270,7 +270,11 @@ def assess_dataset_fairness(
         "ethnicity_cat",
         "group_cluster_cat",
     ]
-    feature_cols = [col for col in train_df.columns if col not in exclude_cols]
+    # `*_raw` are analysis-only metadata (continuous source of a sensitive attr,
+    # e.g. age_raw) the model never saw — keep them out of the k-NN distance.
+    feature_cols = [
+        col for col in train_df.columns if col not in exclude_cols and not col.endswith("_raw")
+    ]
 
     if not feature_cols:
         logging.warning("No feature columns found for individual fairness")
@@ -349,7 +353,9 @@ def assess_cv_fairness(
         "ethnicity_cat",
         "group_cluster_cat",
     ]
-    feature_cols = [col for col in cv_df.columns if col not in exclude_cols]
+    feature_cols = [
+        col for col in cv_df.columns if col not in exclude_cols and not col.endswith("_raw")
+    ]
     if not feature_cols:
         feature_cols = None
 
