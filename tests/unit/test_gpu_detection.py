@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from fairxai.utils.gpu import detect_accelerator
 
-VALID_DEVICES = {"cpu", "cuda"}
+VALID_DEVICES = {"cpu", "cuda", "rocm"}
 
 
 def test_force_cpu_always_returns_cpu():
@@ -35,7 +35,12 @@ def test_auto_never_raises():
         pytest.fail(f"detect_accelerator('auto') raised unexpectedly: {exc}")
 
 
+def test_rocm_returns_valid_device():
+    """ROCm request should resolve to rocm when HIP torch exists, otherwise cpu."""
+    result = detect_accelerator("rocm")
+    assert result in VALID_DEVICES
+
+
 def test_unknown_accelerator_falls_back_to_cpu():
     """An unrecognised accelerator string should not crash; expect cpu fallback."""
-    result = detect_accelerator("rocm")  # AMD not supported
-    assert result in VALID_DEVICES
+    assert detect_accelerator("unknown") == "cpu"
