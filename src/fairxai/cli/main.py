@@ -14,6 +14,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
+    # --- profile -----------------------------------------------------------
+    profile = sub.add_parser("profile", help="Read lightweight upload metadata")
+    profile.add_argument("--filename", required=True)
+    profile.add_argument("--datasets-dir", default=None)
+
     # --- characterize -------------------------------------------------------
     char = sub.add_parser("characterize", help="Compute complexity metrics + EBM difficulty")
     char.add_argument("--filename", required=True)
@@ -79,7 +84,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        if args.command == "characterize":
+        if args.command == "profile":
+            from fairxai.integration.profile import profile_dataset
+
+            result = profile_dataset(
+                filename=args.filename,
+                datasets_dir=args.datasets_dir,
+            )
+            print(json.dumps(result))
+
+        elif args.command == "characterize":
             from fairxai.integration.characterize import characterize_dataset
 
             result = characterize_dataset(
