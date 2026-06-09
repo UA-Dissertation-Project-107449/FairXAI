@@ -100,3 +100,29 @@ class TestViolationDensityMapper:
             output_file=tmp_path / "map.png",
         )
         assert result.output_file is None
+
+
+class TestSimilarityEngineScalingAndGroups:
+    """Engine must scale features and expose a per-group breakdown."""
+
+    def _scale_trap_df(self, n_per=20, seed=11):
+        rng = np.random.default_rng(seed)
+        info = np.array([0.0] * n_per + [1.0] * n_per)
+        pred = np.array([0] * n_per + [1] * n_per)
+        noise = rng.uniform(0, 1000, size=2 * n_per)
+        grp = ["A"] * n_per + ["B"] * n_per
+        return pd.DataFrame({"info": info, "noise": noise, "grp": grp, "y_pred": pred})
+
+    def test_per_sample_consistency_is_scaled(self):
+        """Scaled distance ignores the huge noise feature → high consistency."""
+        df = self._scale_trap_df()
+        engine = SimilarityEngine(k_values=[5], pred_col="y_pred")
+        scores = engine.per_sample_consistency(df, ["info", "noise"], k=5)
+        assert scores.mean() > 0.7  # unscaled would scramble to ~0.5
+
+    def test_per_group_consistency_returns_entry_per_attr_and_group(self):
+        df = self._scale_trap_df()
+        engine = SimilarityEngine(k_values=[5], pred_col="y_pred")
+        result = engine.per_group_consistency(df, ["info", "noise"], group_cols=["grp"], k=5)
+        assert "grp" in result
+        assert set(result["grp"].keys()) == {"A", "B"}
