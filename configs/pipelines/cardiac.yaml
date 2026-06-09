@@ -52,6 +52,10 @@ grouping:
   min_clusters: 2
   min_cluster_size_abs: 20
   min_cluster_size_frac: 0.05
+  # Stability floor: reject the winning solution if its silhouette is below this
+  # (separate from the size gate — guards against flimsy-but-balanced clusters).
+  # null/omit = disabled. 0.05 matches the WebApp adapter default.
+  min_silhouette: 0.05
 
 # Post-assess similarity analysis (individual fairness). Analysis-only — needs
 # predictions, never affects training. Off by default → enable via this flag or

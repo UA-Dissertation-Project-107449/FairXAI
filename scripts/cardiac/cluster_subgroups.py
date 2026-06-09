@@ -108,6 +108,9 @@ def main() -> None:
     min_clusters = int(grouping_cfg.get("min_clusters", 2))
     min_cluster_size_abs = int(grouping_cfg.get("min_cluster_size_abs", 1))
     min_cluster_size_frac = float(grouping_cfg.get("min_cluster_size_frac", 0.0))
+    # Optional silhouette stability floor; None/unset = disabled.
+    _ms = grouping_cfg.get("min_silhouette")
+    min_silhouette = float(_ms) if _ms is not None else None
 
     out_base = _ROOT / "output" / pipeline / "studies" / "grouping_pretrain"
 
@@ -131,6 +134,7 @@ def main() -> None:
                 min_clusters=min_clusters,
                 min_cluster_size_abs=min_cluster_size_abs,
                 min_cluster_size_frac=min_cluster_size_frac,
+                min_silhouette=min_silhouette,
             )
         except Exception as exc:  # noqa: BLE001 — isolate per-dataset failures
             logger.error("[ERROR] cluster: dataset %s failed: %s", dataset, exc, exc_info=True)

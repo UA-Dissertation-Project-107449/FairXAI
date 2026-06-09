@@ -11,7 +11,7 @@ import pandas as pd
 from sklearn.decomposition import PCA as SklearnPCA
 from sklearn.preprocessing import StandardScaler
 
-from fairxai.clustering.engine import ClusteringEngine
+from fairxai.clustering.engine import _DEFAULT_MIN_SILHOUETTE, ClusteringEngine
 from fairxai.clustering.profiles import ClusterProfiler
 
 logger = logging.getLogger(__name__)
@@ -84,6 +84,9 @@ def run_clustering(
     engine = ClusteringEngine(
         config=_engine_config_for_method(requested_method),
         feature_exclude=[target_column],
+        # Stability floor on by default for WebApp: rejects flimsy clusterings so a
+        # weak DBSCAN can't be surfaced. Validated on the evidence_cleanup branch.
+        min_silhouette=_DEFAULT_MIN_SILHOUETTE,
     )
     result = engine.fit(df, feature_cols=None)
 

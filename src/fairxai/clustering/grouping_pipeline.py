@@ -130,6 +130,7 @@ def cluster_and_persist(
     min_clusters: int = 2,
     min_cluster_size_abs: int = 1,
     min_cluster_size_frac: float = 0.0,
+    min_silhouette: Optional[float] = None,
 ) -> Optional[ClusterResult]:
     """Fit clustering on the train split, label test, persist ``group_cluster``.
 
@@ -182,6 +183,7 @@ def cluster_and_persist(
             min_clusters=min_clusters,
             min_cluster_size_abs=min_cluster_size_abs,
             min_cluster_size_frac=min_cluster_size_frac,
+            min_silhouette=min_silhouette,
         )
         result = engine.fit(train_df)  # TRAIN ONLY — leakage guard
     except ClusteringError as exc:
