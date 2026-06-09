@@ -308,7 +308,9 @@ class DermatologyDataLoader:
         with open(config_path, "r") as f:
             self.config = json.load(f)
         self.datasets = self.config.get("datasets", {})
-        self.dermatology_datasets = self.config.get("dermatology_relevant_datasets", ["pad_ufes_20"])
+        self.dermatology_datasets = self.config.get(
+            "dermatology_relevant_datasets", ["pad_ufes_20"]
+        )
         self.last_image_reports: dict[str, dict[str, Any]] = {}
 
     def load_dataset(self, dataset_name: str, data_dir: str) -> pd.DataFrame:
@@ -358,8 +360,12 @@ class DermatologyDataLoader:
         cfg: dict[str, Any],
     ) -> pd.DataFrame:
         target_col = cfg.get("target", "diagnostic")
-        positive_labels = {str(v).upper() for v in cfg.get("positive_labels", ["BCC", "SCC", "MEL"])}
-        negative_labels = {str(v).upper() for v in cfg.get("negative_labels", ["ACK", "NEV", "SEK"])}
+        positive_labels = {
+            str(v).upper() for v in cfg.get("positive_labels", ["BCC", "SCC", "MEL"])
+        }
+        negative_labels = {
+            str(v).upper() for v in cfg.get("negative_labels", ["ACK", "NEV", "SEK"])
+        }
         image_id_col = cfg.get("image_id_column", "img_id")
 
         required = [target_col, image_id_col]
@@ -374,7 +380,12 @@ class DermatologyDataLoader:
         out["skin_cancer"] = out["diagnostic_label"].map(mapping)
         unmapped = sorted(set(out.loc[out["skin_cancer"].isna(), "diagnostic_label"]))
         if unmapped:
-            logging.warning("%s: dropping %d rows with unmapped diagnostics: %s", dataset_name, out["skin_cancer"].isna().sum(), unmapped)
+            logging.warning(
+                "%s: dropping %d rows with unmapped diagnostics: %s",
+                dataset_name,
+                out["skin_cancer"].isna().sum(),
+                unmapped,
+            )
             out = out[out["skin_cancer"].notna()].copy()
         out["skin_cancer"] = out["skin_cancer"].astype(int)
 
@@ -394,13 +405,19 @@ class DermatologyDataLoader:
         if "gender" in out.columns:
             sex_label = out["gender"].astype("string").str.strip().str.upper()
             sex_label = sex_label.replace({"": pd.NA, "NAN": pd.NA, "NONE": pd.NA})
-            out["sex_extended"] = sex_label.map({"FEMALE": "Female", "MALE": "Male"}).fillna("unknown")
+            out["sex_extended"] = sex_label.map({"FEMALE": "Female", "MALE": "Male"}).fillna(
+                "unknown"
+            )
         else:
             out["sex_extended"] = "unknown"
         out["sex"] = out["sex_extended"].map({"Female": 0, "Male": 1}).fillna(-1).astype(int)
         out["sex_bin"] = out["sex"]
 
-        fst_col = "fitspatrick" if "fitspatrick" in out.columns else "fitzpatrick" if "fitzpatrick" in out.columns else None
+        fst_col = (
+            "fitspatrick"
+            if "fitspatrick" in out.columns
+            else "fitzpatrick" if "fitzpatrick" in out.columns else None
+        )
         if fst_col:
             fst = pd.to_numeric(out[fst_col], errors="coerce")
             out["fitzpatrick"] = fst.astype("Int64").astype("string").replace("<NA>", "unknown")
@@ -424,10 +441,14 @@ class DermatologyDataLoader:
         }
         self.last_image_reports[dataset_name] = report
         if missing_mask.any():
-            logging.warning("%s: filtering %d rows with missing images", dataset_name, int(missing_mask.sum()))
+            logging.warning(
+                "%s: filtering %d rows with missing images", dataset_name, int(missing_mask.sum())
+            )
             out = out[~missing_mask].copy()
 
-        out["patient_id"] = out.get("patient_id", pd.Series(range(len(out)), index=out.index)).astype(str)
+        out["patient_id"] = out.get(
+            "patient_id", pd.Series(range(len(out)), index=out.index)
+        ).astype(str)
         out["lesion_id"] = out.get("lesion_id", out["patient_id"]).astype(str)
 
         keep_cols = cfg.get("include_features") or []

@@ -438,7 +438,9 @@ class DermatologyPreprocessor(CardiacPreprocessor):
         """Keep image rows and make metadata safe for downstream profiling."""
         df_processed = df.copy()
         target = "skin_cancer"
-        required = [col for col in [target, "image_path", "patient_id"] if col in df_processed.columns]
+        required = [
+            col for col in [target, "image_path", "patient_id"] if col in df_processed.columns
+        ]
         initial_len = len(df_processed)
         if required:
             df_processed = df_processed.dropna(subset=required).copy()

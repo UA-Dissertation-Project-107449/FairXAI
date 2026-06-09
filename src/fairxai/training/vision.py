@@ -171,7 +171,11 @@ def train_image_baseline(
                 "near_threshold": [abs(p - 0.5) < 0.1 for p in y_prob],
             }
         )
-        metadata_cols = [col for col in [image_col, "patient_id", "lesion_id", *sensitive_cols] if col in base.columns]
+        metadata_cols = [
+            col
+            for col in [image_col, "patient_id", "lesion_id", *sensitive_cols]
+            if col in base.columns
+        ]
         preds = pd.concat([base[metadata_cols].reset_index(drop=True), preds], axis=1)
         return preds, _metrics(y_true, y_prob)
 

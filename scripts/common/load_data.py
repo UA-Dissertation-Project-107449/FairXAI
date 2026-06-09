@@ -145,7 +145,9 @@ def main():
             required_cols = [target_col, *sensitive_cols]
             if pipeline_cfg.get("training", {}).get("modality") == "image":
                 required_cols.append("image_path")
-            missing_cols = [col for col in dict.fromkeys(required_cols) if col not in df_raw.columns]
+            missing_cols = [
+                col for col in dict.fromkeys(required_cols) if col not in df_raw.columns
+            ]
             if missing_cols:
                 raise AssertionError(f"Missing required columns: {missing_cols}")
 
