@@ -11,6 +11,7 @@ sys.path.insert(0, str(_EXPERIMENTS_DIR))
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from run_experiment_comparison import (  # noqa: E402
+    _auc_from_prediction_file,
     _baseline_key_from_row,
     _extract_per_group_fairness,
     _load_baseline_per_group,
@@ -194,6 +195,37 @@ class TestCanonicalMetricTables:
         assert {"f1_value", "recall_value", "delta_f1", "delta_fairness_gap"}.issubset(
             plot_frame.columns
         )
+
+    def test_metric_deltas_skip_unavailable_auc_instead_of_zeroing(self):
+        full_df = self._full_df()
+        full_df.loc[full_df["mitigation_technique"] == "smote", "auc_value"] = pd.NA
+
+        deltas = build_metric_deltas(full_df)
+
+        assert "auc_roc" not in set(deltas["metric"])
+        assert "f1" in set(deltas["metric"])
+
+    def test_auc_repair_ignores_hard_label_probability_fallback(self, tmp_path):
+        pred_dir = tmp_path / "predictions" / "cleveland" / "cv"
+        pred_dir.mkdir(parents=True)
+        pd.DataFrame(
+            {
+                "y_true": [0, 0, 1, 1],
+                "y_pred": [0, 1, 0, 1],
+                "y_proba": [0.0, 1.0, 0.0, 1.0],
+            }
+        ).to_csv(pred_dir / "predictions_exp.csv", index=False)
+
+        class _Versioning:
+            latest_dir = tmp_path
+
+        row = {
+            "experiment_id": "exp",
+            "dataset": "cleveland",
+            "training_method": "kfold_cv",
+        }
+
+        assert _auc_from_prediction_file(_Versioning(), row) is None
 
     def test_group_metric_deltas_normalize_improvement_direction(self):
         per_group = pd.DataFrame(

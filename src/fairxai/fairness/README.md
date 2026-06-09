@@ -80,3 +80,8 @@ mitigated = engine.apply_technique(
 - `scikit-learn`
 - `imbalanced-learn`
 - `fairlearn`
+
+## Related
+
+- Results schema: [../../../docs/reference/results-schema.md](../../../docs/reference/results-schema.md)
+- Dissertation evidence: [../../../docs/research/dissertation-evidence-check.md](../../../docs/research/dissertation-evidence-check.md)

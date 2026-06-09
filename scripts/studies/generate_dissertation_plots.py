@@ -11,7 +11,7 @@ organised by section:
     fairness/
         cleveland_age_group_fairness_metric_heatmap.png
         cleveland_sex_fairness_metric_heatmap.png
-        bias_amplification_waterfall.png   (requires stage_gaps.json in run dir)
+        bias_amplification_waterfall.png   (optional; requires stage_gaps.json in run dir)
     transformations/
         transformation_impact.png
         before_after_distributions.png
@@ -161,7 +161,7 @@ def _report(label: str, result) -> None:
     if result is not None:
         logger.info("[SUCCESS] %s", label)
     else:
-        logger.warning("[WARNING] %s: skipped (empty data or missing columns)", label)
+        logger.warning("[WARNING] %s: skipped; see prior warning or missing required data", label)
 
 
 def _phase(name: str) -> None:
@@ -207,7 +207,7 @@ def _generate_fairness_plots(
     else:
         logger.warning("[WARNING] fairness_metric_heatmap: full_comparison.csv missing")
 
-    # 2. Bias amplification waterfall (requires stage_gaps.json placed in run dir)
+    # 2. Optional bias amplification waterfall (requires stage_gaps.json placed in run dir)
     stage_gaps_path = run_dir / "stage_gaps.json"
     if stage_gaps_path.exists():
         with stage_gaps_path.open() as f:
@@ -217,9 +217,8 @@ def _generate_fairness_plots(
         )
         _report("bias_amplification_waterfall", result)
     else:
-        logger.warning(
-            "[WARNING] bias_amplification_waterfall: stage_gaps.json not found in run dir. "
-            "Create %s with {stage_name: fairness_gap} entries.",
+        logger.info(
+            "[SKIP] bias_amplification_waterfall: %s not found; optional stage-gap figure skipped",
             stage_gaps_path.name,
         )
 
@@ -684,14 +683,26 @@ def _generate_model_stability_plots(
     if overfit_csv.exists():
         odf = _safe_read_csv(overfit_csv)
         if odf is not None and "overfit_risk" in odf.columns:
-            merge_key_left = "model_type"
-            merge_key_right = "model"
-            if merge_key_right in odf.columns:
+            if {"dataset", "model"}.issubset(odf.columns) and {"dataset", "model_type"}.issubset(
+                table.columns
+            ):
                 table = table.merge(
-                    odf[["model", "overfit_risk"]].rename(columns={"model": merge_key_left}),
-                    on=merge_key_left,
+                    odf[["dataset", "model", "overfit_risk"]]
+                    .drop_duplicates(subset=["dataset", "model"])
+                    .rename(columns={"model": "model_type"}),
+                    on=["dataset", "model_type"],
                     how="left",
                 )
+            elif "model" in odf.columns:
+                table = table.merge(
+                    odf[["model", "overfit_risk"]]
+                    .drop_duplicates(subset=["model"])
+                    .rename(columns={"model": "model_type"}),
+                    on="model_type",
+                    how="left",
+                )
+
+    table = table.drop_duplicates(subset=["dataset", "model_type"])
 
     out_csv = out_dir / "baseline_model_comparison.csv"
     table.to_csv(out_csv, index=False)

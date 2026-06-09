@@ -102,6 +102,22 @@ class TestClusteringEngineValidityGate:
         _, counts = np.unique(result.group_cluster.to_numpy(), return_counts=True)
         assert counts.min() >= 20
 
+    def test_min_silhouette_floor_rejects_below_threshold(self):
+        """An opt-in silhouette floor disqualifies the winner when it's too weak."""
+        df = _make_df(n=60)
+        cfg = {"kmeans": {"parameters": {"n_clusters": [3], "n_init": 5, "random_state": 42}}}
+        engine = ClusteringEngine(config=cfg, min_silhouette=0.99)  # impossibly high
+        with pytest.raises(ClusteringError, match="stable enough"):
+            engine.fit(df, feature_cols=["feat_a", "feat_b"])
+
+    def test_min_silhouette_none_disables_floor(self):
+        """Default (None) keeps the floor off → WebApp byte-identical."""
+        df = _make_df(n=60)
+        cfg = {"kmeans": {"parameters": {"n_clusters": [3], "n_init": 5, "random_state": 42}}}
+        engine = ClusteringEngine(config=cfg)  # min_silhouette defaults to None
+        result = engine.fit(df, feature_cols=["feat_a", "feat_b"])
+        assert result.n_clusters >= 2
+
 
 class TestClusteringEngineErrors:
     def test_n_clusters_gt_n_samples_raises_clean_error(self):
@@ -117,6 +133,54 @@ class TestClusteringEngineErrors:
         engine = ClusteringEngine(config={"kmeans": {"parameters": {"n_clusters": [2]}}})
         with pytest.raises(ClusteringError):
             engine.fit(df)  # All numeric excluded or non-numeric
+
+    def test_dbscan_high_noise_candidate_is_rejected(self):
+        rng = np.random.default_rng(7)
+        cluster_a = rng.normal(0, 0.02, size=(6, 2))
+        cluster_b = rng.normal(3, 0.02, size=(6, 2))
+        noise = rng.uniform(-20, 20, size=(40, 2))
+        X = np.vstack([cluster_a, cluster_b, noise])
+        df = pd.DataFrame(X, columns=["feat_a", "feat_b"])
+        cfg = {
+            "dbscan": {
+                "parameters": {
+                    "eps": [0.25],
+                    "min_samples": [3],
+                    "max_noise_fraction": 0.30,
+                }
+            }
+        }
+        engine = ClusteringEngine(config=cfg)
+
+        with pytest.raises(ClusteringError) as exc:
+            engine.fit(df, feature_cols=["feat_a", "feat_b"])
+
+        notes = [d.note or "" for d in exc.value.diagnostics]
+        assert any("rejected: noise_fraction" in note for note in notes)
+
+    def test_dbscan_keeps_accepted_noise_as_separate_cluster(self):
+        rng = np.random.default_rng(9)
+        cluster_a = rng.normal(0, 0.03, size=(12, 2))
+        cluster_b = rng.normal(3, 0.03, size=(12, 2))
+        noise = np.array([[12.0, 12.0], [-12.0, -12.0]])
+        X = np.vstack([cluster_a, cluster_b, noise])
+        df = pd.DataFrame(X, columns=["feat_a", "feat_b"])
+        cfg = {
+            "dbscan": {
+                "parameters": {
+                    "eps": [0.35],
+                    "min_samples": [3],
+                    "max_noise_fraction": 0.30,
+                }
+            }
+        }
+        engine = ClusteringEngine(config=cfg)
+        result = engine.fit(df, feature_cols=["feat_a", "feat_b"])
+
+        counts = result.group_cluster.value_counts()
+        assert result.method == "dbscan"
+        assert counts.min() == 2
+        assert result.n_clusters == 3
 
 
 class TestClusteringEngineDiagnostics:

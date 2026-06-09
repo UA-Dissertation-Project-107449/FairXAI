@@ -1,156 +1,132 @@
-# FairXAI: Fair and Explainable AI for Healthcare Decision Support
+# FairXAI
 
-## Overview
+FairXAI is the dissertation research repository for fairness-aware and
+explainable healthcare decision-support experiments. The current complete
+pipeline is cardiac-focused; dermatology is scaffolded but not an active
+end-to-end pipeline.
 
-This dissertation project develops and evaluates technical solutions to make AI-based healthcare systems fair in their predictions and transparent in their decision-making.
+## What This Repo Does
 
-### Key Objectives
+- Standardizes cardiac datasets into a shared schema.
+- Profiles data complexity, group representation, and intersectional risk.
+- Generates pre-model fairness triage recommendations.
+- Trains baseline models and evaluates fairness.
+- Runs HPO, feature-selection, age-binning, mitigation, combinatorial, clustering, similarity, and comparison studies.
+- Produces dissertation-ready evidence tables and figures.
+- Exposes WebApp-oriented characterization/binning/clustering adapters.
 
-- **Fairness**: Ensure equitable performance across diverse patient groups (demographic, individual, counterfactual)
-- **Explainability**: Make model decisions understandable to healthcare professionals
-- **Bias Detection & Mitigation**: Identify and reduce algorithmic bias in medical AI
+## Install
 
-### Research Scope
-
-- State-of-the-art review on bias and fairness
-- Implementation of bias mitigation techniques (pre-, in-, post-processing)
-- Integration of explainability methods (model-agnostic and inherently interpretable designs)
-- Evaluation of fairness gains vs. performance trade-offs
-
-## Project Structure
-
-See `docs/DECISIONS.md` for detailed architecture decisions.
-
-```
-FairXAI/
-├── src/fairxai/          # Core package
-├── scripts/              # Entry points and pipelines (see scripts/README.md)
-├── configs/              # Pipeline/dataset/experiment configs
-├── notebooks/            # Jupyter notebooks & runs
-├── data/                 # Datasets (external/raw/processed)
-├── output/               # Outputs (metrics, plots, reports)
-├── models/               # Trained checkpoints
-├── logs/                 # Execution logs
-└── docs/                 # Documentation
-```
-
-## Getting Started
-
-FairXAI uses `pyproject.toml` as the package configuration source.
-
-- `setup.py` is not required for standard development/deployment workflows.
-- Editable installs (`pip install -e ...`) expose local source changes immediately.
-
-### Installation Profiles
-
-From the repository root:
+From `Code/FairXAI`:
 
 ```bash
-# Core package only
+# Core package
 pip install -e .
 
-# Characterization/runtime extras (recommended for profiling + WebApp integration)
+# Pipeline and experiment dependencies
 pip install -e ".[experiment]"
 
-# Local research/dev tooling (plots, notebooks, explainability extras)
+# Local research/dev tooling
 pip install -e ".[dev]"
 
-# Prefect orchestration extras (optional)
-pip install -e ".[orchestration]"
-
-# HPC profile (includes experiment extras)
-pip install -e ".[hpc]"
+# Everything local except GPU-only packages
+pip install -e ".[full]"
 ```
 
-GPU acceleration is environment-specific and should be installed manually only on compatible hosts.
+GPU acceleration is host-specific. Install RAPIDS/cuML only on compatible CUDA hosts after the environment is prepared.
 
-### Running the Existing Cardiac Pipeline
-
-For full end-to-end runs:
+## Run The Cardiac Pipeline
 
 ```bash
+# Bash orchestrator
 bash scripts/cardiac/cardiac_pipeline.sh
+
+# Prefect orchestrator
+python3 flows/cardiac_pipeline.py
+
+# Cleveland-only smoke run
+python3 flows/cardiac_pipeline.py --datasets cleveland
+
+# Stop after recommendations
+bash scripts/cardiac/cardiac_pipeline.sh --go-until recommend
+
+# Resume latest run from training
+bash scripts/cardiac/cardiac_pipeline.sh --resume-from train
 ```
 
-Restrict execution scope via CLI flags:
+Both orchestrators support `--datasets`, `--model-types`, `--resume-from`,
+`--go-until`, `--run-id`, `-v`, and `-vv`.
+
+## Pipeline Stages
+
+| # | Stage | Purpose |
+|---|-------|---------|
+| 1 | `load` | Load and standardize raw cardiac datasets |
+| 2 | `profile` | Build profiling and complexity artifacts |
+| 3 | `recommend` | Generate pre-model fairness triage |
+| 4 | `preprocess` | Split, scale, bin, and prepare fairness profiles |
+| 5 | `hpo_study` | Run hyperparameter optimization |
+| 6 | `feature_selection_study` | Run sensitive-attribute ablation study |
+| 7 | `train` | Train baseline models |
+| 8 | `assess` | Assess post-prediction fairness |
+| 9 | `attribute_binning` | Analyze age-binning strategies |
+| 10 | `mitigation` | Compare mitigation techniques |
+| 11 | `combinatorial` | Run full experiment matrix |
+| 12 | `compare` | Build comparison outputs, grouping evidence, and dissertation figures |
+
+`src/fairxai/pipeline/stages.py` is the source of truth for names, aliases, and checkpoint markers.
+
+## Repository Layout
+
+| Path | Purpose |
+|------|---------|
+| `src/fairxai/` | Reusable Python package |
+| `scripts/` | Bash, cardiac wrappers, common stage scripts, studies, experiments |
+| `flows/` | Prefect orchestration |
+| `configs/` | Pipeline, model, domain, experiment, profiling, and threshold configs |
+| `docs/` | Architecture, guides, references, research notes, roadmap |
+| `tests/` | Unit and integration tests |
+| `data/` | External/raw/processed datasets; generated data is not the source of truth |
+| `output/` | Generated run/study artifacts |
+| `logs/` | Run logs and warning/error summaries |
+| `notebooks/` | Exploratory notebooks plus exported tables/figures |
+
+## Outputs
+
+| Artifact | Path |
+|----------|------|
+| Run root | `output/cardiac/runs/<run_id>/` |
+| Latest run pointer | `output/cardiac/latest_run` and `output/cardiac/latest_run.txt` |
+| Logs | `logs/cardiac/runs/<run_id>/` |
+| Processed splits | `data/processed/cardiac/<dataset>_<binning>/` |
+| Study outputs | `output/cardiac/studies/<study_type>/` |
+| Dissertation figures | `output/cardiac/studies/dissertation_figures/<run_id>/` |
+
+## Documentation Map
+
+- [docs/README.md](docs/README.md) - documentation index and reading order.
+- [docs/guides/cheat-sheet.md](docs/guides/cheat-sheet.md) - commands, checks, stage table.
+- [docs/architecture/pipeline-flow-control.md](docs/architecture/pipeline-flow-control.md) - resume/go-until/checkpoints.
+- [docs/architecture/modules.md](docs/architecture/modules.md) - source module responsibilities.
+- [docs/reference/results-schema.md](docs/reference/results-schema.md) - result JSON/table contracts.
+- [docs/reference/plots.md](docs/reference/plots.md) - plotting APIs and figure outputs.
+- [docs/planning/roadmap.md](docs/planning/roadmap.md) - implemented, partial, and deferred work.
+- [docs/research/dissertation-evidence-check.md](docs/research/dissertation-evidence-check.md) - current dissertation evidence snapshot.
+
+## Local Checks
 
 ```bash
-# Dataset + model scope (CLI > config > defaults)
-bash scripts/cardiac/cardiac_pipeline.sh \
-	--datasets cleveland \
-	--model-types logistic_regression xgboost
-
-python3 flows/cardiac_pipeline.py \
-	--datasets cleveland \
-	--model-types logistic_regression xgboost
+python3 -m black --check src scripts flows tests
+python3 -m isort --check-only src scripts flows tests
+python3 -m ruff check src scripts flows tests
+python3 -m pytest tests/unit/ -q
 ```
 
-Resume or stop at a specific stage:
+For all test commands and coverage notes, see [docs/guides/testing.md](docs/guides/testing.md).
 
-```bash
-RESUME_FROM=profile GO_UNTIL=recommend bash scripts/cardiac/cardiac_pipeline.sh
-```
+## Current Limits
 
-For script-by-script details, see:
-- scripts/README.md (script behavior and run_id usage)
-- data/README.md (dataset layout and regeneration)
-- configs/README.md (config files and how they are used)
-
-## WebApp Characterization Strategy
-
-WebApp request-time characterization is exposed through a lightweight CLI entrypoint that calls FairXAI profiling internals directly.
-
-Design properties:
-- Pipeline logic remains unchanged for research and batch experimentation.
-- The WebApp entrypoint is a thin adapter for job execution, not a second profiling implementation.
-- Both paths use the same profiling code.
-
-Recommended split:
-- Pipeline (`scripts/cardiac/cardiac_pipeline.sh`): full multi-stage research workflow, checkpoints, resume/go-until.
-- WebApp characterize CLI: focused single-job path (CSV in, JSON out) for low latency and simpler operations.
-
-CLI usage:
-
-```bash
-python3 -m fairxai.cli.characterize \
-	--filename cleveland_standardized.csv \
-	--datasets-dir data/raw/cardiac \
-	--output-dir /tmp/fairxai_characterize
-```
-
-Console script (after install):
-
-```bash
-fairxai-characterize \
-	--filename cleveland_standardized.csv \
-	--datasets-dir data/raw/cardiac \
-	--output-dir /tmp/fairxai_characterize
-```
-
-When to use stage controls instead:
-- Use stage controls (`RESUME_FROM`, `GO_UNTIL`) when you need the run-scoped artifacts and checkpoint lifecycle.
-- Avoid using full pipeline orchestration for request-time WebApp jobs unless those artifacts are explicitly required.
-
-Contract note for migration from Domain_characterization:
-- Keep required metrics available to WebApp.
-- Allow additive fields in output JSON.
-- Treat `ebmDifficulty` as optional/deferred during initial cutover if needed.
-
-## Datasets
-
-Cardiac pipeline datasets:
-- Cleveland
-- Kaggle Heart
-- Cardio70k
-
-Dermatology pipeline: TODO
-
-## Related Work
-
-- Transfer Learning & Fine-tuning strategies
-- Group, individual, and counterfactual fairness definitions
-- Explainability vs. performance trade-offs
-
----
-
-*Dissertation by Miguel | IEETA R&D, University of Aveiro*
+- Cardiac is the active end-to-end pipeline. Dermatology is scaffolded only.
+- Counterfactual explanations are intentionally frozen behind `counterfactual_stub`.
+- Clustering and similarity evidence should be framed as exploratory subgroup diagnostics, not standalone proof of fairness.
+- GPU paths require a compatible CUDA/HPC environment.

@@ -12,6 +12,7 @@ from fairxai.comparison.metric_tables import (
     build_group_metric_deltas,
 )
 from fairxai.viz import fairness_comparison as fairness_comparison_viz
+from fairxai.viz.clustering import save_cluster_fairness_heatmap, save_cluster_profile_bars
 from fairxai.viz.fairness import (
     plot_bias_amplification_waterfall,
     plot_fairness_metric_heatmap,
@@ -530,3 +531,39 @@ class TestExperimentPlots:
             pd.DataFrame(), pd.DataFrame(), tmp_path / "x.png"
         )
         assert result is None
+
+
+class TestClusterEvidencePlots:
+    def test_cluster_evidence_skips_dominant_cluster_artifact(self, tmp_path):
+        fairness_df = pd.DataFrame(
+            [
+                {
+                    "cluster_id": 0,
+                    "sensitive_attr": "age_group",
+                    "dp_max_diff": 0.0,
+                    "eo_tpr_diff": 0.0,
+                    "eo_fpr_diff": 0.0,
+                    "n_samples": 8,
+                    "is_fair": True,
+                },
+                {
+                    "cluster_id": 1,
+                    "sensitive_attr": "age_group",
+                    "dp_max_diff": 0.4,
+                    "eo_tpr_diff": 0.2,
+                    "eo_fpr_diff": 0.3,
+                    "n_samples": 716,
+                    "is_fair": False,
+                },
+            ]
+        )
+
+        profile = tmp_path / "profile.png"
+        heatmap = tmp_path / "heatmap.png"
+        profile.write_text("stale")
+        heatmap.write_text("stale")
+
+        assert save_cluster_profile_bars(fairness_df, profile) is None
+        assert save_cluster_fairness_heatmap(fairness_df, heatmap) is None
+        assert not profile.exists()
+        assert not heatmap.exists()

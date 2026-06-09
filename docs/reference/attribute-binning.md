@@ -8,16 +8,12 @@
 
 ## 1  Purpose
 
-The attribute-binning experiment answers a practical question for every
-continuous or high-cardinality sensitive attribute:
+The attribute-binning experiment answers a practical question for every continuous or high-cardinality sensitive attribute:
 
 > *Which discretisation strategy produces the fairest, most balanced groups
 > while retaining enough samples per group for reliable analysis?*
 
-Currently the implementation targets **age** (the most common continuous
-sensitive attribute in healthcare datasets), but the architecture is designed
-to generalise to any attribute that needs binning (e.g., income bands, BMI
-categories, geographic regions).
+Currently the implementation targets **age** (the most common continuous sensitive attribute in healthcare datasets), but the architecture is designed to generalise to any attribute that needs binning (e.g., income bands, BMI categories, geographic regions).
 
 ---
 
@@ -25,8 +21,7 @@ categories, geographic regions).
 
 ### 2.1  Strategy registry (config-driven)
 
-Every binning strategy is declared in the YAML config.  The code resolves
-strategies in the following priority order:
+Every binning strategy is declared in the YAML config. The code resolves strategies in the following priority order:
 
 1. **Explicit config dict** passed to `create_binning_strategy()`.
 2. **`BUILTIN_STRATEGIES`** — a Python dict that mirrors the YAML defaults so
@@ -63,9 +58,7 @@ Supported methods:
 
 ### 2.2  Cross-attribute impact analysis
 
-When multiple sensitive attributes are configured (e.g., `sex`, `race`),
-the experiment computes a **cross-attribute impact matrix** for each strategy
-and dataset:
+When multiple sensitive attributes are configured (e.g., `sex`, `race`), the experiment computes a **cross-attribute impact matrix** for each strategy and dataset:
 
 | Metric                    | Meaning                                               |
 |---------------------------|-------------------------------------------------------|
@@ -116,14 +109,14 @@ python3 scripts/experiments/run_attribute_binning_analysis.py
 
 # Specific datasets / strategies
 python3 scripts/experiments/run_attribute_binning_analysis.py \
-    --datasets cleveland hungarian \
+    --datasets cleveland kaggle_heart \
     --strategies clinical quantile_4
 
 # With verbosity
 python3 scripts/experiments/run_attribute_binning_analysis.py -vv
 ```
 
-Or via the pipeline:
+Or via the pipeline after earlier checkpoints exist:
 
 ```bash
 bash scripts/cardiac/cardiac_pipeline.sh --resume-from attribute_binning --go-until attribute_binning
@@ -141,10 +134,10 @@ bash scripts/cardiac/cardiac_pipeline.sh --resume-from attribute_binning --go-un
 
 ## 5  Current State
 
-The module has been renamed from `age_binning` to `attribute_binning`.
-A backward-compatibility shim (`age_binning.py`) re-exports everything
-from the canonical module.  The architecture already supports any
-continuous or ordinal column via the `col` parameter, not just `age_raw`.
+The canonical module is `attribute_binning.py`. The stage and docs still use
+"attribute binning" even when the active cardiac experiment focuses on age.
+The architecture supports any continuous or ordinal column via the `col`
+parameter, not just `age_raw`.
 
 Future extensions may include:
 

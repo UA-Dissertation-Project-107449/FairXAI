@@ -1,50 +1,41 @@
 # Notebook Utilities Module
 
-Shared helpers for FairXAI notebooks, focused on repeatable loading,
-context resolution, profiling access, and plotting convenience utilities.
-
-This package centralizes notebook-side helpers so exploratory notebooks can
-reuse the same conventions as scripts.
+Notebook-facing helpers for resolving project context, loading data, applying
+schema-aware labels, and reusing plotting palettes.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `context.py` | Project-root resolution and domain/pipeline context helpers |
-| `data.py` | Notebook-friendly dataset loading and stage summaries |
-| `profiling.py` | Profiling-output loading and convenience accessors |
-| `__init__.py` | Public convenience exports, plotting label helpers, schema-aware utilities |
+| `context.py` | Root resolution, domain config loading, figure path builders |
+| `data.py` | External/raw/processed dataset loading and stage summaries |
+| `profiling.py` | Notebook helpers for profiling artifacts |
+| `__init__.py` | Re-exports plus label and annotation helpers |
 
-## Key Utility Areas
+## Public API Areas
 
-- **Context resolution**
-  - Resolve project root and dataset context from notebook location.
+- Context: `resolve_root_dir`, `load_domain_config`, `get_relevant_datasets`, `make_figure_path_builder`
+- Data: `load_external_datasets`, `load_raw_datasets`, `load_processed_scaled_datasets`, `summarize_stage`, `canonical_features_for_columns`
+- Labels: `dataset_age_unit`, `age_group_order`, `apply_age_group_order`, `age_to_years`, `resolve_sex_series`
+- Plot annotation: `add_bar_labels`, `add_bar_labels_with_counts`, `add_grouped_bar_labels`, `add_point_labels`
+- Palettes: `PALETTE_DATASET`, `PALETTE_SEX`, `PALETTE_TARGET`, `UNITS`
 
-- **Data access**
-  - Load external/raw/processed datasets in canonical structures.
+## Inputs And Outputs
 
-- **Schema-aware helpers**
-  - Resolve age units and age-group order from schema mappings.
+- Reads profiling/run artifacts from `output/<pipeline>/runs/<run_id>/` and latest-run pointers.
+- Reads raw/processed data from `data/raw/` and `data/processed/`.
+- Writes notebook exports to `notebooks/tables/<pipeline>/` and `notebooks/figures/<pipeline>/`.
 
-- **Visualization helpers**
-  - Add bar/point labels consistently across notebook charts.
-  - Reuse shared palette and units from `fairxai.viz.style`.
-
-## Typical Usage
+## Usage
 
 ```python
-from fairxai.notebook_utils import (
-    resolve_project_root,
-    load_processed_scaled_datasets,
-    age_group_order,
-    add_bar_labels,
-)
+from fairxai.notebook_utils import load_raw_datasets, resolve_root_dir
 
-root = resolve_project_root()
-datasets = load_processed_scaled_datasets(root)
+root = resolve_root_dir()
+datasets = load_raw_datasets(root / "data/raw/cardiac", ["cleveland"])
 ```
 
-## Notes
+## Related
 
-- This package is notebook-facing convenience code; production pipeline logic remains in script and module packages (`data`, `pipeline`, `experiments`).
-- Helpers are intentionally pragmatic and may include light formatting helpers not used in batch scripts.
+- Notebook folder: [../../../notebooks/README.md](../../../notebooks/README.md)
+- Plot guide: [../../../docs/reference/plots.md](../../../docs/reference/plots.md)

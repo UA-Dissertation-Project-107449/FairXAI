@@ -114,3 +114,11 @@ def test_dermatology_bash_parser_accepts_baseline_flags() -> None:
     assert "Unknown argument '--epochs'" not in combined
     assert "Unknown argument '--batch-size'" not in combined
     assert "Unknown argument '--no-pretrained'" not in combined
+
+
+def test_prefect_compare_stage_forwards_dataset_scope_to_grouping() -> None:
+    source = PREFECT_FLOW.read_text(encoding="utf-8")
+
+    assert "def compare_experiments(run_id: str, datasets:" in source
+    assert 'grouping_args.extend(["--datasets", *datasets])' in source
+    assert "compare_experiments.submit(run_id, datasets, verbose" in source

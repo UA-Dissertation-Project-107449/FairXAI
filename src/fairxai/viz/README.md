@@ -1,82 +1,51 @@
-# Visualization Module (`viz`)
+# Visualization Module
 
-Visualization toolkit for EDA, drift analysis, and experiment comparison in
-FairXAI.
-
-The module centralizes plotting APIs and style constants so notebook and script
-outputs remain consistent.
+Plotting APIs for EDA, dataset comparison, fairness analysis, clustering, and
+dissertation figures.
 
 ## Files
 
-| File | Purpose | Status |
-|------|---------|--------|
-| `distributions.py` | Distribution-focused plots (categorical/numeric/target/missing/outliers) | ✅ Implemented |
-| `comparisons.py` | Dataset comparison plots (correlation/PCA/KS/drift) | ✅ Implemented |
-| `fairness_comparison.py` | Metric-level fairness comparison plots (radar, deltas, subgroup bars, intersectional heatmap) | ✅ Implemented |
-| `fairness.py` | Fairness-specific plots (metric heatmap, group gaps, waterfall) | ✅ Implemented |
-| `transformations.py` | Transformation impact plots (before/after, distributions, scaling) | ✅ Implemented |
-| `labels.py` | Shared display labels for mitigation and subgroup names | ✅ Implemented |
-| `save_utils.py` | Shared save/layout helpers for publication figures | ✅ Implemented |
-| `style.py` | Shared palettes, labels, units, style conventions | ✅ Implemented |
-| `constants.py` | Canonical value mappings and display order helpers | ✅ Implemented |
-| `utils.py` | Shared plotting helper utilities | ✅ Implemented |
-| `__init__.py` | Public API exports | ✅ Implemented |
+| File | Purpose |
+|------|---------|
+| `distributions.py` | Feature distributions, missingness, outliers, target-by-group |
+| `comparisons.py` | Correlations, PCA/KMeans, dataset drift |
+| `fairness.py` | Fairness heatmaps, group gaps, bias waterfall |
+| `transformations.py` | Pre/post transformation and scaling plots |
+| `fairness_comparison.py` | Dissertation comparison figures from canonical tables |
+| `clustering.py` | Cluster profile and fairness figures |
+| `constants.py` | Cardiac category normalization/display order |
+| `labels.py` | Display label helpers |
+| `style.py` | Shared palettes and units |
+| `save_utils.py` | Figure saving and sizing helpers |
+| `utils.py` | Misc visualization helpers |
+| `__init__.py` | Public exports |
 
 ## Public API Categories
 
-- **Distributions**: group distributions, target-by-group, missingness, outliers
-- **Comparisons**: two-dataset comparisons, drift, and statistical summaries
-- **Fairness Comparison**: metric-level before/after radar, mitigation delta
-  matrix, subgroup bars, baseline cross-model radar, intersectional heatmap
-- **Fairness**: fairness metric heatmap, per-group performance gaps, bias amplification waterfall
-- **Transformations**: transformation impact, before/after distributions, scaling effects
-- **Style/Constants**: palettes (`PALETTE_DATASET`, `PALETTE_SEX`, `PALETTE_TARGET`, `PALETTE_MODEL`)
-  and canonical category mappings
+- EDA/distributions: `plot_categorical_distribution_grid`, `plot_numeric_distribution_comparison`, `plot_target_distribution_by_group`, `plot_missing_data_patterns`
+- Dataset comparison: `plot_correlation_heatmap_grid`, `plot_pca_kmeans_scatter_grid`, `plot_drift_heatmap`
+- Fairness: `plot_fairness_metric_heatmap`, `plot_group_performance_gaps`, `plot_bias_amplification_waterfall`
+- Dissertation comparisons: `save_mitigation_delta_matrix`, `save_before_after_metric_radar`, `save_cross_model_best_available_radar`, `save_intersectional_heatmap`
+- Clustering: `save_cluster_profile_bars`, `save_cluster_fairness_heatmap`
 
-## Style Contract
+Current cross-experiment/dissertation figures live in
+`fairness_comparison.py`.
 
-All plotting functions should:
-- Use palette and style constants from `style.py` and shared labels from `labels.py`
-- Return the output path on success, `None` on empty/invalid input
-- Avoid hard-coded colors in feature-level plotting code
-- Keep labels/titles consistent with analysis terminology
+## Inputs And Outputs
 
-## Usage Example
+- Reads canonical comparison tables from `output/cardiac/runs/<run_id>/experiments/comparisons/data/`.
+- Dissertation batch figures go to `output/cardiac/studies/dissertation_figures/<run_id>/`.
+- Notebook figures may be written under `notebooks/figures/<pipeline>/`.
+
+## Usage
 
 ```python
-from fairxai.viz import (
-    plot_fairness_metric_heatmap,
-    plot_group_performance_gaps,
-    plot_bias_amplification_waterfall,
-    plot_transformation_impact,
-    plot_before_after_distributions,
-    plot_scaling_effects,
-    save_group_performance_gap_bars,
-    save_intersectional_heatmap,
-    save_cross_model_baseline_radar,
-    save_mitigation_delta_matrix,
-)
+from fairxai.viz.fairness_comparison import save_mitigation_delta_matrix
 
-# Fairness metric heatmap (from full_comparison.csv)
-plot_fairness_metric_heatmap(full_df, "age_group_cat", "fairness_heatmap_age.png")
-
-# Baseline-only cross-model radar chart (from canonical comparison data)
-save_cross_model_baseline_radar(full_df, "cleveland_baseline_cross_model_radar.png")
-
-# Per-group before/after performance gaps (from canonical paired group data)
-save_group_performance_gap_bars(
-    group_metric_deltas,
-    "cleveland_lr_primary_sex_performance_gaps.png",
-    "sex",
-    selected_row,
-)
+save_mitigation_delta_matrix(full_df, "mitigation_delta_matrix.png")
 ```
 
-## Generating All Dissertation Plots
+## Related
 
-Use the delivery script to generate all figures from a completed pipeline run:
-
-```bash
-python scripts/studies/generate_dissertation_plots.py --run-id latest
-# output/cardiac/studies/dissertation_figures/<run_id>/
-```
+- Plot reference: [../../../docs/reference/plots.md](../../../docs/reference/plots.md)
+- Results schema: [../../../docs/reference/results-schema.md](../../../docs/reference/results-schema.md)

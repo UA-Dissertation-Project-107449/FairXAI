@@ -87,3 +87,9 @@ by_group = engine.per_group_consistency(
 - `scikit-learn`
 - `scipy`
 - `matplotlib` (density map only; skipped gracefully if absent)
+
+## Related
+
+- Clustering module: [../clustering/README.md](../clustering/README.md)
+- Fairness module: [../fairness/README.md](../fairness/README.md)
+- Dissertation evidence: [../../../docs/research/dissertation-evidence-check.md](../../../docs/research/dissertation-evidence-check.md)
