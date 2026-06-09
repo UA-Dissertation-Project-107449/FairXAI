@@ -127,6 +127,9 @@ def cluster_and_persist(
     feature_exclude: Optional[list[str]],
     out_dir: Path,
     target_col: str = "heart_disease",
+    min_clusters: int = 2,
+    min_cluster_size_abs: int = 1,
+    min_cluster_size_frac: float = 0.0,
 ) -> Optional[ClusterResult]:
     """Fit clustering on the train split, label test, persist ``group_cluster``.
 
@@ -173,10 +176,22 @@ def cluster_and_persist(
         len(test_df),
     )
     try:
-        engine = ClusteringEngine(config=method_cfg, feature_exclude=exclude)
+        engine = ClusteringEngine(
+            config=method_cfg,
+            feature_exclude=exclude,
+            min_clusters=min_clusters,
+            min_cluster_size_abs=min_cluster_size_abs,
+            min_cluster_size_frac=min_cluster_size_frac,
+        )
         result = engine.fit(train_df)  # TRAIN ONLY — leakage guard
     except ClusteringError as exc:
-        logger.error("[ERROR] cluster: clustering failed for %s: %s", dataset, exc)
+        # Includes the validity gate: degenerate-only solutions → skip grouping
+        # for this dataset (group_cluster simply not injected; pipeline proceeds).
+        logger.warning(
+            "[INFO] cluster: no usable clustering for %s (%s) — group_cluster not injected.",
+            dataset,
+            exc,
+        )
         return None
 
     train_labels = result.group_cluster.to_numpy()

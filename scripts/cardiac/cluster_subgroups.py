@@ -102,6 +102,13 @@ def main() -> None:
         logger.error("No datasets resolved. Pass --datasets or set runtime.datasets in the config.")
         sys.exit(1)
 
+    # Validity gate (from the pipeline config grouping block). Rejects degenerate
+    # clusterings; defaults are a no-op if unset.
+    grouping_cfg = pipeline_cfg.get("grouping", {}) or {}
+    min_clusters = int(grouping_cfg.get("min_clusters", 2))
+    min_cluster_size_abs = int(grouping_cfg.get("min_cluster_size_abs", 1))
+    min_cluster_size_frac = float(grouping_cfg.get("min_cluster_size_frac", 0.0))
+
     out_base = _ROOT / "output" / pipeline / "studies" / "grouping_pretrain"
 
     logger.info(
@@ -121,6 +128,9 @@ def main() -> None:
                 method_cfg=method_cfg,
                 feature_exclude=feature_exclude,
                 out_dir=out_base / dataset,
+                min_clusters=min_clusters,
+                min_cluster_size_abs=min_cluster_size_abs,
+                min_cluster_size_frac=min_cluster_size_frac,
             )
         except Exception as exc:  # noqa: BLE001 — isolate per-dataset failures
             logger.error("[ERROR] cluster: dataset %s failed: %s", dataset, exc, exc_info=True)
