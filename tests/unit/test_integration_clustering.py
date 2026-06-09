@@ -23,9 +23,10 @@ def test_run_clustering_uses_selected_method_config(tmp_path, monkeypatch):
     captured = {}
 
     class FakeEngine:
-        def __init__(self, config=None, feature_exclude=None):
+        def __init__(self, config=None, feature_exclude=None, min_silhouette=None, **kwargs):
             captured["config"] = config
             captured["feature_exclude"] = feature_exclude
+            captured["min_silhouette"] = min_silhouette
 
         def fit(self, df, feature_cols=None):
             return SimpleNamespace(
@@ -57,6 +58,8 @@ def test_run_clustering_uses_selected_method_config(tmp_path, monkeypatch):
 
     assert captured["config"] == {"kmeans": {}}
     assert captured["feature_exclude"] == ["target"]
+    # WebApp adapter turns the stability floor on by default.
+    assert captured["min_silhouette"] == 0.05
     assert result["requested_method"] == "kmeans"
     assert result["method"] == "kmeans"
     assert result["n_clusters"] == 2

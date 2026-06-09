@@ -102,6 +102,22 @@ class TestClusteringEngineValidityGate:
         _, counts = np.unique(result.group_cluster.to_numpy(), return_counts=True)
         assert counts.min() >= 20
 
+    def test_min_silhouette_floor_rejects_below_threshold(self):
+        """An opt-in silhouette floor disqualifies the winner when it's too weak."""
+        df = _make_df(n=60)
+        cfg = {"kmeans": {"parameters": {"n_clusters": [3], "n_init": 5, "random_state": 42}}}
+        engine = ClusteringEngine(config=cfg, min_silhouette=0.99)  # impossibly high
+        with pytest.raises(ClusteringError, match="stable enough"):
+            engine.fit(df, feature_cols=["feat_a", "feat_b"])
+
+    def test_min_silhouette_none_disables_floor(self):
+        """Default (None) keeps the floor off → WebApp byte-identical."""
+        df = _make_df(n=60)
+        cfg = {"kmeans": {"parameters": {"n_clusters": [3], "n_init": 5, "random_state": 42}}}
+        engine = ClusteringEngine(config=cfg)  # min_silhouette defaults to None
+        result = engine.fit(df, feature_cols=["feat_a", "feat_b"])
+        assert result.n_clusters >= 2
+
 
 class TestClusteringEngineErrors:
     def test_n_clusters_gt_n_samples_raises_clean_error(self):
