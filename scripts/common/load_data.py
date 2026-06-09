@@ -25,12 +25,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from fairxai.cli.runner_base import get_project_root, load_pipeline_config, setup_phase_logging
 from fairxai.cli.runner_utils import get_run_root, resolve_run_id
-from fairxai.data.loaders import CardiacDataLoader, get_dataset_summary
+from fairxai.data.loaders import CardiacDataLoader, DermatologyDataLoader, get_dataset_summary
 
 
 def _resolve_loader(pipeline: str):
     if pipeline == "cardiac":
         return CardiacDataLoader
+    if pipeline == "dermatology":
+        return DermatologyDataLoader
     raise NotImplementedError(f"Pipeline '{pipeline}' is not yet supported by common load_data.")
 
 
@@ -74,6 +76,7 @@ def main():
         project_root,
         "data_loading.log",
         verbose=args.verbose,
+        log_subdir=pipeline,
         run_id=run_id,
         stage_name="load",
     )
@@ -110,7 +113,10 @@ def main():
             except Exception as e:
                 logging.error(f"Failed to load {dataset_name}: {e}")
     else:
-        datasets = loader.load_all_cardiac_datasets(str(data_external))
+        if pipeline == "cardiac":
+            datasets = loader.load_all_cardiac_datasets(str(data_external))
+        else:
+            datasets = loader.load_all_dermatology_datasets(str(data_external))
 
     if not datasets:
         logging.error("No datasets loaded. Exiting.")
@@ -132,10 +138,18 @@ def main():
 
         # Datasets returned by loader are already harmonized and standardized
         try:
-            # Verify expected columns (cardiac defaults)
-            assert "age_group" in df_raw.columns, "Missing age_group"
-            assert "sex" in df_raw.columns, "Missing sex"
-            assert "heart_disease" in df_raw.columns, "Missing heart_disease"
+            target_col = pipeline_cfg.get("training", {}).get("target", "heart_disease")
+            sensitive_cols = pipeline_cfg.get("fairness", {}).get(
+                "sensitive_attributes", ["age_group", "sex"]
+            )
+            required_cols = [target_col, *sensitive_cols]
+            if pipeline_cfg.get("training", {}).get("modality") == "image":
+                required_cols.append("image_path")
+            missing_cols = [
+                col for col in dict.fromkeys(required_cols) if col not in df_raw.columns
+            ]
+            if missing_cols:
+                raise AssertionError(f"Missing required columns: {missing_cols}")
 
             standardized_datasets[dataset_name] = df_raw
 
@@ -145,9 +159,14 @@ def main():
             logging.info(f"[SUCCESS] Saved standardized dataset to: {output_file}")
 
             # Quick stats
-            logging.info(f"  Age groups: {df_raw['age_group'].value_counts().to_dict()}")
-            logging.info(f"  Sex: {df_raw['sex'].value_counts().to_dict()}")
-            logging.info(f"  Heart disease: {df_raw['heart_disease'].value_counts().to_dict()}")
+            for col in sensitive_cols:
+                if col in df_raw.columns:
+                    logging.info("  %s: %s", col, df_raw[col].value_counts(dropna=False).to_dict())
+            logging.info(
+                "  %s: %s",
+                target_col,
+                df_raw[target_col].value_counts(dropna=False).to_dict(),
+            )
 
         except Exception as e:
             logging.error(f"Failed to verify/save {dataset_name}: {e}")
@@ -166,15 +185,24 @@ def main():
         "datasets": {},
     }
 
+    target_col = pipeline_cfg.get("training", {}).get("target", "heart_disease")
+    sensitive_cols = pipeline_cfg.get("fairness", {}).get(
+        "sensitive_attributes", ["age_group", "sex"]
+    )
     for name, df in standardized_datasets.items():
         report["datasets"][name] = {
             "n_samples": len(df),
             "n_features": len(df.columns),
-            "age_groups": df["age_group"].value_counts().to_dict(),
-            "sex_distribution": df["sex"].value_counts().to_dict(),
-            "disease_prevalence": df["heart_disease"].value_counts().to_dict(),
+            "sensitive_distributions": {
+                col: df[col].value_counts(dropna=False).to_dict()
+                for col in sensitive_cols
+                if col in df.columns
+            },
+            "target_distribution": df[target_col].value_counts(dropna=False).to_dict(),
             "missing_values_total": int(df.isnull().sum().sum()),
         }
+    if hasattr(loader, "last_image_reports"):
+        report["image_validation"] = loader.last_image_reports
 
     report_file = results_profiling / "loading_report.json"
     with open(report_file, "w") as f:

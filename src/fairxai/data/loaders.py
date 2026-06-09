@@ -1,4 +1,4 @@
-"""Data loading utilities for cardiac datasets."""
+"""Data loading utilities for pipeline datasets."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import yaml
@@ -298,6 +299,206 @@ class CardiacDataLoader:
         missing = [col for col in core_cols if col not in df.columns]
         if missing:
             logging.warning(f"{dataset_name}: missing core columns after mapping: {missing}")
+
+
+class DermatologyDataLoader:
+    """Loader for PAD-UFES dermatology image metadata."""
+
+    def __init__(self, config_path: str, feature_map_path: str | None = None):
+        with open(config_path, "r") as f:
+            self.config = json.load(f)
+        self.datasets = self.config.get("datasets", {})
+        self.dermatology_datasets = self.config.get(
+            "dermatology_relevant_datasets", ["pad_ufes_20"]
+        )
+        self.last_image_reports: dict[str, dict[str, Any]] = {}
+
+    def load_dataset(self, dataset_name: str, data_dir: str) -> pd.DataFrame:
+        if dataset_name not in self.datasets:
+            raise ValueError(f"Unknown dataset: {dataset_name}")
+
+        cfg = self.datasets[dataset_name]
+        dataset_dir = self._resolve_dataset_dir(Path(data_dir), cfg)
+        metadata_path = dataset_dir / cfg.get("metadata_filename", "metadata.csv")
+        if not metadata_path.exists():
+            raise FileNotFoundError(f"Metadata file not found: {metadata_path}")
+
+        logging.info("Loading %s metadata from %s", dataset_name, metadata_path)
+        df = pd.read_csv(metadata_path)
+        df["_dataset_source"] = dataset_name
+        df["_dataset_file"] = str(metadata_path.relative_to(dataset_dir))
+
+        df = self._standardize_pad(df, dataset_name, dataset_dir, cfg)
+        return df
+
+    def load_all_dermatology_datasets(self, data_dir: str) -> dict[str, pd.DataFrame]:
+        datasets: dict[str, pd.DataFrame] = {}
+        for name in self.dermatology_datasets:
+            try:
+                datasets[name] = self.load_dataset(name, data_dir)
+                logging.info("[SUCCESS] Loaded %s: %d rows", name, len(datasets[name]))
+            except Exception as e:
+                logging.error("Failed to load %s: %s", name, e)
+        return datasets
+
+    def _resolve_dataset_dir(self, data_dir: Path, cfg: dict[str, Any]) -> Path:
+        relative_dir = cfg.get("relative_dir")
+        candidates = []
+        if relative_dir:
+            candidates.append(data_dir / relative_dir)
+        candidates.append(data_dir)
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return candidates[0]
+
+    def _standardize_pad(
+        self,
+        df: pd.DataFrame,
+        dataset_name: str,
+        dataset_dir: Path,
+        cfg: dict[str, Any],
+    ) -> pd.DataFrame:
+        target_col = cfg.get("target", "diagnostic")
+        positive_labels = {
+            str(v).upper() for v in cfg.get("positive_labels", ["BCC", "SCC", "MEL"])
+        }
+        negative_labels = {
+            str(v).upper() for v in cfg.get("negative_labels", ["ACK", "NEV", "SEK"])
+        }
+        image_id_col = cfg.get("image_id_column", "img_id")
+
+        required = [target_col, image_id_col]
+        missing = [col for col in required if col not in df.columns]
+        if missing:
+            raise ValueError(f"{dataset_name}: missing required metadata columns: {missing}")
+
+        out = df.copy()
+        out["diagnostic_label"] = out[target_col].astype(str).str.strip().str.upper()
+        mapping = {label: 1 for label in positive_labels}
+        mapping.update({label: 0 for label in negative_labels})
+        out["skin_cancer"] = out["diagnostic_label"].map(mapping)
+        unmapped = sorted(set(out.loc[out["skin_cancer"].isna(), "diagnostic_label"]))
+        if unmapped:
+            logging.warning(
+                "%s: dropping %d rows with unmapped diagnostics: %s",
+                dataset_name,
+                out["skin_cancer"].isna().sum(),
+                unmapped,
+            )
+            out = out[out["skin_cancer"].notna()].copy()
+        out["skin_cancer"] = out["skin_cancer"].astype(int)
+
+        if "age" in out.columns:
+            out["age_raw"] = pd.to_numeric(out["age"], errors="coerce")
+            out["age_group"] = pd.cut(
+                out["age_raw"],
+                bins=cfg.get("age_bins", [0, 20, 40, 60, 80, 120]),
+                labels=cfg.get("age_labels", ["<20", "20-39", "40-59", "60-79", "80+"]),
+                include_lowest=True,
+            ).astype("object")
+            out["age_group"] = out["age_group"].fillna("unknown")
+        else:
+            out["age_raw"] = pd.NA
+            out["age_group"] = "unknown"
+
+        if "gender" in out.columns:
+            sex_label = out["gender"].astype("string").str.strip().str.upper()
+            sex_label = sex_label.replace({"": pd.NA, "NAN": pd.NA, "NONE": pd.NA})
+            out["sex_extended"] = sex_label.map({"FEMALE": "Female", "MALE": "Male"}).fillna(
+                "unknown"
+            )
+        else:
+            out["sex_extended"] = "unknown"
+        out["sex"] = out["sex_extended"].map({"Female": 0, "Male": 1}).fillna(-1).astype(int)
+        out["sex_bin"] = out["sex"]
+
+        fst_col = (
+            "fitspatrick"
+            if "fitspatrick" in out.columns
+            else "fitzpatrick" if "fitzpatrick" in out.columns else None
+        )
+        if fst_col:
+            fst = pd.to_numeric(out[fst_col], errors="coerce")
+            out["fitzpatrick"] = fst.astype("Int64").astype("string").replace("<NA>", "unknown")
+            out["fitzpatrick_group"] = fst.map(self._fitzpatrick_group).fillna("unknown")
+        else:
+            out["fitzpatrick"] = "unknown"
+            out["fitzpatrick_group"] = "unknown"
+
+        image_index = self._build_image_index(dataset_dir, cfg)
+        image_paths = out[image_id_col].astype(str).map(image_index)
+        out["image_path"] = image_paths
+        missing_mask = out["image_path"].isna()
+        report = {
+            "dataset": dataset_name,
+            "metadata_rows": int(len(out)),
+            "image_files_indexed": int(len(image_index)),
+            "found_images": int((~missing_mask).sum()),
+            "missing_images": int(missing_mask.sum()),
+            "missing_image_ids": out.loc[missing_mask, image_id_col].astype(str).head(50).tolist(),
+            "layout_patterns": cfg.get("image_globs", ["images/*.png", "images/imgs_part_*/*.png"]),
+        }
+        self.last_image_reports[dataset_name] = report
+        if missing_mask.any():
+            logging.warning(
+                "%s: filtering %d rows with missing images", dataset_name, int(missing_mask.sum())
+            )
+            out = out[~missing_mask].copy()
+
+        out["patient_id"] = out.get(
+            "patient_id", pd.Series(range(len(out)), index=out.index)
+        ).astype(str)
+        out["lesion_id"] = out.get("lesion_id", out["patient_id"]).astype(str)
+
+        keep_cols = cfg.get("include_features") or []
+        if keep_cols:
+            required_cols = {
+                "patient_id",
+                "lesion_id",
+                "image_path",
+                "diagnostic_label",
+                "skin_cancer",
+                "age_raw",
+                "age_group",
+                "sex",
+                "sex_extended",
+                "sex_bin",
+                "fitzpatrick",
+                "fitzpatrick_group",
+                "_dataset_source",
+                "_dataset_file",
+            }
+            keep = [col for col in out.columns if col in set(keep_cols) | required_cols]
+            out = out[keep].copy()
+
+        return out.reset_index(drop=True)
+
+    def _build_image_index(self, dataset_dir: Path, cfg: dict[str, Any]) -> dict[str, str]:
+        globs = cfg.get("image_globs") or ["images/*.png", "images/imgs_part_*/*.png"]
+        index: dict[str, str] = {}
+        duplicates: set[str] = set()
+        for pattern in globs:
+            for path in dataset_dir.glob(pattern):
+                if not path.is_file():
+                    continue
+                key = path.name
+                if key in index and index[key] != str(path):
+                    duplicates.add(key)
+                index[key] = str(path)
+        if duplicates:
+            logging.warning("Duplicate image basenames found: %s", sorted(duplicates)[:20])
+        return index
+
+    @staticmethod
+    def _fitzpatrick_group(value: float) -> str | None:
+        if pd.isna(value):
+            return None
+        if value <= 2:
+            return "I-II"
+        if value <= 4:
+            return "III-IV"
+        return "V-VI"
 
 
 def get_dataset_summary(df: pd.DataFrame, dataset_name: str) -> dict[str, object]:

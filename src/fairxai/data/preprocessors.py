@@ -427,3 +427,110 @@ class CardiacPreprocessor:
             json.dump(metadata, f, indent=2, default=str)
 
         logging.info(f"[SUCCESS] Saved preprocessing metadata to: {filepath}")
+
+
+class DermatologyPreprocessor(CardiacPreprocessor):
+    """Preprocess dermatology image metadata without dropping unknown groups."""
+
+    def handle_missing_values(
+        self, df: pd.DataFrame, strategy: str = "image_metadata"
+    ) -> tuple[pd.DataFrame, dict[str, object]]:
+        """Keep image rows and make metadata safe for downstream profiling."""
+        df_processed = df.copy()
+        target = "skin_cancer"
+        required = [
+            col for col in [target, "image_path", "patient_id"] if col in df_processed.columns
+        ]
+        initial_len = len(df_processed)
+        if required:
+            df_processed = df_processed.dropna(subset=required).copy()
+
+        for col in self.sensitive_attrs + ["sex_extended", "fitzpatrick", "fitzpatrick_group"]:
+            if col in df_processed.columns:
+                df_processed[col] = df_processed[col].fillna("unknown")
+
+        remaining_missing = int(df_processed.isna().sum().sum())
+        if remaining_missing:
+            for col in df_processed.columns:
+                if not df_processed[col].isna().any():
+                    continue
+                if pd.api.types.is_numeric_dtype(df_processed[col]):
+                    fill_value = df_processed[col].median()
+                    if pd.isna(fill_value):
+                        fill_value = 0
+                    df_processed[col] = df_processed[col].fillna(fill_value)
+                else:
+                    df_processed[col] = df_processed[col].fillna("unknown")
+
+        actions = {
+            "strategy": strategy,
+            "actions_taken": [
+                f"Dropped {initial_len - len(df_processed)} rows missing required image/target/id fields",
+                "Filled missing sensitive attributes with 'unknown'",
+                f"Filled {remaining_missing} remaining metadata missing values for profiling",
+            ],
+        }
+        for action in actions["actions_taken"]:
+            logging.info(action)
+        return df_processed, actions
+
+    def patient_stratified_split(
+        self,
+        df: pd.DataFrame,
+        target: str = "skin_cancer",
+        patient_col: str = "patient_id",
+        test_size: float = 0.3,
+        random_state: int = 42,
+        context_label: str | None = None,
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Split by patient to avoid lesion/image leakage across train/test."""
+        if patient_col not in df.columns:
+            logging.warning("%s missing; falling back to row-level split", patient_col)
+            return self.stratified_split(df, target, test_size, random_state, context_label)
+
+        patient_targets = (
+            df.groupby(patient_col)[target]
+            .agg(lambda values: int(pd.Series(values).mode(dropna=True).iloc[0]))
+            .reset_index()
+        )
+        stratify = patient_targets[target]
+        if stratify.value_counts().min() < 2:
+            stratify = None
+            logging.warning("Patient-level stratification unavailable; using random patient split")
+
+        train_patients, test_patients = train_test_split(
+            patient_targets[patient_col],
+            test_size=test_size,
+            random_state=random_state,
+            shuffle=True,
+            stratify=stratify,
+        )
+        train_ids = set(train_patients.astype(str))
+        test_ids = set(test_patients.astype(str))
+        train_df = df[df[patient_col].astype(str).isin(train_ids)].copy()
+        test_df = df[df[patient_col].astype(str).isin(test_ids)].copy()
+        leakage = train_ids & test_ids
+        if leakage:
+            raise RuntimeError(f"Patient leakage detected after split: {sorted(leakage)[:10]}")
+
+        logging.info("[SUCCESS] Patient split: %d train, %d test", len(train_df), len(test_df))
+        logging.info("  Patients: %d train, %d test", len(train_ids), len(test_ids))
+        logging.info("  Test size: %.1f%%", test_size * 100)
+        return train_df, test_df
+
+    def prepare_features(
+        self, df: pd.DataFrame, target: str = "skin_cancer", exclude_cols: list[str] | None = None
+    ) -> tuple[pd.DataFrame, pd.Series, list[str]]:
+        """Metadata-only fallback feature prep; image training uses CSVs directly."""
+        if exclude_cols is None:
+            exclude_cols = [
+                target,
+                "image_path",
+                "patient_id",
+                "lesion_id",
+                "diagnostic_label",
+                "_dataset_source",
+                "_dataset_file",
+                "age_raw",
+            ]
+        return super().prepare_features(df, target=target, exclude_cols=exclude_cols)

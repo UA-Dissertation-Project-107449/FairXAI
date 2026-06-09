@@ -11,7 +11,7 @@ from .complexity import (
     is_primary_complexity_metric,
 )
 from .config import ComplexityConfig, load_complexity_config
-from .domain_characterization import characterize_dataset
+from .domain_characterization import characterize_dataset, profile_dataset
 
 __all__ = [
     "compute_complexity_metrics",
@@ -21,4 +21,5 @@ __all__ = [
     "ComplexityConfig",
     "load_complexity_config",
     "characterize_dataset",
+    "profile_dataset",
 ]

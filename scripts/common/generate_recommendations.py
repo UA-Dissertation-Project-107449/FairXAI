@@ -128,6 +128,7 @@ def main():
         project_root,
         "recommendations.log",
         verbose=args.verbose,
+        log_subdir=pipeline,
         run_id=run_id,
         stage_name="recommend",
     )
@@ -228,6 +229,10 @@ def _process_pipeline_datasets(engine, project_root, pipeline, args, output_dir)
     sensitive_attrs = pipeline_cfg.get("fairness", {}).get(
         "sensitive_attributes", ["age_group", "sex"]
     )
+    target_col = pipeline_cfg.get("training", {}).get("target")
+    identifier_cols = pipeline_cfg.get("recommendations", {}).get(
+        "identifier_columns", ["patient_id", "lesion_id"] if pipeline == "dermatology" else None
+    )
 
     dataset_files = sorted(data_raw.glob("*_standardized.csv"))
 
@@ -247,7 +252,9 @@ def _process_pipeline_datasets(engine, project_root, pipeline, args, output_dir)
         # Build ingestion from the CSV with pipeline-level sensitive attrs
         ingestion = engine.ingest(
             str(filepath),
+            label_column=target_col,
             sensitive_columns=sensitive_attrs,
+            identifier_columns=identifier_cols,
             dataset_name=dataset_name,
         )
 

@@ -1,0 +1,47 @@
+# Dermatology pipeline configuration (PAD-UFES baseline)
+
+paths:
+  external_dir: data/external/dermatology
+  raw_dir: data/raw/dermatology
+  processed_dir: data/processed/dermatology
+
+runtime:
+  datasets: [pad_ufes_20]
+  schema_mapping_json: configs/schema/dermatology.json
+
+split:
+  test_size: 0.3
+  random_state: 42
+  group_column: patient_id
+
+training:
+  modality: image
+  target: skin_cancer
+  model: resnet18
+  model_types: [resnet18]
+  training_methods: [single_split]
+  thresholds: [0.5]
+  use_hpo: false
+  image:
+    image_column: image_path
+    device: auto      # auto probes cuda -> rocm -> cpu
+    epochs: 5
+    batch_size: 32
+    learning_rate: 0.0003
+    image_size: 224
+    pretrained: true
+    freeze_backbone: true
+    num_workers: 0
+
+fairness:
+  sensitive_attributes: [age_group, sex, fitzpatrick_group]
+
+xai:
+  enabled: false
+  cv_enabled: false
+
+studies:
+  skip: true
+
+scheduling:
+  mode: serial

@@ -1,4 +1,4 @@
-"""Dataset characterization utilities for WebApp-compatible JSON outputs.
+"""Dataset profiling and characterization utilities for WebApp-compatible JSON outputs.
 
 This module provides a focused characterization path (CSV -> metrics JSON)
 without invoking the full multi-stage pipeline.
@@ -70,6 +70,15 @@ _TARGET_COLUMN_HINTS = [
     "output",
 ]
 
+_INDEX_COLUMN_HINTS = [
+    "index",
+    "id",
+    "row_id",
+    "sample_id",
+    "patient_id",
+    "case_id",
+]
+
 
 def _resolve_target_column(df: pd.DataFrame, target_column: str | None = None) -> str:
     if target_column and target_column in df.columns:
@@ -81,6 +90,95 @@ def _resolve_target_column(df: pd.DataFrame, target_column: str | None = None) -
             return df.columns[lower_cols.index(hint)]
 
     return str(df.columns[-1])
+
+
+def _guess_index_column(df: pd.DataFrame) -> str | None:
+    columns = [str(c) for c in df.columns]
+    lower_cols = [c.lower() for c in columns]
+
+    for hint in _INDEX_COLUMN_HINTS:
+        if hint in lower_cols:
+            return columns[lower_cols.index(hint)]
+
+    if df.empty or not columns:
+        return None
+
+    first_col = columns[0]
+    non_null = df[first_col].dropna()
+    if non_null.empty:
+        return None
+
+    unique_ratio = float(non_null.nunique(dropna=True)) / float(len(non_null))
+    if unique_ratio >= 0.98:
+        return first_col
+
+    return None
+
+
+def _infer_column_type(series: pd.Series) -> str:
+    non_null = series.dropna()
+    if non_null.empty:
+        return "unknown"
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return "datetime"
+    unique_count = int(non_null.nunique(dropna=True))
+    if unique_count == 2:
+        return "binary"
+    if pd.api.types.is_numeric_dtype(series):
+        return "numerical"
+    if unique_count <= 20:
+        return "categorical"
+    return "text"
+
+
+def _build_column_profiles(df: pd.DataFrame) -> list[dict[str, Any]]:
+    row_count = int(df.shape[0])
+    profiles: list[dict[str, Any]] = []
+    for column_name in df.columns:
+        series = df[column_name]
+        n_unique = int(series.nunique(dropna=True))
+        missing_count = int(series.isna().sum())
+        profiles.append(
+            {
+                "name": str(column_name),
+                "dtype": str(series.dtype),
+                "inferred_type": _infer_column_type(series),
+                "n_unique": n_unique,
+                "missing_count": missing_count,
+                "missing_pct": (
+                    round(float(missing_count / row_count * 100), 2) if row_count else 0.0
+                ),
+                "is_all_unique": row_count > 0 and n_unique == row_count,
+            }
+        )
+    return profiles
+
+
+def profile_dataset(
+    filename: str,
+    datasets_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Return lightweight, flat dataset metadata for upload-time configuration."""
+    csv_path = _resolve_input_csv(filename=filename, datasets_dir=datasets_dir)
+    df = pd.read_csv(csv_path)
+    if df.empty:
+        raise ValueError(f"Dataset is empty: {csv_path}")
+
+    columns = [str(c) for c in df.columns]
+    index_guess = _guess_index_column(df)
+    target_guess = _resolve_target_column(df, target_column=None)
+    if target_guess == index_guess:
+        non_index_columns = [column for column in columns if column != index_guess]
+        target_guess = non_index_columns[-1] if non_index_columns else target_guess
+
+    return {
+        "columns": columns,
+        "target_guess": target_guess,
+        "index_guess": index_guess,
+        "row_count": int(df.shape[0]),
+        "dataset_size_bytes": int(csv_path.stat().st_size),
+        "column_profiles": _build_column_profiles(df),
+    }
 
 
 def _resolve_ebm_model_path(ebm_model_path: str | Path | None = None) -> Path:
@@ -367,10 +465,18 @@ def characterize_dataset(
     feature_type_summary = _compute_feature_type_summary(X)
 
     column_n_unique = {str(col): int(X[col].nunique()) for col in X.columns}
+    columns = [str(col) for col in df.columns]
+    feature_columns = [str(col) for col in X.columns]
 
     result: dict[str, Any] = {
         "schema_version": "1.1",
         "jobId": file_id,
+        "columns": columns,
+        "feature_columns": feature_columns,
+        "target_column": target,
+        "index_column": index_column,
+        "row_count": int(df.shape[0]),
+        "column_profiles": _build_column_profiles(df),
         "metrics": metrics,
         "pca2d": pca2d,
         "missing_percentages": missing_percentages,

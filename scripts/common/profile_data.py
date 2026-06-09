@@ -67,6 +67,7 @@ def main():
         project_root,
         "data_profiling.log",
         verbose=args.verbose,
+        log_subdir=pipeline,
         run_id=run_id,
         stage_name="profile",
     )
