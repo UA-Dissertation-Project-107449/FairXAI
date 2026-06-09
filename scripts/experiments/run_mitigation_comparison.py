@@ -162,7 +162,12 @@ def load_dataset(
     logging.info(f"  Features: {X_train.shape[1]}")
     logging.info(f"  Sensitive attributes: {list(sensitive_train.columns)}")
 
-    return X_train, y_train, sensitive_train, X_test, y_test, sensitive_test
+    # Analysis-only metadata for the test split: continuous `*_raw` columns
+    # (e.g. age_raw) carried for the post-hoc age-binning fairness sweep.
+    meta_cols = [c for c in test_raw_df.columns if c.endswith("_raw")]
+    meta_test = test_raw_df[meta_cols].copy() if meta_cols else None
+
+    return X_train, y_train, sensitive_train, X_test, y_test, sensitive_test, meta_test
 
 
 def train_baseline(
@@ -214,6 +219,8 @@ def apply_mitigation_techniques(
     techniques_config,
     base_model_params=None,
     constraint_attrs="all",
+    meta_test=None,
+    predictions_dir=None,
 ):
     """
     Apply all mitigation techniques and collect results.
@@ -314,6 +321,21 @@ def apply_mitigation_techniques(
                 # Add model features for individual fairness calculation
                 for col in X_test.columns:
                     predictions_df[col] = X_test[col].values
+
+                # Carry analysis-only `*_raw` metadata (e.g. age_raw) for the
+                # post-hoc age-binning sweep; never a feature or grouping key.
+                if meta_test is not None:
+                    for col in meta_test.columns:
+                        predictions_df[col] = meta_test[col].values
+
+                # Persist the mitigated per-sample predictions ("after" regime)
+                # so the age-binning sensitivity sweep can pair them vs baseline.
+                if predictions_dir is not None:
+                    predictions_dir.mkdir(parents=True, exist_ok=True)
+                    pred_path = (
+                        predictions_dir / f"{dataset_name}_{technique_name}_{sensitive_attr}.csv"
+                    )
+                    predictions_df.to_csv(pred_path, index=False)
 
                 # Calculate fairness metrics across ALL sensitive attrs (measurement
                 # is unchanged; only the imposed constraint varies per loop).
@@ -646,8 +668,8 @@ def run_analysis(
             dataset_dir = resolve_dataset_dir(data_dir, dataset_name, default_binning)
 
             # Load data — processed files carry the canonical target column
-            X_train, y_train, sensitive_train, X_test, y_test, sensitive_test = load_dataset(
-                dataset_name, dataset_dir, schema_cfg, target_col, sensitive_attrs
+            X_train, y_train, sensitive_train, X_test, y_test, sensitive_test, meta_test = (
+                load_dataset(dataset_name, dataset_dir, schema_cfg, target_col, sensitive_attrs)
             )
 
             # Train baseline
@@ -679,6 +701,8 @@ def run_analysis(
                 implemented,
                 base_model_params=model_params,
                 constraint_attrs=constraint_attrs_cfg,
+                meta_test=meta_test,
+                predictions_dir=output_dir / "predictions",
             )
 
             all_results.extend(mitigation_results)

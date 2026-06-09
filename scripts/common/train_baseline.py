@@ -50,6 +50,26 @@ from fairxai.utils.config import load_yaml_config
 ALLOWED_TRAINING_METHODS = {"single_split", "kfold_cv"}
 
 
+def _load_raw_meta(scaled_file: Path, scaled_df: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """Recover analysis-only ``*_raw`` metadata for prediction carrying.
+
+    Scaling drops continuous source columns (e.g. ``age_raw``) from the processed
+    splits, so they are sourced from the raw sibling split (``*_train.csv`` next to
+    ``*_train_scaled.csv``) — same rows, same order. Falls back to whatever
+    ``*_raw`` columns the scaled frame itself carries, and returns ``None`` when
+    none exist or the raw sibling cannot be safely row-aligned.
+    """
+    raw_file = scaled_file.with_name(scaled_file.name.replace("_scaled", ""))
+    if raw_file != scaled_file and raw_file.exists():
+        raw_df = pd.read_csv(raw_file)
+        meta_cols = [c for c in raw_df.columns if c.endswith("_raw")]
+        if meta_cols and len(raw_df) == len(scaled_df):
+            return raw_df[meta_cols].reset_index(drop=True)
+
+    fallback_cols = [c for c in scaled_df.columns if c.endswith("_raw")]
+    return scaled_df[fallback_cols].reset_index(drop=True) if fallback_cols else None
+
+
 def save_xai_outputs(
     model: Any,
     model_type: str,
@@ -744,6 +764,14 @@ def main():
         sensitive_train = train_df[sensitive_cols]
         sensitive_test = test_df[sensitive_cols]
 
+        # Analysis-only metadata carried alongside predictions (never a feature or
+        # grouping key): continuous source columns for post-hoc re-binning, e.g.
+        # age_raw → age-binning fairness sensitivity sweep. Suffix convention `*_raw`.
+        # The SCALED splits drop `*_raw`, so source it from the raw sibling split
+        # (same rows, same order). Falls back to whatever the scaled frame carries.
+        pred_meta_train = _load_raw_meta(train_file, train_df)
+        pred_meta_test = _load_raw_meta(test_file, test_df)
+
         logging.info(f"Features: {len(feature_cols)} (mode={fs_mode})")
 
         results_summary.setdefault(dataset_name, {})
@@ -814,6 +842,11 @@ def main():
             X_full = pd.concat([X_train, X_test], ignore_index=True)
             y_full = pd.concat([y_train, y_test], ignore_index=True)
             sensitive_full = pd.concat([sensitive_train, sensitive_test], ignore_index=True)
+            pred_meta_full = (
+                pd.concat([pred_meta_train, pred_meta_test], ignore_index=True)
+                if pred_meta_train is not None
+                else None
+            )
 
             if "single_split" in training_methods:
                 model = model_class(**model_params)
@@ -863,10 +896,15 @@ def main():
 
                 logging.info("Generating predictions:")
                 train_predictions = generate_predictions_with_metadata(
-                    model, X_train, y_train, sensitive_train, threshold=0.5
+                    model,
+                    X_train,
+                    y_train,
+                    sensitive_train,
+                    threshold=0.5,
+                    extra_meta=pred_meta_train,
                 )
                 test_predictions = generate_predictions_with_metadata(
-                    model, X_test, y_test, sensitive_test, threshold=0.5
+                    model, X_test, y_test, sensitive_test, threshold=0.5, extra_meta=pred_meta_test
                 )
 
                 n_near_threshold_train = train_predictions["near_threshold"].sum()
@@ -923,7 +961,12 @@ def main():
                         allow_svm_shap = bool(xai_cfg.get("allow_svm_shap", False))
 
                         full_predictions = generate_predictions_with_metadata(
-                            model, X_full, y_full, sensitive_full, threshold=0.5
+                            model,
+                            X_full,
+                            y_full,
+                            sensitive_full,
+                            threshold=0.5,
+                            extra_meta=pred_meta_full,
                         )
                         near_mask = full_predictions["near_threshold"]
                         if near_mask.sum() > 0:
