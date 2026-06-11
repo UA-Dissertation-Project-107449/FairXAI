@@ -314,3 +314,27 @@ def test_run_binning_continuous_full_output_schema(tmp_path):
         assert "closed" in b
         assert "count" in b
         assert "target_rate" in b
+
+
+def test_run_binning_first_interval_label_uses_effective_closed_minimum(tmp_path):
+    """include_lowest should not leak pandas epsilon labels like (-0.001, 3.0]."""
+    from fairxai.integration.binning import run_binning
+
+    csv = tmp_path / "integer_feature.csv"
+    df = pd.DataFrame(
+        {
+            "feature": np.repeat(np.arange(10), 10),
+            "target": np.tile([0, 1], 50),
+        }
+    )
+    df.to_csv(csv, index=False)
+
+    result = run_binning(
+        csv, target_column="target", attribute="feature", strategy="quantile_3", min_group_size=0
+    )
+
+    first = result["bins"][0]
+    assert first["label"].startswith("[0, ")
+    assert "-0.001" not in first["label"]
+    assert first["lower_bound"] == 0.0
+    assert first["closed"] == "both"
