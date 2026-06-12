@@ -37,7 +37,7 @@ def _build_parser() -> argparse.ArgumentParser:
     binn.add_argument("--filename", required=True)
     binn.add_argument("--target-column", required=True)
     binn.add_argument("--attribute", required=True, help="Numerical column to bin")
-    binn.add_argument("--strategy", required=True, help="e.g. quantile_5, equal_width_3")
+    binn.add_argument("--strategy", required=True, help="e.g. quantile_5, equal_width_10")
     binn.add_argument("--datasets-dir", default=None)
     binn.add_argument("--min-group-size", type=int, default=10)
 

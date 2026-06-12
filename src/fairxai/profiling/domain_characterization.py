@@ -79,6 +79,21 @@ _INDEX_COLUMN_HINTS = [
     "case_id",
 ]
 
+_PREFERRED_BIN_COUNTS = [2, 5, 10]
+_SENSITIVE_NAME_HINTS = (
+    "age",
+    "sex",
+    "gender",
+    "race",
+    "ethnic",
+    "religion",
+    "disab",
+    "marital",
+    "country",
+    "national",
+)
+_IDENTIFIER_NAME_HINTS = ("id", "index", "uuid", "guid", "key")
+
 
 def _resolve_target_column(df: pd.DataFrame, target_column: str | None = None) -> str:
     if target_column and target_column in df.columns:
@@ -131,6 +146,111 @@ def _infer_column_type(series: pd.Series) -> str:
     return "text"
 
 
+def _semantic_type(column_name: str, series: pd.Series, row_count: int, n_unique: int) -> str:
+    non_null = series.dropna()
+    if non_null.empty:
+        return "unknown"
+
+    lower_name = column_name.lower()
+    distinct_ratio = float(n_unique / row_count) if row_count else 0.0
+    if distinct_ratio >= 0.98 and any(hint in lower_name for hint in _IDENTIFIER_NAME_HINTS):
+        return "identifier"
+
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return "datetime"
+    if n_unique == 2:
+        return "binary"
+    if pd.api.types.is_numeric_dtype(series):
+        if n_unique <= 5 or distinct_ratio < 0.05:
+            return "categorical"
+        return "continuous"
+    if n_unique <= 20:
+        return "categorical"
+    return "text"
+
+
+def _recommended_bin_counts(n_unique: int, semantic_type: str) -> list[int]:
+    if semantic_type == "binary":
+        return [2]
+    if semantic_type == "categorical":
+        divisors = [
+            count for count in _PREFERRED_BIN_COUNTS if n_unique % count == 0 and count <= n_unique
+        ]
+        return divisors or ([n_unique] if 1 < n_unique <= 10 else [])
+    if semantic_type == "continuous":
+        divisors = [
+            count for count in _PREFERRED_BIN_COUNTS if n_unique % count == 0 and count <= n_unique
+        ]
+        others = [
+            count for count in _PREFERRED_BIN_COUNTS if count <= n_unique and count not in divisors
+        ]
+        return divisors + others
+    return []
+
+
+def _binning_guidance(
+    semantic_type: str, n_unique: int, missing_pct: float, is_numeric: bool
+) -> tuple[bool, str, str]:
+    if semantic_type == "binary":
+        return False, "use_directly", "Binary column; compare the two groups directly."
+    if semantic_type == "identifier":
+        return False, "avoid", "Identifier-like column; do not use for fairness groups."
+    if is_numeric:
+        if missing_pct >= 50:
+            return (
+                True,
+                "caution",
+                "Numeric column with high missingness; bin only with caution.",
+            )
+        if 3 <= n_unique <= 5:
+            return (
+                True,
+                "limited_bins",
+                f"{n_unique} distinct values; wider bin requests may collapse to direct groups.",
+            )
+        if n_unique < 20:
+            note = (
+                "10 ordered values support useful 2, 5, and 10-bin comparisons."
+                if n_unique == 10
+                else "Ordered low-cardinality values can support useful binning, but inspect collapsed or empty-bin results."
+            )
+            return (
+                True,
+                "ok_for_binning",
+                note,
+            )
+        return (
+            True,
+            "great_for_binning",
+            "Continuous numeric column; well suited for 2, 5, and 10-bin comparisons.",
+        )
+    if semantic_type == "categorical":
+        return False, "use_directly", f"{n_unique} distinct values; compare categories directly."
+    return False, "avoid", "Column type is not suitable for numeric binning."
+
+
+def _sensitive_candidate(
+    column_name: str, semantic_type: str, binning_guidance: str
+) -> tuple[float, str]:
+    lower_name = column_name.lower()
+    name_match = any(hint in lower_name for hint in _SENSITIVE_NAME_HINTS)
+    score = 0.0
+    reasons: list[str] = []
+    if name_match:
+        score += 0.7
+        reasons.append("name matches common sensitive-attribute terms")
+    if semantic_type in {"binary", "categorical"}:
+        score += 0.2
+        reasons.append("usable as categories")
+    elif semantic_type == "continuous":
+        score += 0.1
+        reasons.append("continuous attribute can be grouped")
+    if binning_guidance == "avoid":
+        score = min(score, 0.1)
+        reasons.append("not recommended for fairness grouping")
+    return round(min(score, 1.0), 2), "; ".join(reasons)
+
+
 def _build_column_profiles(df: pd.DataFrame) -> list[dict[str, Any]]:
     row_count = int(df.shape[0])
     profiles: list[dict[str, Any]] = []
@@ -138,17 +258,33 @@ def _build_column_profiles(df: pd.DataFrame) -> list[dict[str, Any]]:
         series = df[column_name]
         n_unique = int(series.nunique(dropna=True))
         missing_count = int(series.isna().sum())
+        missing_pct = round(float(missing_count / row_count * 100), 2) if row_count else 0.0
+        semantic_type = _semantic_type(str(column_name), series, row_count, n_unique)
+        is_numeric = pd.api.types.is_numeric_dtype(series)
+        binnable, binning_guidance, binning_note = _binning_guidance(
+            semantic_type, n_unique, missing_pct, is_numeric
+        )
+        candidate_score, candidate_reason = _sensitive_candidate(
+            str(column_name), semantic_type, binning_guidance
+        )
         profiles.append(
             {
                 "name": str(column_name),
                 "dtype": str(series.dtype),
                 "inferred_type": _infer_column_type(series),
                 "n_unique": n_unique,
+                "n_distinct": n_unique,
+                "distinct_ratio": round(float(n_unique / row_count), 4) if row_count else 0.0,
                 "missing_count": missing_count,
-                "missing_pct": (
-                    round(float(missing_count / row_count * 100), 2) if row_count else 0.0
-                ),
+                "missing_pct": missing_pct,
                 "is_all_unique": row_count > 0 and n_unique == row_count,
+                "semantic_type": semantic_type,
+                "binnable": binnable,
+                "recommended_bin_counts": _recommended_bin_counts(n_unique, semantic_type),
+                "binning_guidance": binning_guidance,
+                "binning_note": binning_note,
+                "sensitive_candidate_score": candidate_score,
+                "sensitive_candidate_reason": candidate_reason,
             }
         )
     return profiles
