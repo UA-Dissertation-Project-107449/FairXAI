@@ -18,7 +18,7 @@ training:
   modality: image
   target: skin_cancer
   model: resnet18
-  model_types: [resnet18]
+  model_types: [resnet18, mobilenet_v3_large, efficientnet_b0]
   training_methods: [single_split]
   thresholds: [0.5]
   use_hpo: false
@@ -31,7 +31,7 @@ training:
     image_size: 224
     pretrained: true
     freeze_backbone: true
-    num_workers: 0
+    num_workers: 4
 
 fairness:
   sensitive_attributes: [age_group, sex, fitzpatrick_group]
