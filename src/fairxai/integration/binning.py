@@ -24,13 +24,14 @@ _DISPARITY_P1_THRESHOLD = 2.0
 _SCORE_WEIGHTS = {"sample_size": 1 / 3, "balance": 1 / 3, "fairness": 1 / 3}
 
 SUPPORTED_STRATEGIES = [
-    "equal_width_3",
+    "equal_width_2",
     "equal_width_5",
-    "equal_width_7",
-    "quantile_3",
+    "equal_width_10",
+    "quantile_2",
     "quantile_5",
-    "quantile_7",
+    "quantile_10",
 ]
+_SUPPORTED_STRATEGIES_SET = set(SUPPORTED_STRATEGIES)
 
 
 def run_binning(
@@ -55,6 +56,7 @@ def run_binning(
     Raises:
         ValueError: If attribute or target_column not found, or strategy unknown.
     """
+    strategy = _normalize_strategy(strategy)
     csv_path = Path(csv_path)
     df = pd.read_csv(csv_path)
 
@@ -66,16 +68,30 @@ def run_binning(
     df = df.dropna(subset=[attribute, target_column]).copy()
     df[attribute] = pd.to_numeric(df[attribute], errors="coerce")
     df = df.dropna(subset=[attribute])
+    requested_bins = _requested_bins(strategy)
+    n_distinct = int(df[attribute].nunique(dropna=True))
+    warnings = _binning_warnings(attribute, n_distinct, requested_bins)
 
     bins, labels = create_binning_strategy(
         df, strategy, col=attribute, min_group_size=min_group_size
     )
     df_binned = apply_binning(df, bins, labels, col=attribute, output_col="_bin_group")
 
-    bin_stats = _compute_bin_stats(df_binned, "_bin_group", target_column)
+    bin_stats = _compute_bin_stats(df_binned, "_bin_group", target_column, attribute)
     summary = _compute_summary(bin_stats)
     summary["strategy_score"] = _compute_strategy_score(bin_stats, strategy)
     summary["score_weights"] = {k: round(v, 4) for k, v in _SCORE_WEIGHTS.items()}
+    summary["requested_bins"] = requested_bins
+    summary["effective_bins"] = len(bin_stats)
+    summary["binning_mode"] = (
+        "categorical_identity" if requested_bins and n_distinct <= requested_bins else "binned"
+    )
+    if requested_bins and len(bin_stats) < requested_bins and n_distinct > requested_bins:
+        warnings.append(
+            f"Only {len(bin_stats)} of {requested_bins} requested bins were produced "
+            "after duplicate-edge or minimum-size repair."
+        )
+    summary["warnings"] = warnings
     recommendations = _generate_recommendations(attribute, strategy, summary)
 
     return {
@@ -87,7 +103,40 @@ def run_binning(
     }
 
 
-def _compute_bin_stats(df: pd.DataFrame, bin_col: str, target_col: str) -> list[dict[str, Any]]:
+def _normalize_strategy(strategy: str) -> str:
+    resolved = str(strategy or "").strip()
+    if resolved not in _SUPPORTED_STRATEGIES_SET:
+        raise ValueError(
+            f"Unsupported binning strategy '{strategy}'. "
+            f"Choose one of: {', '.join(SUPPORTED_STRATEGIES)}."
+        )
+    return resolved
+
+
+def _requested_bins(strategy: str) -> int | None:
+    suffix = strategy.rsplit("_", 1)[-1]
+    return int(suffix) if suffix.isdigit() else None
+
+
+def _binning_warnings(attribute: str, n_distinct: int, requested_bins: int | None) -> list[str]:
+    if requested_bins is None:
+        return []
+    if n_distinct <= requested_bins:
+        return [
+            f"{attribute} has {n_distinct} distinct value(s), so FairXAI used one "
+            f"group per distinct value instead of forcing {requested_bins} numeric bins."
+        ]
+    if n_distinct < 2 * requested_bins:
+        return [
+            f"{attribute} has low granularity ({n_distinct} distinct values for "
+            f"{requested_bins} requested bins); bin sizes may be uneven."
+        ]
+    return []
+
+
+def _compute_bin_stats(
+    df: pd.DataFrame, bin_col: str, target_col: str, attribute_col: str | None = None
+) -> list[dict[str, Any]]:
     total = len(df)
     groups = df.groupby(bin_col, observed=True)
 
@@ -97,12 +146,18 @@ def _compute_bin_stats(df: pd.DataFrame, bin_col: str, target_col: str) -> list[
         pct = round(count / total * 100, 1) if total > 0 else 0.0
         target_vals = pd.to_numeric(grp[target_col], errors="coerce").dropna()
         target_rate = round(float(target_vals.mean()), 4) if len(target_vals) > 0 else None
-        lower_bound, upper_bound, closed = _get_bin_bounds(label)
+        observed_min, observed_max = _observed_range(grp, attribute_col)
+        lower_bound, upper_bound, closed = _get_bin_bounds(label, observed_min)
+        display_label = _format_bin_label(
+            label, lower_bound, upper_bound, closed, observed_min, observed_max
+        )
         stats.append(
             {
-                "label": str(label),
+                "label": display_label,
                 "lower_bound": lower_bound,
                 "upper_bound": upper_bound,
+                "observed_min": observed_min,
+                "observed_max": observed_max,
                 "closed": closed,
                 "count": count,
                 "pct": pct,
@@ -112,10 +167,60 @@ def _compute_bin_stats(df: pd.DataFrame, bin_col: str, target_col: str) -> list[
     return stats
 
 
-def _get_bin_bounds(label: Any) -> tuple[float | None, float | None, str | None]:
+def _observed_range(
+    grp: pd.DataFrame, attribute_col: str | None
+) -> tuple[float | None, float | None]:
+    if attribute_col is None or attribute_col not in grp.columns:
+        return None, None
+    values = pd.to_numeric(grp[attribute_col], errors="coerce").dropna()
+    if values.empty:
+        return None, None
+    return float(values.min()), float(values.max())
+
+
+def _get_bin_bounds(
+    label: Any, observed_min: float | None = None
+) -> tuple[float | None, float | None, str | None]:
     if isinstance(label, pd.Interval):
-        return float(label.left), float(label.right), label.closed
+        left = float(label.left)
+        right = float(label.right)
+        closed = label.closed
+        if observed_min is not None and label.closed == "right" and left < observed_min <= right:
+            left = observed_min
+            closed = "both"
+        return left, right, closed
     return None, None, None
+
+
+def _format_bin_label(
+    raw_label: Any,
+    lower_bound: float | None,
+    upper_bound: float | None,
+    closed: str | None,
+    observed_min: float | None = None,
+    observed_max: float | None = None,
+) -> str:
+    if _is_integer_like(observed_min) and _is_integer_like(observed_max):
+        return f"[{_format_bound(observed_min)}, {_format_bound(observed_max)}]"
+
+    if lower_bound is None or upper_bound is None or closed is None:
+        return str(raw_label)
+
+    left_bracket = "[" if closed in {"left", "both"} else "("
+    right_bracket = "]" if closed in {"right", "both"} else ")"
+    return (
+        f"{left_bracket}{_format_bound(lower_bound)}, {_format_bound(upper_bound)}{right_bracket}"
+    )
+
+
+def _format_bound(value: float) -> str:
+    if abs(value) < 1e-12:
+        value = 0.0
+    return f"{value:g}"
+
+
+def _is_integer_like(value: float | None) -> bool:
+    return value is not None and abs(value - round(value)) < 1e-9
 
 
 def _compute_summary(bin_stats: list[dict[str, Any]]) -> dict[str, Any]:

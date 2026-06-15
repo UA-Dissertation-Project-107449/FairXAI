@@ -151,12 +151,12 @@ def test_create_binning_strategy_dispatch_smoke():
     """Smoke-test strategy name dispatch for all WebApp-exposed strategy names."""
     df = _continuous_df()
     for strategy in (
-        "equal_width_3",
+        "equal_width_2",
         "equal_width_5",
-        "equal_width_7",
-        "quantile_3",
+        "equal_width_10",
+        "quantile_2",
         "quantile_5",
-        "quantile_7",
+        "quantile_10",
     ):
         bins, _ = create_binning_strategy(df, strategy, col="feature", min_group_size=0)
         assert len(bins) >= 2, f"Strategy {strategy} returned fewer than 2 bin edges"
@@ -201,24 +201,25 @@ def test_validate_and_repair_clips_leading_edge():
 
 
 def test_run_binning_equal_width_binary_returns_2_bins(tmp_path):
-    """equal_width_3 on binary produces 2 non-empty bins in the output JSON."""
+    """equal_width_2 on binary produces 2 non-empty bins in the output JSON."""
     from fairxai.integration.binning import run_binning
 
     csv = tmp_path / "binary.csv"
     _binary_df(n=100).to_csv(csv, index=False)
 
     result = run_binning(
-        csv, target_column="target", attribute="feature", strategy="equal_width_3", min_group_size=0
+        csv, target_column="target", attribute="feature", strategy="equal_width_2", min_group_size=0
     )
 
     assert len(result["bins"]) == 2, (
-        f"Expected 2 non-empty bins for binary feature with equal_width_3, "
+        f"Expected 2 non-empty bins for binary feature with equal_width_2, "
         f"got {len(result['bins'])}"
     )
+    assert result["summary"]["effective_bins"] == 2
 
 
 def test_run_binning_quantile_binary_uses_identity_fallback(tmp_path):
-    """quantile_3 on binary now yields 2 bins via the cardinality fallback.
+    """quantile_2 on binary now yields 2 bins via the cardinality fallback.
 
     Previously the low-level qcut collapsed binary to 1 bin; the cardinality
     guard in create_binning_strategy now routes it to one-bin-per-value.
@@ -229,11 +230,14 @@ def test_run_binning_quantile_binary_uses_identity_fallback(tmp_path):
     _binary_df(n=100).to_csv(csv, index=False)
 
     result = run_binning(
-        csv, target_column="target", attribute="feature", strategy="quantile_3", min_group_size=0
+        csv, target_column="target", attribute="feature", strategy="quantile_2", min_group_size=0
     )
 
     assert len(result["bins"]) == 2
     assert [b["pct"] for b in result["bins"]] == [50.0, 50.0]
+    assert result["summary"]["requested_bins"] == 2
+    assert result["summary"]["binning_mode"] == "categorical_identity"
+    assert result["summary"]["warnings"]
 
 
 # ---------------------------------------------------------------------------
@@ -259,12 +263,12 @@ def test_cardinality_fallback_when_bins_exceed_distinct():
 def test_cardinality_fallback_binary_two_bins():
     """Binary column routes to a clean 2-bin split instead of collapsing to 1."""
     df = _binary_df(n=100)
-    bins, _ = create_binning_strategy(df, "quantile_3", col="feature", min_group_size=0)
+    bins, _ = create_binning_strategy(df, "quantile_2", col="feature", min_group_size=0)
     assert len(bins) - 1 == 2
 
 
 def test_cardinality_fallback_membership_is_balanced():
-    """5 uniform values into quantile_7 falls back to 5 equal bins (20% each)."""
+    """5 uniform values into quantile_10 falls back to 5 equal bins (20% each)."""
     import tempfile
 
     from fairxai.integration.binning import run_binning
@@ -277,11 +281,24 @@ def test_cardinality_fallback_membership_is_balanced():
             csv,
             target_column="target",
             attribute="feature",
-            strategy="quantile_7",
+            strategy="quantile_10",
             min_group_size=0,
         )
     assert len(result["bins"]) == 5
     assert [b["pct"] for b in result["bins"]] == [20.0, 20.0, 20.0, 20.0, 20.0]
+    assert [b["label"] for b in result["bins"]] == [
+        "[0, 0]",
+        "[1, 1]",
+        "[2, 2]",
+        "[3, 3]",
+        "[4, 4]",
+    ]
+    assert result["bins"][0]["observed_min"] == 0
+    assert result["bins"][0]["observed_max"] == 0
+    assert result["summary"]["requested_bins"] == 10
+    assert result["summary"]["effective_bins"] == 5
+    assert result["summary"]["binning_mode"] == "categorical_identity"
+    assert result["summary"]["warnings"]
 
 
 def test_no_fallback_when_distinct_exceeds_bins():
@@ -306,6 +323,10 @@ def test_run_binning_continuous_full_output_schema(tmp_path):
     assert "summary" in result
     assert "recommendations" in result
     assert "disparity_ratio" in result["summary"]
+    assert result["summary"]["requested_bins"] == 5
+    assert result["summary"]["effective_bins"] == 5
+    assert result["summary"]["binning_mode"] == "binned"
+    assert result["summary"]["warnings"] == []
     assert len(result["bins"]) == 5
     for b in result["bins"]:
         assert "label" in b
@@ -314,3 +335,43 @@ def test_run_binning_continuous_full_output_schema(tmp_path):
         assert "closed" in b
         assert "count" in b
         assert "target_rate" in b
+
+
+def test_run_binning_rejects_removed_strategy_names(tmp_path):
+    from fairxai.integration.binning import run_binning
+
+    csv = tmp_path / "cont.csv"
+    _continuous_df(n=200).to_csv(csv, index=False)
+
+    with pytest.raises(ValueError, match="Unsupported binning strategy"):
+        run_binning(
+            csv,
+            target_column="target",
+            attribute="feature",
+            strategy="quantile_3",
+            min_group_size=0,
+        )
+
+
+def test_run_binning_first_interval_label_uses_effective_closed_minimum(tmp_path):
+    """include_lowest should not leak pandas epsilon labels like (-0.001, 3.0]."""
+    from fairxai.integration.binning import run_binning
+
+    csv = tmp_path / "integer_feature.csv"
+    df = pd.DataFrame(
+        {
+            "feature": np.repeat(np.arange(10), 10),
+            "target": np.tile([0, 1], 50),
+        }
+    )
+    df.to_csv(csv, index=False)
+
+    result = run_binning(
+        csv, target_column="target", attribute="feature", strategy="quantile_5", min_group_size=0
+    )
+
+    first = result["bins"][0]
+    assert first["label"].startswith("[0, ")
+    assert "-0.001" not in first["label"]
+    assert first["lower_bound"] == 0.0
+    assert first["closed"] == "both"

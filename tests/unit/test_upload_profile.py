@@ -34,7 +34,60 @@ def test_profile_dataset_returns_flat_upload_metadata(tmp_path):
     assert result["dataset_size_bytes"] == csv_path.stat().st_size
     id_profile = next(profile for profile in result["column_profiles"] if profile["name"] == "id")
     assert id_profile["n_unique"] == 4
+    assert id_profile["n_distinct"] == 4
+    assert id_profile["distinct_ratio"] == 1.0
     assert id_profile["is_all_unique"] is True
+    assert id_profile["semantic_type"] == "identifier"
+    assert id_profile["binning_guidance"] == "avoid"
+    sex_profile = next(profile for profile in result["column_profiles"] if profile["name"] == "sex")
+    assert sex_profile["semantic_type"] == "binary"
+    assert sex_profile["binning_guidance"] == "use_directly"
+    assert sex_profile["recommended_bin_counts"] == [2]
+
+
+def test_profile_dataset_adds_guidance_for_cardinality_regimes(tmp_path):
+    csv_path = tmp_path / "profile_regimes.csv"
+    pd.DataFrame(
+        {
+            "row_id": range(100),
+            "age": list(range(50)) * 2,
+            "risk_band": list(range(5)) * 20,
+            "sex": [0, 1] * 50,
+            "mostly_missing": [None] * 60 + list(range(40)),
+            "target": [0, 1] * 50,
+        }
+    ).to_csv(csv_path, index=False)
+
+    result = dc.profile_dataset(str(csv_path))
+    profiles = {profile["name"]: profile for profile in result["column_profiles"]}
+
+    assert profiles["row_id"]["semantic_type"] == "identifier"
+    assert profiles["age"]["semantic_type"] == "continuous"
+    assert profiles["age"]["binning_guidance"] == "great_for_binning"
+    assert profiles["age"]["recommended_bin_counts"] == [2, 5, 10]
+    assert profiles["risk_band"]["semantic_type"] == "categorical"
+    assert profiles["risk_band"]["binning_guidance"] == "limited_bins"
+    assert profiles["risk_band"]["recommended_bin_counts"] == [5]
+    assert profiles["mostly_missing"]["binning_guidance"] == "caution"
+
+
+def test_profile_dataset_marks_ten_distinct_numeric_ok_for_binning(tmp_path):
+    csv_path = tmp_path / "ten_values.csv"
+    pd.DataFrame(
+        {
+            "score_0_to_9": list(range(10)) * 10,
+            "target": [0, 1] * 50,
+        }
+    ).to_csv(csv_path, index=False)
+
+    result = dc.profile_dataset(str(csv_path))
+    profile = next(
+        profile for profile in result["column_profiles"] if profile["name"] == "score_0_to_9"
+    )
+
+    assert profile["semantic_type"] == "continuous"
+    assert profile["binning_guidance"] == "ok_for_binning"
+    assert profile["recommended_bin_counts"] == [2, 5, 10]
 
 
 def test_profile_cli_prints_flat_json(tmp_path, capsys):
