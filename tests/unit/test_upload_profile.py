@@ -90,6 +90,69 @@ def test_profile_dataset_marks_ten_distinct_numeric_ok_for_binning(tmp_path):
     assert profile["recommended_bin_counts"] == [2, 5, 10]
 
 
+def test_profile_dataset_returns_numeric_feature_distribution(tmp_path):
+    csv_path = tmp_path / "numeric_distribution.csv"
+    pd.DataFrame(
+        {
+            "score": list(range(30)),
+            "target": [0, 1] * 15,
+        }
+    ).to_csv(csv_path, index=False)
+
+    result = dc.profile_dataset(str(csv_path))
+    score_distribution = result["feature_distributions"]["score"]
+
+    assert score_distribution["kind"] == "numeric"
+    assert score_distribution["missing_count"] == 0
+    assert score_distribution["numeric"]["min"] == 0
+    assert score_distribution["numeric"]["q1"] == 7.25
+    assert score_distribution["numeric"]["median"] == 14.5
+    assert score_distribution["numeric"]["q3"] == 21.75
+    assert score_distribution["numeric"]["max"] == 29
+    assert len(score_distribution["numeric"]["bins"]) == 10
+    assert score_distribution["numeric"]["bins"][0]["lower"] == 0
+    assert score_distribution["numeric"]["bins"][0]["upper"] == 2
+    assert score_distribution["numeric"]["bins"][-1]["lower"] == 27
+    assert score_distribution["numeric"]["bins"][-1]["upper"] == 29
+    assert sum(bin_["count"] for bin_ in score_distribution["numeric"]["bins"]) == 30
+
+
+def test_profile_dataset_returns_categorical_distribution_with_other_bucket(tmp_path):
+    csv_path = tmp_path / "categorical_distribution.csv"
+    pd.DataFrame(
+        {
+            "risk_group": [f"group_{i}" for i in range(13)],
+            "target": [0, 1] * 6 + [0],
+        }
+    ).to_csv(csv_path, index=False)
+
+    result = dc.profile_dataset(str(csv_path))
+    risk_distribution = result["feature_distributions"]["risk_group"]
+
+    assert risk_distribution["kind"] == "categorical"
+    assert len(risk_distribution["categorical"]["top_values"]) == 12
+    assert risk_distribution["categorical"]["other_count"] == 1
+    assert risk_distribution["categorical"]["other_pct"] == round(1 / 13 * 100, 2)
+
+
+def test_profile_dataset_marks_all_missing_and_text_as_other_distribution(tmp_path):
+    csv_path = tmp_path / "unsupported_distribution.csv"
+    pd.DataFrame(
+        {
+            "notes": [f"free text value {i}" for i in range(25)],
+            "empty_col": [None] * 25,
+            "target": [0, 1] * 12 + [0],
+        }
+    ).to_csv(csv_path, index=False)
+
+    result = dc.profile_dataset(str(csv_path))
+
+    assert result["feature_distributions"]["notes"]["kind"] == "other"
+    assert result["feature_distributions"]["empty_col"]["kind"] == "other"
+    assert result["feature_distributions"]["empty_col"]["missing_count"] == 25
+    assert result["feature_distributions"]["empty_col"]["missing_pct"] == 100
+
+
 def test_profile_cli_prints_flat_json(tmp_path, capsys):
     csv_path = _write_csv(tmp_path)
 
@@ -99,6 +162,7 @@ def test_profile_cli_prints_flat_json(tmp_path, capsys):
     assert result["columns"] == ["id", "age", "sex", "income"]
     assert result["target_guess"] == "income"
     assert result["row_count"] == 4
+    assert "feature_distributions" in result
 
 
 def test_characterize_dataset_adds_profile_fields_without_wrapping(tmp_path, monkeypatch):
@@ -121,3 +185,5 @@ def test_characterize_dataset_adds_profile_fields_without_wrapping(tmp_path, mon
     assert result["index_column"] == "id"
     assert result["row_count"] == 4
     assert any(profile["name"] == "income" for profile in result["column_profiles"])
+    assert "feature_distributions" in result
+    assert result["feature_distributions"]["age"]["kind"] == "categorical"
