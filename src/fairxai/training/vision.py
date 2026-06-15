@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,93 @@ def _require_torch():
             "for CUDA, ROCm, or CPU."
         ) from exc
     return torch, nn, Image, DataLoader, Dataset, models, transforms
+
+
+try:  # torch is optional at import time; only required when training actually runs.
+    from torch.utils.data import Dataset as _TorchDataset  # type: ignore
+except Exception:  # pragma: no cover - exercised only in torch-less environments
+    _TorchDataset = object  # type: ignore
+
+
+class _CsvImageDataset(_TorchDataset):
+    """CSV-backed image dataset.
+
+    Defined at module level (not as a closure) so DataLoader workers using the
+    ``forkserver``/``spawn`` start methods can pickle it. ``image_col`` and
+    ``target_col`` are passed in rather than captured from an enclosing scope.
+    """
+
+    def __init__(self, csv_path, transform, image_col: str, target_col: str):
+        self.df = pd.read_csv(csv_path)
+        self.transform = transform
+        self.image_col = image_col
+        self.target_col = target_col
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        import torch  # type: ignore
+        from PIL import Image  # type: ignore
+
+        row = self.df.iloc[idx]
+        image = Image.open(row[self.image_col]).convert("RGB")
+        label = torch.tensor(int(row[self.target_col]), dtype=torch.long)
+        return self.transform(image), label, idx
+
+
+# model_name -> (torchvision factory attr, weights enum attr, head replacement strategy).
+# Head strategies:
+#   "fc"              ResNet family, final layer is ``model.fc``.
+#   "classifier_last" MobileNetV3 / EfficientNet, head is the last Linear in a Sequential.
+#   "classifier"      DenseNet, head is a single Linear at ``model.classifier``.
+_MODEL_REGISTRY: dict[str, tuple[str, str, str]] = {
+    "resnet18": ("resnet18", "ResNet18_Weights", "fc"),
+    "mobilenet_v3_large": ("mobilenet_v3_large", "MobileNet_V3_Large_Weights", "classifier_last"),
+    "efficientnet_b0": ("efficientnet_b0", "EfficientNet_B0_Weights", "classifier_last"),
+    "densenet121": ("densenet121", "DenseNet121_Weights", "classifier"),
+}
+
+
+def _build_image_model(
+    models: Any,
+    nn: Any,
+    model_name: str,
+    *,
+    pretrained: bool,
+    freeze_backbone: bool,
+    num_classes: int = 2,
+) -> tuple[Any, str, str | None]:
+    """Build a torchvision model with a generic classifier head swap.
+
+    Returns ``(model, weights_enum_name, weights_name)`` where ``weights_name`` is
+    the resolved weights identifier (e.g. ``IMAGENET1K_V1``) or ``None`` when
+    ``pretrained`` is False. The backbone is frozen *before* the head is replaced
+    so the fresh head keeps ``requires_grad=True``.
+    """
+    if model_name not in _MODEL_REGISTRY:
+        supported = ", ".join(sorted(_MODEL_REGISTRY))
+        raise ValueError(f"Unsupported model_name={model_name!r}. Supported: {supported}.")
+
+    factory_attr, weights_enum_attr, head_strategy = _MODEL_REGISTRY[model_name]
+    weights = getattr(models, weights_enum_attr).DEFAULT if pretrained else None
+    model = getattr(models, factory_attr)(weights=weights)
+
+    if freeze_backbone:
+        for param in model.parameters():
+            param.requires_grad = False
+
+    if head_strategy == "fc":
+        model.fc = nn.Linear(model.fc.in_features, num_classes)
+    elif head_strategy == "classifier_last":
+        model.classifier[-1] = nn.Linear(model.classifier[-1].in_features, num_classes)
+    elif head_strategy == "classifier":
+        model.classifier = nn.Linear(model.classifier.in_features, num_classes)
+    else:  # pragma: no cover - registry is the single source of truth
+        raise ValueError(f"Unknown head strategy {head_strategy!r} for model {model_name!r}.")
+
+    weights_name = getattr(weights, "name", None)
+    return model, weights_enum_attr, weights_name
 
 
 def _metrics(y_true: list[int], y_prob: list[float], threshold: float = 0.5) -> dict[str, Any]:
@@ -74,52 +162,43 @@ def train_image_baseline(
     if torch_device_name == "cuda":
         torch.cuda.manual_seed_all(random_state)
 
-    class CsvImageDataset(Dataset):
-        def __init__(self, csv_path: Path, transform):
-            self.df = pd.read_csv(csv_path)
-            self.transform = transform
-
-        def __len__(self):
-            return len(self.df)
-
-        def __getitem__(self, idx):
-            row = self.df.iloc[idx]
-            image = Image.open(row[image_col]).convert("RGB")
-            return self.transform(image), torch.tensor(int(row[target_col]), dtype=torch.long), idx
-
+    normalize_mean = [0.485, 0.456, 0.406]
+    normalize_std = [0.229, 0.224, 0.225]
     transform = transforms.Compose(
         [
             transforms.Resize((image_size, image_size)),
             transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            transforms.Normalize(mean=normalize_mean, std=normalize_std),
         ]
     )
-    train_dataset = CsvImageDataset(train_csv, transform)
-    test_dataset = CsvImageDataset(test_csv, transform)
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        pin_memory=torch_device_name == "cuda",
-    )
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=torch_device_name == "cuda",
-    )
+    transform_meta = {
+        "resize": [image_size, image_size],
+        "normalize_mean": normalize_mean,
+        "normalize_std": normalize_std,
+    }
+    train_dataset = _CsvImageDataset(train_csv, transform, image_col, target_col)
+    test_dataset = _CsvImageDataset(test_csv, transform, image_col, target_col)
+    # forkserver avoids the Python 3.12 "fork() in a multi-threaded process" deadlock
+    # warning (torch spins up threads). persistent_workers keeps workers alive across
+    # epochs so they are spawned once per loader instead of re-spawned every epoch.
+    loader_kwargs: dict[str, Any] = {
+        "num_workers": num_workers,
+        "pin_memory": torch_device_name == "cuda",
+    }
+    if num_workers > 0:
+        loader_kwargs["persistent_workers"] = True
+        loader_kwargs["multiprocessing_context"] = "forkserver"
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, **loader_kwargs)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, **loader_kwargs)
 
-    if model_name != "resnet18":
-        raise ValueError("Only model_name='resnet18' is supported for dermatology v1.")
-
-    weights = models.ResNet18_Weights.DEFAULT if pretrained else None
-    model = models.resnet18(weights=weights)
-    if freeze_backbone:
-        for param in model.parameters():
-            param.requires_grad = False
-    model.fc = nn.Linear(model.fc.in_features, 2)
+    model, weights_enum, weights_name = _build_image_model(
+        models,
+        nn,
+        model_name,
+        pretrained=pretrained,
+        freeze_backbone=freeze_backbone,
+        num_classes=2,
+    )
     model = model.to(device)
 
     criterion = nn.CrossEntropyLoss()
@@ -129,7 +208,9 @@ def train_image_baseline(
     )
 
     history = []
+    train_start = time.perf_counter()
     for epoch in range(epochs):
+        epoch_start = time.perf_counter()
         model.train()
         total_loss = 0.0
         total_seen = 0
@@ -144,8 +225,18 @@ def train_image_baseline(
             total_loss += float(loss.item()) * int(labels.size(0))
             total_seen += int(labels.size(0))
         epoch_loss = total_loss / max(total_seen, 1)
-        history.append({"epoch": epoch + 1, "train_loss": epoch_loss})
-        logging.info("  epoch=%d/%d train_loss=%.4f", epoch + 1, epochs, epoch_loss)
+        epoch_time = time.perf_counter() - epoch_start
+        history.append(
+            {"epoch": epoch + 1, "train_loss": epoch_loss, "epoch_time_seconds": epoch_time}
+        )
+        logging.info(
+            "  epoch=%d/%d train_loss=%.4f epoch_time=%.2fs",
+            epoch + 1,
+            epochs,
+            epoch_loss,
+            epoch_time,
+        )
+    train_time_seconds = time.perf_counter() - train_start
 
     def predict(loader, csv_path: Path) -> tuple[pd.DataFrame, dict[str, Any]]:
         model.eval()
@@ -192,6 +283,10 @@ def train_image_baseline(
         {
             "model_state_dict": model.state_dict(),
             "model_name": model_name,
+            "architecture": model_name,
+            "weights_enum": weights_enum,
+            "weights_name": weights_name,
+            "transform": transform_meta,
             "target_col": target_col,
             "image_size": image_size,
             "pretrained": pretrained,
@@ -209,6 +304,11 @@ def train_image_baseline(
     result = {
         "status": "success",
         "model_type": model_name,
+        "architecture": model_name,
+        "weights_enum": weights_enum,
+        "weights_name": weights_name,
+        "transform": transform_meta,
+        "train_time_seconds": train_time_seconds,
         "model_file": str(model_path),
         "train_predictions": str(train_pred_path),
         "test_predictions": str(test_pred_path),
