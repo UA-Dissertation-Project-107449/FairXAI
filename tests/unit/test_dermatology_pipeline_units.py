@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from fairxai.data.loaders import DermatologyDataLoader
 from fairxai.data.preprocessors import DermatologyPreprocessor
@@ -116,3 +117,82 @@ def test_dermatology_raw_profile_allows_metadata_nans() -> None:
 
     assert profile["missing_value_analysis"]["total_missing"] > 0
     assert profile["complexity_metrics"]
+
+
+def _resolve_head_linear(model, model_name: str):
+    """Return the final classification Linear for a built image model."""
+    if model_name == "resnet18":
+        return model.fc
+    if model_name == "densenet121":
+        return model.classifier
+    # mobilenet_v3_large / efficientnet_b0 keep the head as the last Sequential entry.
+    return model.classifier[-1]
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    ["resnet18", "mobilenet_v3_large", "efficientnet_b0", "densenet121"],
+)
+def test_image_model_registry_builds_and_swaps_head(model_name: str) -> None:
+    pytest.importorskip("torch")
+    pytest.importorskip("torchvision")
+    import torch.nn as nn
+    from torchvision import models as tv_models
+
+    from fairxai.training.vision import _build_image_model
+
+    # pretrained=False: no weight download, no forward pass, CPU-only architecture build.
+    model, weights_enum, weights_name = _build_image_model(
+        tv_models,
+        nn,
+        model_name,
+        pretrained=False,
+        freeze_backbone=True,
+        num_classes=2,
+    )
+
+    head = _resolve_head_linear(model, model_name)
+    assert isinstance(head, nn.Linear)
+    assert head.out_features == 2
+    assert weights_name is None  # not pretrained
+    assert weights_enum.endswith("_Weights")
+
+    # Frozen backbone, trainable head.
+    head_param_ids = {id(p) for p in head.parameters()}
+    assert all(p.requires_grad for p in head.parameters())
+    assert all(not p.requires_grad for p in model.parameters() if id(p) not in head_param_ids)
+
+
+def test_image_model_registry_rejects_unknown_model() -> None:
+    pytest.importorskip("torch")
+    pytest.importorskip("torchvision")
+    import torch.nn as nn
+    from torchvision import models as tv_models
+
+    from fairxai.training.vision import _build_image_model
+
+    with pytest.raises(ValueError, match="Unsupported model_name"):
+        _build_image_model(tv_models, nn, "not_a_model", pretrained=False, freeze_backbone=True)
+
+
+def test_csv_image_dataset_is_picklable(tmp_path: Path) -> None:
+    # forkserver/spawn DataLoader workers pickle the dataset; a local class would
+    # break, so the dataset must stay importable and picklable at module level.
+    pytest.importorskip("torch")
+    pytest.importorskip("torchvision")
+    import pickle
+
+    from torchvision import transforms
+
+    from fairxai.training.vision import _CsvImageDataset
+
+    csv_path = tmp_path / "tiny.csv"
+    pd.DataFrame({"image_path": ["/tmp/x.png"], "skin_cancer": [1]}).to_csv(csv_path, index=False)
+    transform = transforms.Compose([transforms.Resize((8, 8)), transforms.ToTensor()])
+
+    dataset = _CsvImageDataset(csv_path, transform, "image_path", "skin_cancer")
+    restored = pickle.loads(pickle.dumps(dataset))
+
+    assert len(restored) == 1
+    assert restored.image_col == "image_path"
+    assert restored.target_col == "skin_cancer"
