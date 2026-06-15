@@ -80,6 +80,8 @@ _INDEX_COLUMN_HINTS = [
 ]
 
 _PREFERRED_BIN_COUNTS = [2, 5, 10]
+_DEFAULT_HISTOGRAM_BINS = 10
+_CATEGORICAL_TOP_VALUES = 12
 _SENSITIVE_NAME_HINTS = (
     "age",
     "sex",
@@ -290,6 +292,155 @@ def _build_column_profiles(df: pd.DataFrame) -> list[dict[str, Any]]:
     return profiles
 
 
+def _to_json_float(value: Any) -> float | None:
+    numeric_value = float(value)
+    if not np.isfinite(numeric_value):
+        return None
+    return round(numeric_value, 6)
+
+
+def _is_integer_values(values: np.ndarray) -> bool:
+    return bool(np.all(np.isclose(values, np.round(values), rtol=0, atol=1e-9)))
+
+
+def _build_integer_histogram_bins(
+    values: np.ndarray,
+    row_count: int,
+    n_bins: int,
+) -> list[dict[str, Any]]:
+    min_int = int(np.min(values))
+    max_int = int(np.max(values))
+    span = max_int - min_int + 1
+    bucket_count = max(1, min(n_bins, span))
+
+    bins: list[dict[str, Any]] = []
+    for i in range(bucket_count):
+        lower = min_int + int(np.floor(i * span / bucket_count))
+        upper = min_int + int(np.floor((i + 1) * span / bucket_count)) - 1
+        if i == bucket_count - 1:
+            upper = max_int
+        count = int(np.count_nonzero((values >= lower) & (values <= upper)))
+        bins.append(
+            {
+                "lower": lower,
+                "upper": upper,
+                "count": count,
+                "pct": round(float(count / row_count * 100), 2) if row_count else 0.0,
+            }
+        )
+    return bins
+
+
+def _build_numeric_distribution(
+    series: pd.Series,
+    row_count: int,
+    n_bins: int = _DEFAULT_HISTOGRAM_BINS,
+) -> dict[str, Any] | None:
+    numeric = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    if numeric.empty:
+        return None
+
+    values = numeric.to_numpy(dtype=float)
+    min_value = _to_json_float(np.min(values))
+    max_value = _to_json_float(np.max(values))
+    if min_value is None or max_value is None:
+        return None
+
+    if min_value == max_value:
+        bins = [
+            {
+                "lower": min_value,
+                "upper": max_value,
+                "count": int(len(values)),
+                "pct": round(float(len(values) / row_count * 100), 2) if row_count else 0.0,
+            }
+        ]
+    elif _is_integer_values(values):
+        bins = _build_integer_histogram_bins(values, row_count, n_bins)
+    else:
+        counts, edges = np.histogram(values, bins=n_bins)
+        bins = []
+        for i, count in enumerate(counts):
+            bins.append(
+                {
+                    "lower": _to_json_float(edges[i]),
+                    "upper": _to_json_float(edges[i + 1]),
+                    "count": int(count),
+                    "pct": round(float(count / row_count * 100), 2) if row_count else 0.0,
+                }
+            )
+
+    q1, median, q3 = np.percentile(values, [25, 50, 75])
+    return {
+        "min": min_value,
+        "q1": _to_json_float(q1),
+        "median": _to_json_float(median),
+        "q3": _to_json_float(q3),
+        "max": max_value,
+        "mean": _to_json_float(np.mean(values)),
+        "std": _to_json_float(np.std(values, ddof=0)),
+        "bins": bins,
+    }
+
+
+def _build_categorical_distribution(
+    series: pd.Series,
+    row_count: int,
+    top_n: int = _CATEGORICAL_TOP_VALUES,
+) -> dict[str, Any] | None:
+    counts = series.dropna().value_counts()
+    if counts.empty:
+        return None
+
+    top_counts = counts.head(top_n)
+    top_total = int(top_counts.sum())
+    non_missing_total = int(counts.sum())
+    other_count = max(0, non_missing_total - top_total)
+    return {
+        "top_values": [
+            {
+                "value": str(value),
+                "count": int(count),
+                "pct": round(float(count / row_count * 100), 2) if row_count else 0.0,
+            }
+            for value, count in top_counts.items()
+        ],
+        "other_count": other_count,
+        "other_pct": round(float(other_count / row_count * 100), 2) if row_count else 0.0,
+    }
+
+
+def _build_feature_distributions(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
+    row_count = int(df.shape[0])
+    distributions: dict[str, dict[str, Any]] = {}
+    for column_name in df.columns:
+        series = df[column_name]
+        n_unique = int(series.nunique(dropna=True))
+        missing_count = int(series.isna().sum())
+        missing_pct = round(float(missing_count / row_count * 100), 2) if row_count else 0.0
+        semantic_type = _semantic_type(str(column_name), series, row_count, n_unique)
+        base: dict[str, Any] = {
+            "kind": "other",
+            "missing_count": missing_count,
+            "missing_pct": missing_pct,
+        }
+
+        if semantic_type == "continuous" and pd.api.types.is_numeric_dtype(series):
+            numeric_distribution = _build_numeric_distribution(series, row_count)
+            if numeric_distribution:
+                base["kind"] = "numeric"
+                base["numeric"] = numeric_distribution
+        elif semantic_type in {"binary", "categorical"}:
+            categorical_distribution = _build_categorical_distribution(series, row_count)
+            if categorical_distribution:
+                base["kind"] = "categorical"
+                base["categorical"] = categorical_distribution
+
+        distributions[str(column_name)] = base
+
+    return distributions
+
+
 def profile_dataset(
     filename: str,
     datasets_dir: str | Path | None = None,
@@ -314,6 +465,7 @@ def profile_dataset(
         "row_count": int(df.shape[0]),
         "dataset_size_bytes": int(csv_path.stat().st_size),
         "column_profiles": _build_column_profiles(df),
+        "feature_distributions": _build_feature_distributions(df),
     }
 
 
@@ -605,7 +757,7 @@ def characterize_dataset(
     feature_columns = [str(col) for col in X.columns]
 
     result: dict[str, Any] = {
-        "schema_version": "1.1",
+        "schema_version": "1.2",
         "jobId": file_id,
         "columns": columns,
         "feature_columns": feature_columns,
@@ -613,6 +765,7 @@ def characterize_dataset(
         "index_column": index_column,
         "row_count": int(df.shape[0]),
         "column_profiles": _build_column_profiles(df),
+        "feature_distributions": _build_feature_distributions(df),
         "metrics": metrics,
         "pca2d": pca2d,
         "missing_percentages": missing_percentages,
