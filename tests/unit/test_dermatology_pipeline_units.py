@@ -196,3 +196,133 @@ def test_csv_image_dataset_is_picklable(tmp_path: Path) -> None:
     assert len(restored) == 1
     assert restored.image_col == "image_path"
     assert restored.target_col == "skin_cancer"
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    ["resnet18", "mobilenet_v3_large", "efficientnet_b0", "densenet121"],
+)
+def test_detach_reattach_head_round_trip(model_name: str) -> None:
+    pytest.importorskip("torch")
+    pytest.importorskip("torchvision")
+    import torch.nn as nn
+    from torchvision import models as tv_models
+
+    from fairxai.training.vision import (
+        _MODEL_REGISTRY,
+        _build_image_model,
+        _detach_head,
+        _reattach_head,
+    )
+
+    model, _, _ = _build_image_model(
+        tv_models, nn, model_name, pretrained=False, freeze_backbone=True
+    )
+    strategy = _MODEL_REGISTRY[model_name][2]
+
+    head = _detach_head(model, strategy, nn)
+    assert isinstance(head, nn.Linear)
+    assert head.out_features == 2
+    # After detaching, the head slot is an Identity so the model yields raw features.
+    slot = model.fc if strategy == "fc" else model.classifier
+    if strategy == "classifier_last":
+        slot = slot[-1]
+    assert isinstance(slot, nn.Identity)
+
+    _reattach_head(model, strategy, head)
+    restored = model.fc if strategy == "fc" else model.classifier
+    if strategy == "classifier_last":
+        restored = restored[-1]
+    assert restored is head
+
+
+def test_build_predictions_df_shapes_and_metrics(tmp_path: Path) -> None:
+    from fairxai.training.vision import _build_predictions_df
+
+    csv_path = tmp_path / "src.csv"
+    pd.DataFrame(
+        {
+            "image_path": [f"/tmp/{i}.png" for i in range(4)],
+            "patient_id": ["p0", "p1", "p2", "p3"],
+            "sex": [0, 1, 0, 1],
+        }
+    ).to_csv(csv_path, index=False)
+
+    # Pass rows out of order to confirm row_indices drive the metadata join.
+    preds, metrics = _build_predictions_df(
+        y_true=[1, 0, 1],
+        y_prob=[0.9, 0.2, 0.4],
+        row_indices=[2, 0, 3],
+        csv_path=csv_path,
+        image_col="image_path",
+        sensitive_cols=["sex"],
+    )
+
+    assert list(preds["y_pred"]) == [1, 0, 0]
+    assert list(preds["patient_id"]) == ["p2", "p0", "p3"]
+    assert {"y_true", "y_proba", "near_threshold", "image_path", "sex"} <= set(preds.columns)
+    assert 0.0 <= metrics["accuracy"] <= 1.0
+
+
+def test_extract_features_collects_in_loader_order() -> None:
+    pytest.importorskip("torch")
+    import torch
+    import torch.nn as nn
+    from torch.utils.data import DataLoader
+
+    from fairxai.training.vision import _extract_features
+
+    # Stub "backbone" = flatten; stub dataset yields (image, label, row_index).
+    images = torch.arange(6 * 4, dtype=torch.float32).reshape(6, 1, 2, 2)
+    samples = [(images[i], i % 2, i) for i in range(6)]
+    loader = DataLoader(samples, batch_size=2, shuffle=False)
+
+    feats, labels, idx = _extract_features(nn.Flatten(), loader, torch.device("cpu"), torch)
+
+    assert feats.shape == (6, 4)
+    assert labels == [0, 1, 0, 1, 0, 1]
+    assert idx == [0, 1, 2, 3, 4, 5]
+
+
+def test_train_head_reduces_loss_on_separable_features() -> None:
+    pytest.importorskip("torch")
+    import torch
+    import torch.nn as nn
+
+    from fairxai.training.vision import _head_scores, _train_head
+
+    torch.manual_seed(0)
+    n, dim = 64, 8
+    features = torch.randn(n, dim)
+    # Linearly separable target from the first feature dimension.
+    labels = (features[:, 0] > 0).long()
+
+    head = nn.Linear(dim, 2)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.AdamW(head.parameters(), lr=0.05)
+    device = torch.device("cpu")
+
+    history, total_time = _train_head(
+        head,
+        features,
+        labels,
+        criterion,
+        optimizer,
+        epochs=30,
+        batch_size=16,
+        device=device,
+        torch=torch,
+        random_state=0,
+    )
+
+    assert len(history) == 30
+    assert history[-1]["train_loss"] < history[0]["train_loss"]
+    assert total_time >= 0.0
+
+    scores = _head_scores(head, features, device, torch)
+    assert len(scores) == n
+    assert all(0.0 <= s <= 1.0 for s in scores)
+
+    # Batched scoring must equal one-shot scoring (no device-wide tensor move).
+    batched = _head_scores(head, features, device, torch, batch_size=7)
+    assert batched == pytest.approx(scores, rel=1e-4, abs=1e-6)
