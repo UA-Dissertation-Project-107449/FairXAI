@@ -18,6 +18,7 @@ DEVICE=""
 EPOCHS=""
 BATCH_SIZE=""
 PRETRAINED_ARGS=()
+FIGURE_ARGS=()
 
 declare -A STAGE_NUM=(
     [load]=1 [profile]=2 [profiling]=2 [recommend]=3 [recommendations]=3
@@ -86,6 +87,12 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-pretrained)
             PRETRAINED_ARGS=(--no-pretrained)
+            ;;
+        --figures)
+            FIGURE_ARGS=(--figures)
+            ;;
+        --no-figures)
+            FIGURE_ARGS=(--no-figures)
             ;;
         --no-recommendations)
             RUN_RECOMMENDATIONS=false
@@ -241,7 +248,7 @@ fi
 
 if should_run 9; then
     echo "[PHASE 9] Comparing baseline models"
-    "$PYTHON" "$ROOT_DIR/scripts/dermatology/compare.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $VERBOSE_FLAG
+    "$PYTHON" "$ROOT_DIR/scripts/dermatology/compare.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" "${FIGURE_ARGS[@]}" $VERBOSE_FLAG
     mark_done 9 compare
 else
     echo "[9] compare - SKIPPED"

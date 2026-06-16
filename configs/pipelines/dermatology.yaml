@@ -43,6 +43,11 @@ fairness:
   # tiny cells, e.g. PAD Fitzpatrick V-VI). Override per run with --min-group-samples.
   min_group_samples: 50
 
+comparison:
+  # Stage 9 (compare): render dissertation-ready PNGs from existing baseline
+  # metrics/fairness outputs. Override per run with --figures / --no-figures.
+  figures: true
+
 xai:
   # Stage 10 (explain): post-hoc saliency for trained CNNs. Reloads each model
   # checkpoint and writes SHAP / LIME / Grad-CAM overlays for a small set of test
