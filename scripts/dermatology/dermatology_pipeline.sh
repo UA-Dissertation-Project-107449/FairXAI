@@ -2,6 +2,8 @@
 set -euo pipefail
 
 # Dermatology baseline pipeline: load -> profile -> recommend -> preprocess -> train.
+# Optional stage 8 (assess) runs post-prediction fairness; reach it with
+# --go-until assess (or RESUME_FROM=assess to assess an existing run).
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
 PYTHON=${PYTHON:-python3}
 RUN_RECOMMENDATIONS=${RUN_RECOMMENDATIONS:-true}
@@ -18,8 +20,9 @@ PRETRAINED_ARGS=()
 declare -A STAGE_NUM=(
     [load]=1 [profile]=2 [profiling]=2 [recommend]=3 [recommendations]=3
     [triage]=3 [preprocess]=4 [preprocessing]=4 [train]=7 [baseline]=7 [training]=7
+    [assess]=8 [assessment]=8 [fairness]=8
 )
-declare -A STAGE_NAME=([1]=load [2]=profile [3]=recommend [4]=preprocess [7]=train)
+declare -A STAGE_NAME=([1]=load [2]=profile [3]=recommend [4]=preprocess [7]=train [8]=assess)
 
 resolve_stage() {
     local input="${1,,}"
@@ -35,7 +38,7 @@ resolve_stage() {
     if [[ -n "${STAGE_NUM[$input]+x}" ]]; then
         echo "${STAGE_NUM[$input]}"; return
     fi
-    echo "ERROR: Unknown stage '$1'. Valid: load(1) profile(2) recommend(3) preprocess(4) train(7)" >&2
+    echo "ERROR: Unknown stage '$1'. Valid: load(1) profile(2) recommend(3) preprocess(4) train(7) assess(8)" >&2
     exit 1
 }
 
@@ -218,11 +221,19 @@ else
 fi
 
 if should_run 7; then
-    echo "[PHASE 7/7] Training image baseline"
+    echo "[PHASE 7] Training image baseline"
     "$PYTHON" "$ROOT_DIR/scripts/dermatology/train_baseline.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" "${DEVICE_ARGS[@]}" "${EPOCH_ARGS[@]}" "${BATCH_ARGS[@]}" "${PRETRAINED_ARGS[@]}" $VERBOSE_FLAG
     mark_done 7 train
 else
-    echo "[7/7] train - SKIPPED"
+    echo "[7] train - SKIPPED"
+fi
+
+if should_run 8; then
+    echo "[PHASE 8] Assessing post-prediction fairness"
+    "$PYTHON" "$ROOT_DIR/scripts/dermatology/assess_predictions.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $VERBOSE_FLAG
+    mark_done 8 assess
+else
+    echo "[8] assess - SKIPPED"
 fi
 
 echo "Dermatology baseline complete: $RUN_ROOT"
