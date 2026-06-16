@@ -2,8 +2,10 @@
 set -euo pipefail
 
 # Dermatology baseline pipeline: load -> profile -> recommend -> preprocess -> train.
-# Optional stage 8 (assess) runs post-prediction fairness; reach it with
-# --go-until assess (or RESUME_FROM=assess to assess an existing run).
+# Optional stages 8 (assess), 9 (compare) and 10 (explain) run post-prediction
+# fairness, the cross-model comparison table, and post-hoc XAI overlays; reach
+# them with --go-until assess|compare|explain (or RESUME_FROM=... over an
+# existing run).
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
 PYTHON=${PYTHON:-python3}
 RUN_RECOMMENDATIONS=${RUN_RECOMMENDATIONS:-true}
@@ -20,9 +22,10 @@ PRETRAINED_ARGS=()
 declare -A STAGE_NUM=(
     [load]=1 [profile]=2 [profiling]=2 [recommend]=3 [recommendations]=3
     [triage]=3 [preprocess]=4 [preprocessing]=4 [train]=7 [baseline]=7 [training]=7
-    [assess]=8 [assessment]=8 [fairness]=8
+    [assess]=8 [assessment]=8 [fairness]=8 [compare]=9 [comparison]=9
+    [explain]=10 [explainability]=10 [xai]=10
 )
-declare -A STAGE_NAME=([1]=load [2]=profile [3]=recommend [4]=preprocess [7]=train [8]=assess)
+declare -A STAGE_NAME=([1]=load [2]=profile [3]=recommend [4]=preprocess [7]=train [8]=assess [9]=compare [10]=explain)
 
 resolve_stage() {
     local input="${1,,}"
@@ -38,7 +41,7 @@ resolve_stage() {
     if [[ -n "${STAGE_NUM[$input]+x}" ]]; then
         echo "${STAGE_NUM[$input]}"; return
     fi
-    echo "ERROR: Unknown stage '$1'. Valid: load(1) profile(2) recommend(3) preprocess(4) train(7) assess(8)" >&2
+    echo "ERROR: Unknown stage '$1'. Valid: load(1) profile(2) recommend(3) preprocess(4) train(7) assess(8) compare(9) explain(10)" >&2
     exit 1
 }
 
@@ -234,6 +237,22 @@ if should_run 8; then
     mark_done 8 assess
 else
     echo "[8] assess - SKIPPED"
+fi
+
+if should_run 9; then
+    echo "[PHASE 9] Comparing baseline models"
+    "$PYTHON" "$ROOT_DIR/scripts/dermatology/compare.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $VERBOSE_FLAG
+    mark_done 9 compare
+else
+    echo "[9] compare - SKIPPED"
+fi
+
+if should_run 10; then
+    echo "[PHASE 10] Explaining baseline models (XAI)"
+    "$PYTHON" "$ROOT_DIR/scripts/dermatology/explain.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $VERBOSE_FLAG
+    mark_done 10 explain
+else
+    echo "[10] explain - SKIPPED"
 fi
 
 echo "Dermatology baseline complete: $RUN_ROOT"

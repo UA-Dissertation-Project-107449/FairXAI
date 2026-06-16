@@ -44,8 +44,18 @@ fairness:
   min_group_samples: 50
 
 xai:
-  enabled: false
+  # Stage 10 (explain): post-hoc saliency for trained CNNs. Reloads each model
+  # checkpoint and writes SHAP / LIME / Grad-CAM overlays for a small set of test
+  # images stratified by sensitive group x outcome (TP/FP/TN/FN). No retraining.
+  enabled: true
   cv_enabled: false
+  # Per-method toggles (all on to start; flip individually if LIME/SHAP are slow).
+  shap: true
+  lime: true
+  gradcam: true
+  n_samples: 12          # images explained per model
+  per_cell: 1            # images per (sensitive group, outcome) stratum before budget
+  lime_num_samples: 1000 # LIME perturbations per image (lower = faster, noisier)
 
 studies:
   skip: true
