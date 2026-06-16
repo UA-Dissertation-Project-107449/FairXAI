@@ -87,6 +87,40 @@ def test_compare_run_writes_outputs(tmp_path: Path) -> None:
     assert {r["model"] for r in rows} == {"resnet18", "efficientnet_b0"}
 
 
+def test_compare_run_skips_figures_by_default(tmp_path: Path) -> None:
+    run_root = _make_run(tmp_path)
+    compare_run(run_root)
+
+    out = run_root / "baseline" / "comparison"
+    assert not (out / "figures" / "figures_manifest.json").exists()
+
+
+def test_compare_run_writes_figures_when_enabled(tmp_path: Path) -> None:
+    run_root = _make_run(tmp_path)
+    compare_run(run_root, write_figures=True)
+
+    figures = run_root / "baseline" / "comparison" / "figures"
+    assert (figures / "performance_metrics.png").exists()
+    assert (figures / "runtime_vs_auc.png").exists()
+    assert (figures / "fairness_deltas_sex.png").exists()
+    manifest = json.loads((figures / "figures_manifest.json").read_text())
+    assert {row["kind"] for row in manifest} == {
+        "performance",
+        "runtime_vs_auc",
+        "fairness_deltas",
+    }
+
+
+def test_compare_run_performance_figures_do_not_require_fairness(tmp_path: Path) -> None:
+    run_root = _make_run(tmp_path, with_fairness=False)
+    compare_run(run_root, write_figures=True)
+
+    figures = run_root / "baseline" / "comparison" / "figures"
+    assert (figures / "performance_metrics.png").exists()
+    assert (figures / "runtime_vs_auc.png").exists()
+    assert not (figures / "fairness_deltas_sex.png").exists()
+
+
 def test_rows_carry_performance_and_identity(tmp_path: Path) -> None:
     run_root = _make_run(tmp_path)
     rows = compare_run(run_root)
