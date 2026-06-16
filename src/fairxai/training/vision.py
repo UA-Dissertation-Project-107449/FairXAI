@@ -298,7 +298,7 @@ def train_image_baseline(
     freeze_backbone: bool = True,
     num_workers: int = 0,
     random_state: int = 42,
-    cache_frozen_features: bool = False,
+    cache_frozen_features: bool = True,
 ) -> dict[str, Any]:
     """Train one image baseline and persist model, predictions, metrics.
 
