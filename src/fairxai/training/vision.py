@@ -13,6 +13,8 @@ from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_sc
 
 from fairxai.utils.gpu import detect_accelerator
 
+logger = logging.getLogger(__name__)
+
 
 def _require_torch():
     try:
@@ -130,6 +132,10 @@ def _metrics(y_true: list[int], y_prob: list[float], threshold: float = 0.5) -> 
     except ValueError:
         metrics["auc_roc"] = None
     return metrics
+
+
+def _fmt_metric(value: Any) -> str:
+    return "n/a" if value is None else f"{float(value):.3f}"
 
 
 def _build_predictions_df(
@@ -348,6 +354,36 @@ def train_image_baseline(
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, **loader_kwargs)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, **loader_kwargs)
 
+    if cache_frozen_features and not freeze_backbone:
+        logger.warning(
+            "cache_frozen_features=True ignored: feature caching requires a frozen backbone "
+            "(freeze_backbone=False). Falling back to the standard per-epoch training path."
+        )
+    feature_cache = bool(cache_frozen_features and freeze_backbone)
+    logger.info(
+        "[PHASE] Image model start dataset=%s model=%s device_requested=%s "
+        "device_resolved=%s torch_device=%s pretrained=%s freeze_backbone=%s "
+        "feature_cache=%s epochs=%s batch_size=%s image_size=%s",
+        dataset_name,
+        model_name,
+        device_request,
+        resolved,
+        torch_device_name,
+        pretrained,
+        freeze_backbone,
+        feature_cache,
+        epochs,
+        batch_size,
+        image_size,
+    )
+    logger.info(
+        "[PHASE] Image data rows dataset=%s model=%s train=%d test=%d",
+        dataset_name,
+        model_name,
+        len(train_dataset),
+        len(test_dataset),
+    )
+
     model, weights_enum, weights_name = _build_image_model(
         models,
         nn,
@@ -357,14 +393,11 @@ def train_image_baseline(
         num_classes=2,
     )
     model = model.to(device)
+    logger.info(
+        "  weights_enum=%s weights_name=%s num_workers=%s", weights_enum, weights_name, num_workers
+    )
 
     criterion = nn.CrossEntropyLoss()
-    if cache_frozen_features and not freeze_backbone:
-        logging.warning(
-            "cache_frozen_features=True ignored: feature caching requires a frozen backbone "
-            "(freeze_backbone=False). Falling back to the standard per-epoch training path."
-        )
-    feature_cache = bool(cache_frozen_features and freeze_backbone)
 
     if feature_cache:
         # Frozen backbone -> features are identical every epoch, so compute them once
@@ -372,7 +405,7 @@ def train_image_baseline(
         head_strategy = _MODEL_REGISTRY[model_name][2]
         head = _detach_head(model, head_strategy, nn)
         model.eval()
-        logging.info("  feature-cache: extracting frozen-backbone features once")
+        logger.info("  feature-cache: extracting frozen-backbone features once")
         extract_start = time.perf_counter()
         train_features, train_labels, train_row_idx = _extract_features(
             model, train_loader, device, torch
@@ -399,7 +432,7 @@ def train_image_baseline(
         # speedup numbers do not under-report the real cost.
         train_time_seconds = feature_extraction_time_seconds + head_train_time_seconds
         for entry in history:
-            logging.info(
+            logger.info(
                 "  epoch=%d/%d train_loss=%.4f epoch_time=%.2fs",
                 entry["epoch"],
                 epochs,
@@ -452,7 +485,7 @@ def train_image_baseline(
             history.append(
                 {"epoch": epoch + 1, "train_loss": epoch_loss, "epoch_time_seconds": epoch_time}
             )
-            logging.info(
+            logger.info(
                 "  epoch=%d/%d train_loss=%.4f epoch_time=%.2fs",
                 epoch + 1,
                 epochs,
@@ -551,4 +584,23 @@ def train_image_baseline(
     with open(metrics_path, "w") as f:
         json.dump(result, f, indent=2, default=str)
     result["metrics_file"] = str(metrics_path)
+    logger.info(
+        "[SUCCESS] Image model complete dataset=%s model=%s accuracy=%s f1=%s auc=%s train_s=%.2f",
+        dataset_name,
+        model_name,
+        _fmt_metric(test_metrics.get("accuracy")),
+        _fmt_metric(test_metrics.get("f1_score")),
+        _fmt_metric(test_metrics.get("auc_roc")),
+        train_time_seconds,
+    )
+    logger.info(
+        "[SUCCESS] Image model artifacts dataset=%s model=%s checkpoint=%s metrics=%s "
+        "train_predictions=%s test_predictions=%s",
+        dataset_name,
+        model_name,
+        model_path,
+        metrics_path,
+        train_pred_path,
+        test_pred_path,
+    )
     return result
