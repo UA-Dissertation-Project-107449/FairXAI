@@ -32,6 +32,11 @@ training:
     pretrained: true
     freeze_backbone: true
     num_workers: 4
+    # Frozen-backbone speedup: extract features once, train only the head over them.
+    # Cost becomes ~independent of epoch count. OFF by default because it uses an
+    # eval-mode backbone (frozen ImageNet BatchNorm, dropout off) and therefore yields
+    # different numbers than the default train-mode path. Flip to true deliberately.
+    cache_frozen_features: false
 
 fairness:
   sensitive_attributes: [age_group, sex, fitzpatrick_group]
