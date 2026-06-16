@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from fairxai.data.loaders import DermatologyDataLoader
 from fairxai.data.preprocessors import DermatologyPreprocessor
@@ -116,3 +117,212 @@ def test_dermatology_raw_profile_allows_metadata_nans() -> None:
 
     assert profile["missing_value_analysis"]["total_missing"] > 0
     assert profile["complexity_metrics"]
+
+
+def _resolve_head_linear(model, model_name: str):
+    """Return the final classification Linear for a built image model."""
+    if model_name == "resnet18":
+        return model.fc
+    if model_name == "densenet121":
+        return model.classifier
+    # mobilenet_v3_large / efficientnet_b0 keep the head as the last Sequential entry.
+    return model.classifier[-1]
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    ["resnet18", "mobilenet_v3_large", "efficientnet_b0", "densenet121"],
+)
+def test_image_model_registry_builds_and_swaps_head(model_name: str) -> None:
+    pytest.importorskip("torch")
+    pytest.importorskip("torchvision")
+    import torch.nn as nn
+    from torchvision import models as tv_models
+
+    from fairxai.training.vision import _build_image_model
+
+    # pretrained=False: no weight download, no forward pass, CPU-only architecture build.
+    model, weights_enum, weights_name = _build_image_model(
+        tv_models,
+        nn,
+        model_name,
+        pretrained=False,
+        freeze_backbone=True,
+        num_classes=2,
+    )
+
+    head = _resolve_head_linear(model, model_name)
+    assert isinstance(head, nn.Linear)
+    assert head.out_features == 2
+    assert weights_name is None  # not pretrained
+    assert weights_enum.endswith("_Weights")
+
+    # Frozen backbone, trainable head.
+    head_param_ids = {id(p) for p in head.parameters()}
+    assert all(p.requires_grad for p in head.parameters())
+    assert all(not p.requires_grad for p in model.parameters() if id(p) not in head_param_ids)
+
+
+def test_image_model_registry_rejects_unknown_model() -> None:
+    pytest.importorskip("torch")
+    pytest.importorskip("torchvision")
+    import torch.nn as nn
+    from torchvision import models as tv_models
+
+    from fairxai.training.vision import _build_image_model
+
+    with pytest.raises(ValueError, match="Unsupported model_name"):
+        _build_image_model(tv_models, nn, "not_a_model", pretrained=False, freeze_backbone=True)
+
+
+def test_csv_image_dataset_is_picklable(tmp_path: Path) -> None:
+    # forkserver/spawn DataLoader workers pickle the dataset; a local class would
+    # break, so the dataset must stay importable and picklable at module level.
+    pytest.importorskip("torch")
+    pytest.importorskip("torchvision")
+    import pickle
+
+    from torchvision import transforms
+
+    from fairxai.training.vision import _CsvImageDataset
+
+    csv_path = tmp_path / "tiny.csv"
+    pd.DataFrame({"image_path": ["/tmp/x.png"], "skin_cancer": [1]}).to_csv(csv_path, index=False)
+    transform = transforms.Compose([transforms.Resize((8, 8)), transforms.ToTensor()])
+
+    dataset = _CsvImageDataset(csv_path, transform, "image_path", "skin_cancer")
+    restored = pickle.loads(pickle.dumps(dataset))
+
+    assert len(restored) == 1
+    assert restored.image_col == "image_path"
+    assert restored.target_col == "skin_cancer"
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    ["resnet18", "mobilenet_v3_large", "efficientnet_b0", "densenet121"],
+)
+def test_detach_reattach_head_round_trip(model_name: str) -> None:
+    pytest.importorskip("torch")
+    pytest.importorskip("torchvision")
+    import torch.nn as nn
+    from torchvision import models as tv_models
+
+    from fairxai.training.vision import (
+        _MODEL_REGISTRY,
+        _build_image_model,
+        _detach_head,
+        _reattach_head,
+    )
+
+    model, _, _ = _build_image_model(
+        tv_models, nn, model_name, pretrained=False, freeze_backbone=True
+    )
+    strategy = _MODEL_REGISTRY[model_name][2]
+
+    head = _detach_head(model, strategy, nn)
+    assert isinstance(head, nn.Linear)
+    assert head.out_features == 2
+    # After detaching, the head slot is an Identity so the model yields raw features.
+    slot = model.fc if strategy == "fc" else model.classifier
+    if strategy == "classifier_last":
+        slot = slot[-1]
+    assert isinstance(slot, nn.Identity)
+
+    _reattach_head(model, strategy, head)
+    restored = model.fc if strategy == "fc" else model.classifier
+    if strategy == "classifier_last":
+        restored = restored[-1]
+    assert restored is head
+
+
+def test_build_predictions_df_shapes_and_metrics(tmp_path: Path) -> None:
+    from fairxai.training.vision import _build_predictions_df
+
+    csv_path = tmp_path / "src.csv"
+    pd.DataFrame(
+        {
+            "image_path": [f"/tmp/{i}.png" for i in range(4)],
+            "patient_id": ["p0", "p1", "p2", "p3"],
+            "sex": [0, 1, 0, 1],
+        }
+    ).to_csv(csv_path, index=False)
+
+    # Pass rows out of order to confirm row_indices drive the metadata join.
+    preds, metrics = _build_predictions_df(
+        y_true=[1, 0, 1],
+        y_prob=[0.9, 0.2, 0.4],
+        row_indices=[2, 0, 3],
+        csv_path=csv_path,
+        image_col="image_path",
+        sensitive_cols=["sex"],
+    )
+
+    assert list(preds["y_pred"]) == [1, 0, 0]
+    assert list(preds["patient_id"]) == ["p2", "p0", "p3"]
+    assert {"y_true", "y_proba", "near_threshold", "image_path", "sex"} <= set(preds.columns)
+    assert 0.0 <= metrics["accuracy"] <= 1.0
+
+
+def test_extract_features_collects_in_loader_order() -> None:
+    pytest.importorskip("torch")
+    import torch
+    import torch.nn as nn
+    from torch.utils.data import DataLoader
+
+    from fairxai.training.vision import _extract_features
+
+    # Stub "backbone" = flatten; stub dataset yields (image, label, row_index).
+    images = torch.arange(6 * 4, dtype=torch.float32).reshape(6, 1, 2, 2)
+    samples = [(images[i], i % 2, i) for i in range(6)]
+    loader = DataLoader(samples, batch_size=2, shuffle=False)
+
+    feats, labels, idx = _extract_features(nn.Flatten(), loader, torch.device("cpu"), torch)
+
+    assert feats.shape == (6, 4)
+    assert labels == [0, 1, 0, 1, 0, 1]
+    assert idx == [0, 1, 2, 3, 4, 5]
+
+
+def test_train_head_reduces_loss_on_separable_features() -> None:
+    pytest.importorskip("torch")
+    import torch
+    import torch.nn as nn
+
+    from fairxai.training.vision import _head_scores, _train_head
+
+    torch.manual_seed(0)
+    n, dim = 64, 8
+    features = torch.randn(n, dim)
+    # Linearly separable target from the first feature dimension.
+    labels = (features[:, 0] > 0).long()
+
+    head = nn.Linear(dim, 2)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.AdamW(head.parameters(), lr=0.05)
+    device = torch.device("cpu")
+
+    history, total_time = _train_head(
+        head,
+        features,
+        labels,
+        criterion,
+        optimizer,
+        epochs=30,
+        batch_size=16,
+        device=device,
+        torch=torch,
+        random_state=0,
+    )
+
+    assert len(history) == 30
+    assert history[-1]["train_loss"] < history[0]["train_loss"]
+    assert total_time >= 0.0
+
+    scores = _head_scores(head, features, device, torch)
+    assert len(scores) == n
+    assert all(0.0 <= s <= 1.0 for s in scores)
+
+    # Batched scoring must equal one-shot scoring (no device-wide tensor move).
+    batched = _head_scores(head, features, device, torch, batch_size=7)
+    assert batched == pytest.approx(scores, rel=1e-4, abs=1e-6)

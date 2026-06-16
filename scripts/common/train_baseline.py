@@ -597,6 +597,23 @@ def main():
         help="Fine-tune pretrained image backbone",
     )
     parser.add_argument(
+        "--cache-frozen-features",
+        dest="cache_frozen_features",
+        action="store_true",
+        default=None,
+        help=(
+            "Extract frozen-backbone features once and train only the head over them "
+            "(requires --freeze-backbone). Much faster, but uses an eval-mode backbone "
+            "so BatchNorm/dropout differ from the default train-mode path."
+        ),
+    )
+    parser.add_argument(
+        "--no-cache-frozen-features",
+        dest="cache_frozen_features",
+        action="store_false",
+        help="Disable frozen-feature caching even if config enables it.",
+    )
+    parser.add_argument(
         "-v", "--verbose", action="count", default=0, help="Verbosity: -v=info, -vv=debug"
     )
     args = parser.parse_args()
@@ -725,6 +742,9 @@ def main():
             args.freeze_backbone, image_cfg, "freeze_backbone", True
         )
         pretrained = _resolve_bool_setting(args.pretrained, image_cfg, "pretrained", True)
+        cache_frozen_features = _resolve_bool_setting(
+            args.cache_frozen_features, image_cfg, "cache_frozen_features", False
+        )
 
         train_files = []
         for dataset_name in configured_datasets:
@@ -791,6 +811,7 @@ def main():
                     freeze_backbone=freeze_backbone,
                     num_workers=num_workers,
                     random_state=random_state,
+                    cache_frozen_features=cache_frozen_features,
                 )
                 results_summary[dataset_name][model_type] = result
 
