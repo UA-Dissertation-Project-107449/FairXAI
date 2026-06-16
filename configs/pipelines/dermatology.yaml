@@ -38,6 +38,10 @@ training:
 
 fairness:
   sensitive_attributes: [age_group, sex, fitzpatrick_group]
+  # Stage 8 (assess): groups with fewer than this many test rows are dropped from
+  # group-fairness metrics and reported under skipped_groups (avoids claims on
+  # tiny cells, e.g. PAD Fitzpatrick V-VI). Override per run with --min-group-samples.
+  min_group_samples: 50
 
 xai:
   enabled: false
