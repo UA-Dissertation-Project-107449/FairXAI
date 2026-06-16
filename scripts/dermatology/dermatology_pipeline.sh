@@ -2,8 +2,9 @@
 set -euo pipefail
 
 # Dermatology baseline pipeline: load -> profile -> recommend -> preprocess -> train.
-# Optional stage 8 (assess) runs post-prediction fairness; reach it with
-# --go-until assess (or RESUME_FROM=assess to assess an existing run).
+# Optional stages 8 (assess) + 9 (compare) run post-prediction fairness and the
+# cross-model comparison table; reach them with --go-until assess|compare (or
+# RESUME_FROM=assess|compare to run them over an existing run).
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
 PYTHON=${PYTHON:-python3}
 RUN_RECOMMENDATIONS=${RUN_RECOMMENDATIONS:-true}
@@ -20,9 +21,9 @@ PRETRAINED_ARGS=()
 declare -A STAGE_NUM=(
     [load]=1 [profile]=2 [profiling]=2 [recommend]=3 [recommendations]=3
     [triage]=3 [preprocess]=4 [preprocessing]=4 [train]=7 [baseline]=7 [training]=7
-    [assess]=8 [assessment]=8 [fairness]=8
+    [assess]=8 [assessment]=8 [fairness]=8 [compare]=9 [comparison]=9
 )
-declare -A STAGE_NAME=([1]=load [2]=profile [3]=recommend [4]=preprocess [7]=train [8]=assess)
+declare -A STAGE_NAME=([1]=load [2]=profile [3]=recommend [4]=preprocess [7]=train [8]=assess [9]=compare)
 
 resolve_stage() {
     local input="${1,,}"
@@ -38,7 +39,7 @@ resolve_stage() {
     if [[ -n "${STAGE_NUM[$input]+x}" ]]; then
         echo "${STAGE_NUM[$input]}"; return
     fi
-    echo "ERROR: Unknown stage '$1'. Valid: load(1) profile(2) recommend(3) preprocess(4) train(7) assess(8)" >&2
+    echo "ERROR: Unknown stage '$1'. Valid: load(1) profile(2) recommend(3) preprocess(4) train(7) assess(8) compare(9)" >&2
     exit 1
 }
 
@@ -234,6 +235,14 @@ if should_run 8; then
     mark_done 8 assess
 else
     echo "[8] assess - SKIPPED"
+fi
+
+if should_run 9; then
+    echo "[PHASE 9] Comparing baseline models"
+    "$PYTHON" "$ROOT_DIR/scripts/dermatology/compare.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $VERBOSE_FLAG
+    mark_done 9 compare
+else
+    echo "[9] compare - SKIPPED"
 fi
 
 echo "Dermatology baseline complete: $RUN_ROOT"
