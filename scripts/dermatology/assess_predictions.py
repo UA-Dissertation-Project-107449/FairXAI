@@ -25,6 +25,8 @@ sys.path.insert(0, str(ROOT_DIR / "src"))
 
 from fairxai.cli.runner_base import setup_phase_logging  # noqa: E402
 from fairxai.fairness.image_assessment import (  # noqa: E402
+    DEFAULT_GROUP_VIEWS,
+    DEFAULT_INTERSECTION_MIN_GROUP_SAMPLES,
     DEFAULT_MIN_GROUP_SAMPLES,
     assess_run,
 )
@@ -46,11 +48,30 @@ def _resolve_run_id() -> str:
     raise SystemExit("RUN_ID not set and no latest dermatology run found.")
 
 
+def _resolve_bool_flag(cli_value, cfg: dict, key: str, default: bool) -> bool:
+    if cli_value is not None:
+        return bool(cli_value)
+    return bool(cfg.get(key, default))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--datasets", nargs="*", help="Restrict to these datasets.")
     parser.add_argument("--model-types", nargs="*", help="Restrict to these model types.")
     parser.add_argument("--min-group-samples", type=int, default=None)
+    parser.add_argument(
+        "--group-views",
+        dest="group_views",
+        action="store_true",
+        default=None,
+        help="Write post-hoc group-view fairness reports (overrides config).",
+    )
+    parser.add_argument(
+        "--no-group-views",
+        dest="group_views",
+        action="store_false",
+        help="Skip post-hoc group-view fairness reports (overrides config).",
+    )
     parser.add_argument("-v", action="store_const", const=1, dest="verbose", default=0)
     parser.add_argument("-vv", action="store_const", const=2, dest="verbose")
     args = parser.parse_args()
@@ -73,11 +94,22 @@ def main() -> None:
     min_group = args.min_group_samples
     if min_group is None:
         min_group = fairness_cfg.get("min_group_samples", DEFAULT_MIN_GROUP_SAMPLES)
+    group_view_cfg = fairness_cfg.get("group_views", {})
+    write_group_views = _resolve_bool_flag(args.group_views, group_view_cfg, "enabled", False)
+    group_views = group_view_cfg.get("views", DEFAULT_GROUP_VIEWS)
+    group_view_min = int(
+        group_view_cfg.get("min_group_samples", min_group or DEFAULT_MIN_GROUP_SAMPLES)
+    )
+    intersection_min = int(
+        group_view_cfg.get("intersection_min_group_samples", DEFAULT_INTERSECTION_MIN_GROUP_SAMPLES)
+    )
 
     logging.info(
-        "[PHASE] Assessing dermatology post-prediction fairness run_id=%s min_group_samples=%s",
+        "[PHASE] Assessing dermatology post-prediction fairness run_id=%s "
+        "min_group_samples=%s group_views=%s",
         run_id,
         min_group,
+        write_group_views,
     )
     print(f"[PHASE 8] Assessing post-prediction fairness for run {run_id}")
     reports = assess_run(
@@ -86,6 +118,10 @@ def main() -> None:
         min_group_samples=min_group,
         datasets=args.datasets,
         model_types=args.model_types,
+        write_group_views=write_group_views,
+        group_views=group_views,
+        group_view_min_group_samples=group_view_min,
+        intersection_min_group_samples=intersection_min,
     )
 
     if not reports:
@@ -99,6 +135,8 @@ def main() -> None:
     out_dir = run_root / "baseline" / "prediction_fairness"
     logging.info("[SUCCESS] Assessed %d dermatology prediction file(s): %s", len(reports), out_dir)
     print(f"  Report: {out_dir}")
+    if write_group_views:
+        print(f"  Group views: {out_dir / 'group_views'}")
 
 
 if __name__ == "__main__":
