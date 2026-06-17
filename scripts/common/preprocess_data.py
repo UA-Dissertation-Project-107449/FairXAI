@@ -93,6 +93,35 @@ def _load_domain_config(project_root: Path, pipeline: str) -> dict:
         return yaml.safe_load(f)
 
 
+def _resolve_bool_flag(cli_value, cfg: dict, key: str, default: bool) -> bool:
+    if cli_value is not None:
+        return bool(cli_value)
+    return bool(cfg.get(key, default))
+
+
+def _render_dermatology_readiness_figures(
+    *,
+    dataset_name: str,
+    profile_path: Path,
+    results_fairness: Path,
+    outputs,
+    min_group_samples: int,
+) -> None:
+    """Render stage-4 split-aware dermatology readiness figures."""
+    try:
+        from fairxai.viz.dermatology_readiness import render_readiness_figures
+    except ImportError as exc:
+        logging.warning("Skipping dermatology readiness figures: %s", exc)
+        return
+
+    render_readiness_figures(
+        profile_path=profile_path,
+        out_dir=results_fairness.parent / "readiness_figures" / dataset_name,
+        outputs=outputs,
+        min_group_samples=min_group_samples,
+    )
+
+
 # Canonical feature name -> raw column aliases across all three cardiac datasets.
 _CONSTRAINT_ALIASES: dict[str, list[str]] = {
     "age": ["age_raw", "age", "Age"],
@@ -217,6 +246,19 @@ def main():
         help="Optional dataset names to preprocess (CLI override).",
     )
     parser.add_argument(
+        "--figures",
+        dest="figures",
+        action="store_true",
+        default=None,
+        help="Render readiness figures when supported by the pipeline.",
+    )
+    parser.add_argument(
+        "--no-figures",
+        dest="figures",
+        action="store_false",
+        help="Skip readiness figures.",
+    )
+    parser.add_argument(
         "-v", "--verbose", action="count", default=0, help="Verbosity: -v=info, -vv=debug"
     )
     args = parser.parse_args()
@@ -303,6 +345,13 @@ def main():
     training_cfg = pipeline_cfg.get("training", {})
     target_col = training_cfg.get("target", "heart_disease")
     modality = training_cfg.get("modality", "tabular")
+    readiness_cfg = pipeline_cfg.get("readiness_figures", {})
+    write_readiness_figures = pipeline == "dermatology" and _resolve_bool_flag(
+        args.figures, readiness_cfg, "enabled", False
+    )
+    readiness_outputs = readiness_cfg.get("outputs")
+    readiness_split = readiness_cfg.get("split", "test")
+    readiness_min_group = pipeline_cfg.get("fairness", {}).get("min_group_samples", 50)
 
     # Process each dataset with each binning strategy
     for binning_strategy in binning_strategies:
@@ -463,6 +512,17 @@ def main():
                     json.dump(train_profile, f, indent=2, default=str)
                 with open(test_fairness_file, "w") as f:
                     json.dump(test_profile, f, indent=2, default=str)
+                if write_readiness_figures:
+                    profile_for_figures = (
+                        train_fairness_file if readiness_split == "train" else test_fairness_file
+                    )
+                    _render_dermatology_readiness_figures(
+                        dataset_name=dataset_name,
+                        profile_path=profile_for_figures,
+                        results_fairness=results_fairness,
+                        outputs=readiness_outputs,
+                        min_group_samples=readiness_min_group,
+                    )
 
                 preprocessing_summary[dataset_name] = _stringify(
                     {
