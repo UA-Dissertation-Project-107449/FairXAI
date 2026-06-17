@@ -70,6 +70,38 @@ subgroup evidence rather than strong natural phenotype discovery.
 Dermatology has scaffolding, but the end-to-end implemented research pipeline
 is cardiac. Docs should avoid implying equivalent pipeline maturity.
 
+## Dermatology Design Notes
+
+### Image XAI Two-Layer Design
+
+Image explainability (`explainability/image.py`) is split into two layers on
+purpose:
+
+- **Pure heatmap functions** (`gradcam_heatmap`, `lime_heatmap`, `shap_heatmap`)
+  take a model + tensor and return a normalized `[0,1]` saliency array. No file
+  I/O, no checkpoint loading, no sampling — trivial to unit-test and to reuse
+  outside the pipeline.
+- **Driver** (`select_images`, `explain_image_model`) owns the side effects:
+  checkpoint loading, stratified group × outcome sampling, overlay rendering, and
+  the `manifest.csv`.
+
+Rationale: the heatmap math is the defensible methods-chapter contribution and
+must be testable without GPU/checkpoints; the orchestration is pipeline glue.
+Keeping them separate also lets the assessment/figures stages consume the
+heatmap fns without inheriting the driver's I/O assumptions.
+
+### Image Fairness Is Post-Prediction Only (No Retrain)
+
+Dermatology fairness (`fairness/image_assessment.py`) scores from a saved
+predictions CSV, never from model weights. Post-hoc **group views** (alternate
+subgroup definitions, including one intersectional `sex_x_fitzpatrick`) are a CSV
+`groupby`, not a retraining multiplier — "5 binnings" cost 5× a groupby, not 5×
+training. Support gates (`min_group_samples=50`, intersectional `=30`) drop
+undersized groups from metrics while reporting them as skipped, so small
+subgroups never silently inflate a fairness delta. Mitigation for images, if
+added, is post-processing only (`ThresholdOptimizer` on saved probabilities);
+pre/in-processing for CNNs is explicitly out of scope.
+
 ## Related
 
 - Module map: [modules.md](modules.md)
