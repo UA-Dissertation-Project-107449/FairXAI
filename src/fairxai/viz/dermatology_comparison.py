@@ -10,7 +10,6 @@ for, via this module).
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
@@ -174,34 +173,31 @@ def render_comparison_figures(
     *,
     perf_columns: Sequence[str],
     fairness_labels: Mapping[str, str],
-) -> list[dict[str, Any]]:
-    """Render comparison figures under ``out_dir/figures`` and return manifest entries.
+) -> list[Path]:
+    """Render comparison figures under ``out_dir/figures``; return the written paths.
 
     ``perf_columns`` and ``fairness_labels`` are supplied by the comparison collator
-    so the canonical column names live in one place.
+    so the canonical column names live in one place. No manifest file is written —
+    the run logs plus the clickable output folder are the record.
     """
     figures_dir = out_dir / "figures"
     figures_dir.mkdir(parents=True, exist_ok=True)
-    manifest: list[dict[str, Any]] = []
+    written: list[Path] = []
 
     performance_path = _plot_performance(rows, perf_columns, figures_dir)
     if performance_path:
-        manifest.append({"kind": "performance", "path": str(performance_path)})
+        written.append(performance_path)
 
     runtime_path = _plot_runtime_vs_auc(rows, figures_dir)
     if runtime_path:
-        manifest.append({"kind": "runtime_vs_auc", "path": str(runtime_path)})
+        written.append(runtime_path)
 
     for attr in attrs:
         fairness_path = _plot_fairness_attr(rows, attr, fairness_labels, figures_dir)
         if fairness_path:
-            manifest.append(
-                {"kind": "fairness_deltas", "attribute": attr, "path": str(fairness_path)}
-            )
+            written.append(fairness_path)
 
-    manifest_path = figures_dir / "figures_manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     logger.info(
-        "[SUCCESS] Comparison figures saved to %s (%d figure(s))", figures_dir, len(manifest)
+        "[SUCCESS] Comparison figures saved to %s (%d figure(s))", figures_dir, len(written)
     )
-    return manifest
+    return written
