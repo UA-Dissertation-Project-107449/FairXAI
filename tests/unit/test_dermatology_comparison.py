@@ -92,7 +92,7 @@ def test_compare_run_skips_figures_by_default(tmp_path: Path) -> None:
     compare_run(run_root)
 
     out = run_root / "baseline" / "comparison"
-    assert not (out / "figures" / "figures_manifest.json").exists()
+    assert not (out / "figures").exists()
 
 
 def test_compare_run_writes_figures_when_enabled(tmp_path: Path) -> None:
@@ -103,12 +103,7 @@ def test_compare_run_writes_figures_when_enabled(tmp_path: Path) -> None:
     assert (figures / "performance_metrics.png").exists()
     assert (figures / "runtime_vs_auc.png").exists()
     assert (figures / "fairness_deltas_sex.png").exists()
-    manifest = json.loads((figures / "figures_manifest.json").read_text())
-    assert {row["kind"] for row in manifest} == {
-        "performance",
-        "runtime_vs_auc",
-        "fairness_deltas",
-    }
+    assert not (figures / "figures_manifest.json").exists()
 
 
 def test_compare_run_performance_figures_do_not_require_fairness(tmp_path: Path) -> None:

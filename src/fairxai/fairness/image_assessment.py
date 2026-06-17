@@ -48,6 +48,8 @@ _VALUE_LABELS: dict[str, dict[Any, str]] = {
 }
 
 DEFAULT_MIN_GROUP_SAMPLES = 50
+DEFAULT_INTERSECTION_MIN_GROUP_SAMPLES = 30
+DEFAULT_GROUP_VIEWS = ["age_coarse", "sex", "fitzpatrick_group", "sex_x_fitzpatrick"]
 
 
 def decode_groups(df: pd.DataFrame, attr: str) -> pd.Series:
@@ -61,6 +63,71 @@ def decode_groups(df: pd.DataFrame, attr: str) -> pd.Series:
     if mapping is not None:
         series = series.map(lambda v: mapping.get(v, str(v)))
     return series.astype(str)
+
+
+def derive_age_coarse(df: pd.DataFrame) -> pd.Series:
+    """Map PAD age groups to a small post-hoc view: <40, 40-59, 60+, Unknown."""
+
+    def _map(value: Any) -> str:
+        if pd.isna(value):
+            return "Unknown"
+        text = str(value).strip()
+        if not text or text.lower() in {"nan", "none", "unknown"}:
+            return "Unknown"
+        if text in {"<20", "20-39"}:
+            return "<40"
+        if text == "40-59":
+            return "40-59"
+        if text in {"60-79", "80+"}:
+            return "60+"
+        return text
+
+    if "age_group" not in df.columns:
+        return pd.Series(["Unknown"] * len(df), index=df.index)
+    return df["age_group"].map(_map).astype(str)
+
+
+def derive_group_view_columns(
+    df: pd.DataFrame,
+    views: list[str],
+) -> tuple[pd.DataFrame, dict[str, dict[str, Any]]]:
+    """Add configured post-hoc group-view columns to a copy of *df*.
+
+    Returns ``(frame, metadata)`` where metadata records source attributes and
+    whether a view is exploratory/intersectional.
+    """
+    work = df.copy()
+    metadata: dict[str, dict[str, Any]] = {}
+    for view in views:
+        if view == "age_coarse":
+            work[view] = derive_age_coarse(work)
+            metadata[view] = {"source_attributes": ["age_group"], "exploratory": False}
+        elif view == "sex":
+            if "sex" not in work.columns:
+                logger.warning("Group view '%s' skipped: missing sex column", view)
+                continue
+            work[view] = decode_groups(work, "sex")
+            metadata[view] = {"source_attributes": ["sex"], "exploratory": False}
+        elif view == "fitzpatrick_group":
+            if "fitzpatrick_group" not in work.columns:
+                logger.warning("Group view '%s' skipped: missing fitzpatrick_group column", view)
+                continue
+            work[view] = decode_groups(work, "fitzpatrick_group")
+            metadata[view] = {"source_attributes": ["fitzpatrick_group"], "exploratory": False}
+        elif view == "sex_x_fitzpatrick":
+            if "sex" not in work.columns or "fitzpatrick_group" not in work.columns:
+                logger.warning("Group view '%s' skipped: missing sex or fitzpatrick_group", view)
+                continue
+            sex = decode_groups(work, "sex")
+            fitz = decode_groups(work, "fitzpatrick_group")
+            work[view] = sex + " x " + fitz
+            metadata[view] = {
+                "source_attributes": ["sex", "fitzpatrick_group"],
+                "exploratory": True,
+            }
+        else:
+            logger.warning("Unknown group view '%s'; skipping", view)
+    return work, metadata
 
 
 def _binary_performance(
@@ -299,6 +366,115 @@ def _flatten_for_csv(reports: dict[str, dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def assess_group_views_frame(
+    df: pd.DataFrame,
+    views: list[str],
+    *,
+    min_group_samples: int = DEFAULT_MIN_GROUP_SAMPLES,
+    intersection_min_group_samples: int = DEFAULT_INTERSECTION_MIN_GROUP_SAMPLES,
+) -> dict[str, Any]:
+    """Compute post-hoc group-view reports for one prediction DataFrame."""
+    work, metadata = derive_group_view_columns(df, views)
+    proba = work["y_proba"] if "y_proba" in work.columns else None
+    report: dict[str, Any] = {
+        "n_test": int(len(work)),
+        "overall_performance": _binary_performance(work["y_true"], work["y_pred"], proba),
+        "group_views": {},
+    }
+    for view in views:
+        if view not in metadata or view not in work.columns:
+            continue
+        view_min = (
+            intersection_min_group_samples if metadata[view]["exploratory"] else min_group_samples
+        )
+        view_report = assess_predictions_frame(work, [view], min_group_samples=view_min)[
+            "sensitive_attributes"
+        ][view]
+        view_report["min_group_samples"] = int(view_min)
+        view_report["source_attributes"] = metadata[view]["source_attributes"]
+        view_report["exploratory"] = bool(metadata[view]["exploratory"])
+        report["group_views"][view] = view_report
+    return report
+
+
+def render_group_view_markdown(reports: dict[str, dict[str, Any]]) -> str:
+    """Render ``{<dataset>_<model>: group_view_report}`` as Markdown."""
+    lines = ["# Dermatology Post-Hoc Group View Fairness Report", ""]
+    for key in sorted(reports):
+        report = reports[key]
+        op = report["overall_performance"]
+        lines.append(f"## {key}")
+        lines.append(
+            f"- n_test: {report['n_test']} · acc {_fmt(op['accuracy'])} · "
+            f"f1 {_fmt(op['f1'])} · auc {_fmt(op['auc'])}"
+        )
+        lines.append("")
+        for view, vr in sorted(report["group_views"].items()):
+            label = "exploratory" if vr.get("exploratory") else "primary"
+            lines.append(f"### {view} ({label}, min_group_samples {vr['min_group_samples']})")
+            if vr["skipped_groups"]:
+                skipped = ", ".join(f"{s['group']} (n={s['count']})" for s in vr["skipped_groups"])
+                lines.append(f"- skipped (under min): {skipped}")
+            if vr.get("degenerate_groups"):
+                degen = ", ".join(f"{d['group']} ({d['reason']})" for d in vr["degenerate_groups"])
+                lines.append(f"- excluded from deltas (degenerate): {degen}")
+            lines.append("")
+            lines.append("| group | n | prevalence | accuracy | recall | auc |")
+            lines.append("|---|---:|---:|---:|---:|---:|")
+            for group, perf in sorted(vr["group_performance"].items()):
+                lines.append(
+                    f"| {group} | {perf['n']} | {_fmt(perf['prevalence'])} | "
+                    f"{_fmt(perf['accuracy'])} | {_fmt(perf['recall'])} | {_fmt(perf['auc'])} |"
+                )
+            lines.append("")
+
+            gf = vr.get("group_fairness", {})
+            if gf:
+                dp = gf.get("demographic_parity", {}).get("max_difference")
+                eo = gf.get("equalized_odds", {})
+                eopp = gf.get("equal_opportunity", {}).get("max_difference")
+                lines.append(
+                    f"- demographic_parity Δ {_fmt(dp)} · "
+                    f"TPR Δ {_fmt(eo.get('tpr_max_difference'))} · "
+                    f"FPR Δ {_fmt(eo.get('fpr_max_difference'))} · "
+                    f"equal_opportunity Δ {_fmt(eopp)}"
+                )
+                lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _flatten_group_views_for_csv(reports: dict[str, dict[str, Any]]) -> pd.DataFrame:
+    """One row per (dataset_model, group_view, group) for dissertation import."""
+    rows: list[dict[str, Any]] = []
+    for key, report in reports.items():
+        for view, vr in report.get("group_views", {}).items():
+            gf = vr.get("group_fairness", {})
+            dp = gf.get("demographic_parity", {}).get("max_difference")
+            eo = gf.get("equalized_odds", {})
+            degenerate_names = {d["group"] for d in vr.get("degenerate_groups", [])}
+            for group, perf in vr["group_performance"].items():
+                rows.append(
+                    {
+                        "run_key": key,
+                        "group_view": view,
+                        "source_attributes": ",".join(vr.get("source_attributes", [])),
+                        "exploratory": bool(vr.get("exploratory")),
+                        "min_group_samples": vr.get("min_group_samples"),
+                        "group": group,
+                        "n": perf["n"],
+                        "prevalence": perf["prevalence"],
+                        "accuracy": perf["accuracy"],
+                        "recall": perf["recall"],
+                        "auc": perf["auc"],
+                        "degenerate": group in degenerate_names,
+                        "demographic_parity_max_diff": dp,
+                        "tpr_max_diff": eo.get("tpr_max_difference"),
+                        "fpr_max_diff": eo.get("fpr_max_difference"),
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
 def _discover_predictions(
     results_dir: Path,
     datasets: Optional[list[str]],
@@ -337,6 +513,10 @@ def assess_run(
     min_group_samples: int = DEFAULT_MIN_GROUP_SAMPLES,
     datasets: Optional[list[str]] = None,
     model_types: Optional[list[str]] = None,
+    write_group_views: bool = False,
+    group_views: Optional[list[str]] = None,
+    group_view_min_group_samples: int = DEFAULT_MIN_GROUP_SAMPLES,
+    intersection_min_group_samples: int = DEFAULT_INTERSECTION_MIN_GROUP_SAMPLES,
 ) -> dict[str, dict[str, Any]]:
     """Assess every baseline prediction CSV in *run_root* and write the report.
 
@@ -349,11 +529,19 @@ def assess_run(
         logger.warning("No prediction CSVs found under %s", results_dir)
 
     reports: dict[str, dict[str, Any]] = {}
+    group_view_reports: dict[str, dict[str, Any]] = {}
     for key, csv_path in discovered:
         df = pd.read_csv(csv_path)
         reports[key] = assess_predictions_frame(
             df, sensitive_attrs, min_group_samples=min_group_samples
         )
+        if write_group_views:
+            group_view_reports[key] = assess_group_views_frame(
+                df,
+                group_views or DEFAULT_GROUP_VIEWS,
+                min_group_samples=group_view_min_group_samples,
+                intersection_min_group_samples=intersection_min_group_samples,
+            )
         logger.info("Assessed %s (%d rows)", key, len(df))
 
     out_dir = run_root / "baseline" / "prediction_fairness"
@@ -364,5 +552,19 @@ def assess_run(
     (out_dir / "fairness_report.md").write_text(render_markdown(reports))
     _flatten_for_csv(reports).to_csv(out_dir / "fairness_groups.csv", index=False)
     logger.info("Wrote fairness report to %s", out_dir)
+
+    if write_group_views:
+        group_dir = out_dir / "group_views"
+        group_dir.mkdir(parents=True, exist_ok=True)
+        (group_dir / "group_view_report.json").write_text(
+            json.dumps(group_view_reports, indent=2, default=_json_default) + "\n"
+        )
+        (group_dir / "group_view_report.md").write_text(
+            render_group_view_markdown(group_view_reports)
+        )
+        _flatten_group_views_for_csv(group_view_reports).to_csv(
+            group_dir / "group_view_groups.csv", index=False
+        )
+        logger.info("Wrote group-view fairness report to %s", group_dir)
 
     return reports

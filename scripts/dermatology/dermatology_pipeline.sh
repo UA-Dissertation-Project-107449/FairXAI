@@ -19,6 +19,7 @@ EPOCHS=""
 BATCH_SIZE=""
 PRETRAINED_ARGS=()
 FIGURE_ARGS=()
+GROUP_VIEW_ARGS=()
 
 declare -A STAGE_NUM=(
     [load]=1 [profile]=2 [profiling]=2 [recommend]=3 [recommendations]=3
@@ -93,6 +94,12 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-figures)
             FIGURE_ARGS=(--no-figures)
+            ;;
+        --group-views)
+            GROUP_VIEW_ARGS=(--group-views)
+            ;;
+        --no-group-views)
+            GROUP_VIEW_ARGS=(--no-group-views)
             ;;
         --no-recommendations)
             RUN_RECOMMENDATIONS=false
@@ -224,7 +231,7 @@ fi
 
 if should_run 4; then
     echo "[PHASE 4/7] Preprocessing dermatology datasets"
-    "$PYTHON" "$ROOT_DIR/scripts/dermatology/preprocess.py" "${DATASET_ARGS[@]}" $VERBOSE_FLAG
+    "$PYTHON" "$ROOT_DIR/scripts/dermatology/preprocess.py" "${DATASET_ARGS[@]}" "${FIGURE_ARGS[@]}" $VERBOSE_FLAG
     mark_done 4 preprocess
 else
     echo "[4/7] preprocess - SKIPPED"
@@ -240,7 +247,7 @@ fi
 
 if should_run 8; then
     echo "[PHASE 8] Assessing post-prediction fairness"
-    "$PYTHON" "$ROOT_DIR/scripts/dermatology/assess_predictions.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $VERBOSE_FLAG
+    "$PYTHON" "$ROOT_DIR/scripts/dermatology/assess_predictions.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" "${GROUP_VIEW_ARGS[@]}" $VERBOSE_FLAG
     mark_done 8 assess
 else
     echo "[8] assess - SKIPPED"

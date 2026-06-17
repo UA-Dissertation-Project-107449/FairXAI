@@ -42,6 +42,20 @@ fairness:
   # group-fairness metrics and reported under skipped_groups (avoids claims on
   # tiny cells, e.g. PAD Fitzpatrick V-VI). Override per run with --min-group-samples.
   min_group_samples: 50
+  group_views:
+    # Stage 8 add-on: recompute fairness over post-hoc subgroup definitions from
+    # saved prediction CSVs. No retraining; canonical fairness_report.json is unchanged.
+    enabled: true
+    min_group_samples: 50
+    intersection_min_group_samples: 30
+    views: [age_coarse, sex, fitzpatrick_group, sex_x_fitzpatrick]
+
+readiness_figures:
+  # Stage 4 (preprocess): render dissertation-ready data-validity figures from the
+  # split-aware data-fairness profile. Override per run with --figures / --no-figures.
+  enabled: true
+  split: test
+  outputs: [subgroup_support, target_prevalence]
 
 comparison:
   # Stage 9 (compare): render dissertation-ready PNGs from existing baseline
