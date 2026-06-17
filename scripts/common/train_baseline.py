@@ -745,6 +745,20 @@ def main():
         cache_frozen_features = _resolve_bool_setting(
             args.cache_frozen_features, image_cfg, "cache_frozen_features", False
         )
+        logging.info(
+            "[PHASE] Image baseline configuration models=%s device=%s epochs=%s "
+            "batch_size=%s image_size=%s pretrained=%s freeze_backbone=%s "
+            "cache_frozen_features=%s num_workers=%s",
+            model_types,
+            device_request,
+            epochs,
+            batch_size,
+            image_size,
+            pretrained,
+            freeze_backbone,
+            cache_frozen_features,
+            num_workers,
+        )
 
         train_files = []
         for dataset_name in configured_datasets:
@@ -790,6 +804,16 @@ def main():
                     test_df[target_col].value_counts(normalize=True).round(4).to_dict()
                 ),
             }
+            logging.info(
+                "[PHASE] Image dataset ready dataset=%s train=%d test=%d target=%s "
+                "image_col=%s sensitive_attrs=%s",
+                dataset_name,
+                len(train_df),
+                len(test_df),
+                target_col,
+                image_col,
+                sensitive_cols,
+            )
             results_summary.setdefault(dataset_name, {})
             for model_type in model_types:
                 logging.info("[MODEL] Training image model=%s dataset=%s", model_type, dataset_name)

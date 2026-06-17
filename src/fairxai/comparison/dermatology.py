@@ -8,7 +8,10 @@ run already produces and writes a single canonical table across architectures:
   (optional; produced by stage 8 / :mod:`fairxai.fairness.image_assessment`)
 
 Outputs ``baseline/comparison/model_comparison.csv`` (one row per dataset x model)
-and ``model_comparison.md``. No model load, no retraining, no experiment manifest.
+and ``model_comparison.md``. Optional figures are rendered from those same rows by
+:mod:`fairxai.viz.dermatology_comparison` (imported only when requested, so this
+module stays matplotlib-free on the CSV/Markdown path). No model load, no
+retraining, no experiment manifest.
 """
 
 from __future__ import annotations
@@ -33,6 +36,12 @@ _FAIRNESS_DELTAS: dict[str, tuple[str, str]] = {
 
 # Fixed performance columns, in display order.
 _PERF_COLUMNS = ["accuracy", "precision", "recall", "f1", "auc"]
+_FAIRNESS_LABELS = {
+    "dp_delta": "DP delta",
+    "tpr_delta": "TPR delta",
+    "fpr_delta": "FPR delta",
+    "eo_delta": "Equal-opp delta",
+}
 
 
 def _safe_float(value: Any) -> Optional[float]:
@@ -191,22 +200,42 @@ def render_markdown(rows: list[dict[str, Any]], attrs: list[str]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _render_figures(rows: list[dict[str, Any]], attrs: list[str], out_dir: Path) -> None:
+    """Delegate figure rendering to viz (matplotlib imported only here)."""
+    try:
+        from fairxai.viz.dermatology_comparison import render_comparison_figures
+    except ImportError as exc:
+        logger.warning("Skipping dermatology comparison figures (viz/matplotlib): %s", exc)
+        return
+    render_comparison_figures(
+        rows,
+        attrs,
+        out_dir,
+        perf_columns=_PERF_COLUMNS,
+        fairness_labels=_FAIRNESS_LABELS,
+    )
+
+
 def compare_run(
     run_root: Path,
     *,
     datasets: Optional[Iterable[str]] = None,
     model_types: Optional[Iterable[str]] = None,
+    write_figures: bool = False,
 ) -> list[dict[str, Any]]:
     """Collate baseline metrics + fairness into ``baseline/comparison/`` outputs."""
     metrics = _discover_metrics(run_root, datasets, model_types)
     fairness = _load_fairness(run_root)
+    attrs = _sensitive_attrs(fairness)
     rows = build_rows(fairness, metrics)
 
     out_dir = run_root / "baseline" / "comparison"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     pd.DataFrame(rows).to_csv(out_dir / "model_comparison.csv", index=False)
-    md = render_markdown(rows, _sensitive_attrs(fairness))
+    md = render_markdown(rows, attrs)
     (out_dir / "model_comparison.md").write_text(md)
+    if write_figures:
+        _render_figures(rows, attrs, out_dir)
     logger.info("Wrote comparison for %d model(s) to %s", len(rows), out_dir)
     return rows

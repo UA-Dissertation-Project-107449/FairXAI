@@ -51,6 +51,7 @@ def setup_phase_logging(
     run_id: Optional[str] = None,
     stage_name: Optional[str] = None,
     sub_stage: Optional[str] = None,
+    stage_number: Optional[int] = None,
 ) -> Path:
     """Configure per-phase logging.
 
@@ -63,6 +64,9 @@ def setup_phase_logging(
     stage's numbered directory but named after *sub_stage*::
 
         logs/{log_subdir}/runs/{run_id}/{NN}_{stage_name}/{sub_stage}.log
+
+    ``stage_number`` can override the shared cardiac stage registry number for
+    domain-specific runners whose lean stages do not match the full registry.
 
     An aggregate ``run.log`` is appended to whenever *run_id* is provided,
     collecting records from every phase in a single file::
@@ -78,11 +82,15 @@ def setup_phase_logging(
     if run_id and stage_name:
         from fairxai.pipeline.stages import STAGE_BY_NAME  # local to avoid circular
 
-        stage = STAGE_BY_NAME.get(stage_name.lower())
+        stage = STAGE_BY_NAME.get(stage_name.lower()) if stage_number is None else None
         if stage:
             phase_dir = f"{stage.number:02d}_{stage.name}"
             log_dir = root / "logs" / log_subdir / "runs" / run_id / phase_dir
             log_file = log_dir / (f"{sub_stage}.log" if sub_stage else f"{stage.name}.log")
+        elif stage_number is not None:
+            phase_dir = f"{stage_number:02d}_{stage_name}"
+            log_dir = root / "logs" / log_subdir / "runs" / run_id / phase_dir
+            log_file = log_dir / (f"{sub_stage}.log" if sub_stage else f"{stage_name}.log")
         else:
             # Unknown stage — fall back to named directory
             log_dir = root / "logs" / log_subdir / "runs" / run_id / stage_name

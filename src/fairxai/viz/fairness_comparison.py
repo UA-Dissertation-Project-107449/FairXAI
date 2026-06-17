@@ -17,10 +17,16 @@ from fairxai.viz.save_utils import heatmap_size, save_figure
 logger = logging.getLogger(__name__)
 
 PALETTE_MODEL = {
+    # Cardiac tabular models
     "logistic_regression": "#0072B2",
     "random_forest": "#009E73",
     "svm": "#D55E00",
     "xgboost": "#CC79A7",
+    # Dermatology CNN family (Okabe-Ito; densenet121 registered but not yet default)
+    "resnet18": "#E69F00",
+    "mobilenet_v3_large": "#56B4E9",
+    "efficientnet_b0": "#009E73",
+    "densenet121": "#000000",
 }
 
 
