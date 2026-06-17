@@ -86,37 +86,40 @@ def test_bash_parser_accepts_scope_flags_before_stage_validation() -> None:
 
 def test_dermatology_bash_parser_accepts_baseline_flags() -> None:
     for figure_flag in ("--figures", "--no-figures"):
-        result = _run(
-            [
-                "bash",
-                str(DERM_BASH_PIPELINE),
-                "--datasets",
-                "pad_ufes_20",
-                "--model-types",
-                "resnet18",
-                "--device",
-                "cpu",
-                "--epochs",
-                "1",
-                "--batch-size",
-                "2",
-                "--no-pretrained",
-                figure_flag,
-                "--go-until",
-                "invalid_stage_name",
-            ]
-        )
+        for group_view_flag in ("--group-views", "--no-group-views"):
+            result = _run(
+                [
+                    "bash",
+                    str(DERM_BASH_PIPELINE),
+                    "--datasets",
+                    "pad_ufes_20",
+                    "--model-types",
+                    "resnet18",
+                    "--device",
+                    "cpu",
+                    "--epochs",
+                    "1",
+                    "--batch-size",
+                    "2",
+                    "--no-pretrained",
+                    figure_flag,
+                    group_view_flag,
+                    "--go-until",
+                    "invalid_stage_name",
+                ]
+            )
 
-        combined = (result.stdout or "") + (result.stderr or "")
-        assert result.returncode != 0
-        assert "Unknown stage 'invalid_stage_name'" in combined
-        assert "Unknown argument '--datasets'" not in combined
-        assert "Unknown argument '--model-types'" not in combined
-        assert "Unknown argument '--device'" not in combined
-        assert "Unknown argument '--epochs'" not in combined
-        assert "Unknown argument '--batch-size'" not in combined
-        assert "Unknown argument '--no-pretrained'" not in combined
-        assert f"Unknown argument '{figure_flag}'" not in combined
+            combined = (result.stdout or "") + (result.stderr or "")
+            assert result.returncode != 0
+            assert "Unknown stage 'invalid_stage_name'" in combined
+            assert "Unknown argument '--datasets'" not in combined
+            assert "Unknown argument '--model-types'" not in combined
+            assert "Unknown argument '--device'" not in combined
+            assert "Unknown argument '--epochs'" not in combined
+            assert "Unknown argument '--batch-size'" not in combined
+            assert "Unknown argument '--no-pretrained'" not in combined
+            assert f"Unknown argument '{figure_flag}'" not in combined
+            assert f"Unknown argument '{group_view_flag}'" not in combined
 
 
 def test_prefect_compare_stage_forwards_dataset_scope_to_grouping() -> None:

@@ -13,9 +13,12 @@ import pandas as pd
 
 from fairxai.fairness.image_assessment import (
     _flatten_for_csv,
+    assess_group_views_frame,
     assess_predictions_frame,
     assess_run,
     decode_groups,
+    derive_age_coarse,
+    derive_group_view_columns,
     render_markdown,
 )
 
@@ -67,6 +70,38 @@ def test_decode_groups_passthrough_for_plaintext() -> None:
     assert decode_groups(df, "fitzpatrick_group").tolist() == ["I-II", "unknown"]
 
 
+def test_age_coarse_mapping_handles_pad_groups_and_unknowns() -> None:
+    df = pd.DataFrame({"age_group": ["<20", "20-39", "40-59", "60-79", "80+", "unknown", None]})
+    assert derive_age_coarse(df).tolist() == [
+        "<40",
+        "<40",
+        "40-59",
+        "60+",
+        "60+",
+        "Unknown",
+        "Unknown",
+    ]
+
+
+def test_sex_x_fitzpatrick_uses_decoded_sex_labels() -> None:
+    df = pd.DataFrame(
+        {
+            "sex": [0, 1, -1],
+            "fitzpatrick_group": ["I-II", "III-IV", "unknown"],
+            "y_true": [0, 1, 0],
+            "y_pred": [0, 1, 0],
+            "y_proba": [0.1, 0.9, 0.2],
+        }
+    )
+    work, meta = derive_group_view_columns(df, ["sex_x_fitzpatrick"])
+    assert work["sex_x_fitzpatrick"].tolist() == [
+        "Female x I-II",
+        "Male x III-IV",
+        "Unknown x unknown",
+    ]
+    assert meta["sex_x_fitzpatrick"]["exploratory"] is True
+
+
 def test_overall_performance_present() -> None:
     df = _synthetic_predictions()
     report = assess_predictions_frame(df, ["sex"], min_group_samples=50)
@@ -111,6 +146,21 @@ def test_group_fairness_computed_for_two_groups() -> None:
     gf = report["sensitive_attributes"]["sex"]["group_fairness"]
     assert "demographic_parity" in gf and "equalized_odds" in gf
     assert gf["equalized_odds"]["tpr_max_difference"] >= 0.0
+
+
+def test_group_view_report_respects_intersection_min_support() -> None:
+    df = _synthetic_predictions(n_big=40, n_small=5)
+    report = assess_group_views_frame(
+        df,
+        ["sex_x_fitzpatrick"],
+        min_group_samples=50,
+        intersection_min_group_samples=30,
+    )
+    view = report["group_views"]["sex_x_fitzpatrick"]
+    assert view["min_group_samples"] == 30
+    assert "Female x I-II" in view["group_performance"]
+    assert "Male x III-IV" in view["group_performance"]
+    assert any(s["group"] == "Unknown x V-VI" and s["count"] == 5 for s in view["skipped_groups"])
 
 
 def test_degenerate_group_excluded_from_deltas() -> None:
@@ -177,6 +227,43 @@ def test_assess_run_writes_outputs(tmp_path: Path) -> None:
     assert (out / "fairness_report.json").exists()
     assert (out / "fairness_report.md").exists()
     assert (out / "fairness_groups.csv").exists()
+
+
+def test_assess_run_writes_group_view_outputs_without_mutating_base_report(tmp_path: Path) -> None:
+    run_root = tmp_path / "runs" / "run_group_views"
+    results = run_root / "baseline" / "results"
+    preds = results / "predictions"
+    preds.mkdir(parents=True)
+
+    df = _synthetic_predictions()
+    csv_path = preds / "pad_ufes_20_resnet18_test.csv"
+    df.to_csv(csv_path, index=False)
+    (results / "pad_ufes_20_resnet18_metrics.json").write_text(
+        json.dumps({"test_predictions": str(csv_path)})
+    )
+
+    assess_run(
+        run_root,
+        ["sex"],
+        min_group_samples=50,
+        write_group_views=True,
+        group_views=["age_coarse", "sex_x_fitzpatrick"],
+        group_view_min_group_samples=50,
+        intersection_min_group_samples=30,
+    )
+
+    out = run_root / "baseline" / "prediction_fairness"
+    base = json.loads((out / "fairness_report.json").read_text())
+    assert "group_views" not in base["pad_ufes_20_resnet18"]
+
+    group_dir = out / "group_views"
+    assert (group_dir / "group_view_report.json").exists()
+    assert (group_dir / "group_view_report.md").exists()
+    assert (group_dir / "group_view_groups.csv").exists()
+    group_report = json.loads((group_dir / "group_view_report.json").read_text())
+    assert {"age_coarse", "sex_x_fitzpatrick"} <= set(
+        group_report["pad_ufes_20_resnet18"]["group_views"]
+    )
 
 
 def test_assess_run_model_type_filter(tmp_path: Path) -> None:
