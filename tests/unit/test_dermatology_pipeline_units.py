@@ -62,6 +62,126 @@ def _write_schema(path: Path) -> Path:
     return path
 
 
+def _write_scin_fixture(root: Path) -> Path:
+    """Two-CSV SCIN fixture (cases + labels joined on case_id)."""
+    dataset_dir = root / "scin" / "dataset"
+    image_dir = dataset_dir / "images"
+    image_dir.mkdir(parents=True)
+
+    cases = [
+        {
+            "case_id": -1001,
+            "year": 2020,
+            "age_group": "AGE_40_TO_49",
+            "sex_at_birth": "MALE",
+            "fitzpatrick_skin_type": "FST5",
+            "image_1_path": "dataset/images/h1.png",
+            "image_2_path": "",
+            "image_3_path": "",
+        },
+        {
+            "case_id": -1002,
+            "year": 2021,
+            "age_group": "AGE_18_TO_29",
+            "sex_at_birth": "FEMALE",
+            "fitzpatrick_skin_type": "FST2",
+            # First image path empty -> loader falls back to image_2_path.
+            "image_1_path": "",
+            "image_2_path": "dataset/images/h2.png",
+            "image_3_path": "",
+        },
+        {
+            "case_id": -1003,
+            "year": 2021,
+            "age_group": "AGE_UNKNOWN",
+            "sex_at_birth": "OTHER_OR_UNSPECIFIED",
+            "fitzpatrick_skin_type": "",
+            "image_1_path": "dataset/images/h3.png",
+            "image_2_path": "",
+            "image_3_path": "",
+        },
+    ]
+    labels = [
+        {"case_id": -1001, "weighted_skin_condition_label": "{'Melanoma': 0.7, 'Eczema': 0.3}"},
+        {"case_id": -1002, "weighted_skin_condition_label": "{'Eczema': 0.9, 'Acne': 0.1}"},
+        {
+            "case_id": -1003,
+            "weighted_skin_condition_label": "{'Basal Cell Carcinoma': 0.8, 'Nevus': 0.2}",
+        },
+    ]
+    pd.DataFrame(cases).to_csv(dataset_dir / "scin_cases.csv", index=False)
+    pd.DataFrame(labels).to_csv(dataset_dir / "scin_labels.csv", index=False)
+    for name in ["h1.png", "h2.png", "h3.png"]:
+        (image_dir / name).write_bytes(b"not-used-by-loader")
+    return dataset_dir
+
+
+def _write_scin_schema(path: Path) -> Path:
+    payload = {
+        "datasets": {
+            "scin": {
+                "standardizer": "scin",
+                "metadata_filename": "scin_cases.csv",
+                "labels_filename": "scin_labels.csv",
+                "join_key": "case_id",
+                "relative_dir": "scin/dataset",
+                "weighted_label_column": "weighted_skin_condition_label",
+                "positive_label_substrings": [
+                    "melanoma",
+                    "carcinoma",
+                    "basal cell",
+                    "squamous cell",
+                ],
+                "image_path_columns": ["image_1_path", "image_2_path", "image_3_path"],
+                "image_globs": ["images/*.png"],
+                "age_group_column": "age_group",
+                "sex_column": "sex_at_birth",
+                "fitzpatrick_column": "fitzpatrick_skin_type",
+            }
+        },
+        "dermatology_relevant_datasets": ["scin"],
+    }
+    path.write_text(json.dumps(payload))
+    return path
+
+
+def test_scin_loader_joins_labels_and_standardizes(tmp_path: Path) -> None:
+    _write_scin_fixture(tmp_path)
+    schema_path = _write_scin_schema(tmp_path / "dermatology.json")
+
+    loader = DermatologyDataLoader(str(schema_path))
+    df = loader.load_dataset("scin", str(tmp_path))
+
+    # One row per case (no image explode), cases+labels joined on case_id.
+    assert len(df) == 3
+    assert df["patient_id"].tolist() == ["-1001", "-1002", "-1003"]
+    # Top-1 weighted condition -> cancer-substring binary.
+    assert df["skin_cancer"].tolist() == [1, 0, 1]
+    assert df["diagnostic_label"].tolist() == ["Melanoma", "Eczema", "Basal Cell Carcinoma"]
+    # Native SCIN demographics mapped to the unified encodings.
+    assert df["sex"].tolist() == [1, 0, -1]
+    assert df["fitzpatrick_group"].tolist() == ["V-VI", "I-II", "unknown"]
+    assert df["age_group"].tolist() == ["40-49", "18-29", "unknown"]
+    # Image falls back across image_1/2/3 columns and resolves to real files.
+    assert df["image_path"].map(Path).map(Path.exists).all()
+    assert loader.last_image_reports["scin"]["missing_images"] == 0
+
+
+def test_scin_profile_excludes_case_id_and_runs(tmp_path: Path) -> None:
+    _write_scin_fixture(tmp_path)
+    schema_path = _write_scin_schema(tmp_path / "dermatology.json")
+    loader = DermatologyDataLoader(str(schema_path))
+    df = loader.load_dataset("scin", str(tmp_path))
+
+    profiler = DataProfiler(sensitive_attrs=["age_group", "sex", "fitzpatrick_group"])
+    profile = profiler.profile_dataset(df, target="skin_cancer", dataset_name="scin")
+
+    assert profile["dataset_name"] == "scin"
+    assert "complexity_metrics" in profile
+    # case_id must not leak into the model feature set / complexity inputs.
+    assert "case_id" in df.columns  # survives standardization as raw column
+
+
 def test_pad_loader_maps_target_and_resolves_split_images(tmp_path: Path) -> None:
     _write_pad_fixture(tmp_path)
     schema_path = _write_schema(tmp_path / "dermatology.json")
