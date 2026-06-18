@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import os
@@ -328,7 +329,11 @@ class DermatologyDataLoader:
         df["_dataset_source"] = dataset_name
         df["_dataset_file"] = str(metadata_path.relative_to(dataset_dir))
 
-        df = self._standardize_pad(df, dataset_name, dataset_dir, cfg)
+        standardizer = cfg.get("standardizer", "pad")
+        if standardizer == "scin":
+            df = self._standardize_scin(df, dataset_name, dataset_dir, cfg)
+        else:
+            df = self._standardize_pad(df, dataset_name, dataset_dir, cfg)
         return df
 
     def load_all_dermatology_datasets(self, data_dir: str) -> dict[str, pd.DataFrame]:
@@ -473,6 +478,169 @@ class DermatologyDataLoader:
             out = out[keep].copy()
 
         return out.reset_index(drop=True)
+
+    def _standardize_scin(
+        self,
+        df: pd.DataFrame,
+        dataset_name: str,
+        dataset_dir: Path,
+        cfg: dict[str, Any],
+    ) -> pd.DataFrame:
+        """Standardize Google SCIN to the unified dermatology schema.
+
+        SCIN ships as two CSVs (cases + labels) joined on ``case_id``, with a
+        weighted-condition-dict label instead of a clean diagnostic. The derived
+        ``skin_cancer`` target is approximate (top-1 weighted condition mapped to
+        a curated cancer-like substring set) and intended for profiling only, not
+        for training. One row per case (no image explode).
+        """
+        join_key = cfg.get("join_key", "case_id")
+        labels_filename = cfg.get("labels_filename", "scin_labels.csv")
+        labels_path = dataset_dir / labels_filename
+        if not labels_path.exists():
+            raise FileNotFoundError(f"{dataset_name}: labels file not found: {labels_path}")
+        if join_key not in df.columns:
+            raise ValueError(f"{dataset_name}: cases missing join key '{join_key}'")
+
+        labels = pd.read_csv(labels_path)
+        if join_key not in labels.columns:
+            raise ValueError(f"{dataset_name}: labels missing join key '{join_key}'")
+
+        weighted_col = cfg.get("weighted_label_column", "weighted_skin_condition_label")
+        label_cols = [join_key] + ([weighted_col] if weighted_col in labels.columns else [])
+        out = df.merge(labels[label_cols], on=join_key, how="inner")
+
+        if weighted_col not in out.columns:
+            raise ValueError(f"{dataset_name}: weighted label column '{weighted_col}' not found")
+
+        positives = [str(s).lower() for s in cfg.get("positive_label_substrings", [])]
+        top1 = out[weighted_col].map(self._scin_top_condition)
+        out["diagnostic_label"] = top1.fillna("unknown")
+        out["skin_cancer"] = top1.map(lambda name: self._scin_is_cancer(name, positives))
+        unknown = out["skin_cancer"].isna()
+        if unknown.any():
+            logging.warning(
+                "%s: dropping %d cases with unparseable/empty weighted labels",
+                dataset_name,
+                int(unknown.sum()),
+            )
+            out = out[~unknown].copy()
+        out["skin_cancer"] = out["skin_cancer"].astype(int)
+
+        age_col = cfg.get("age_group_column", "age_group")
+        out["age_raw"] = pd.NA
+        if age_col in out.columns:
+            out["age_group"] = out[age_col].map(self._scin_age_group)
+        else:
+            out["age_group"] = "unknown"
+
+        sex_col = cfg.get("sex_column", "sex_at_birth")
+        if sex_col in out.columns:
+            sex_label = out[sex_col].astype("string").str.strip().str.upper()
+            sex_label = sex_label.replace({"": pd.NA, "NAN": pd.NA, "NONE": pd.NA})
+            out["sex_extended"] = sex_label.map({"FEMALE": "Female", "MALE": "Male"}).fillna(
+                "unknown"
+            )
+        else:
+            out["sex_extended"] = "unknown"
+        out["sex"] = out["sex_extended"].map({"Female": 0, "Male": 1}).fillna(-1).astype(int)
+        out["sex_bin"] = out["sex"]
+
+        fst_col = cfg.get("fitzpatrick_column", "fitzpatrick_skin_type")
+        if fst_col in out.columns:
+            fst = out[fst_col].map(self._scin_fst_numeric)
+            out["fitzpatrick"] = fst.astype("Int64").astype("string").replace("<NA>", "unknown")
+            out["fitzpatrick_group"] = fst.map(self._fitzpatrick_group).fillna("unknown")
+        else:
+            out["fitzpatrick"] = "unknown"
+            out["fitzpatrick_group"] = "unknown"
+
+        image_index = self._build_image_index(dataset_dir, cfg)
+        image_cols = [c for c in cfg.get("image_path_columns", []) if c in out.columns]
+        out["image_path"] = out.apply(
+            lambda row: self._scin_resolve_image(row, image_cols, image_index), axis=1
+        )
+        missing_mask = out["image_path"].isna()
+        report = {
+            "dataset": dataset_name,
+            "metadata_rows": int(len(out)),
+            "image_files_indexed": int(len(image_index)),
+            "found_images": int((~missing_mask).sum()),
+            "missing_images": int(missing_mask.sum()),
+            "missing_image_ids": out.loc[missing_mask, join_key].astype(str).head(50).tolist(),
+            "layout_patterns": cfg.get("image_globs", ["images/*.png", "images/*/*.png"]),
+        }
+        self.last_image_reports[dataset_name] = report
+        if missing_mask.any():
+            logging.warning(
+                "%s: filtering %d cases with missing images", dataset_name, int(missing_mask.sum())
+            )
+            out = out[~missing_mask].copy()
+
+        out["patient_id"] = out[join_key].astype(str)
+        out["lesion_id"] = out["patient_id"]
+
+        return out.reset_index(drop=True)
+
+    @staticmethod
+    def _scin_top_condition(value: Any) -> str | None:
+        """Top-1 (highest-weight) condition name from a stringified weight dict."""
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return None
+        try:
+            weights = ast.literal_eval(value) if isinstance(value, str) else value
+        except (ValueError, SyntaxError):
+            return None
+        if not isinstance(weights, dict) or not weights:
+            return None
+        numeric = {k: v for k, v in weights.items() if isinstance(v, (int, float))}
+        if not numeric:
+            return None
+        return str(max(numeric, key=numeric.get))
+
+    @staticmethod
+    def _scin_is_cancer(name: str | None, positives: list[str]) -> int | None:
+        if name is None:
+            return None
+        lowered = name.lower()
+        return 1 if any(sub in lowered for sub in positives) else 0
+
+    @staticmethod
+    def _scin_age_group(value: Any) -> str:
+        """Normalize SCIN ``AGE_18_TO_29`` style tokens to a readable bucket."""
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return "unknown"
+        token = str(value).strip().upper()
+        if not token or "UNKNOWN" in token:
+            return "unknown"
+        token = token.removeprefix("AGE_")
+        return token.replace("_TO_", "-").replace("_", "-").lower()
+
+    @staticmethod
+    def _scin_fst_numeric(value: Any) -> float:
+        """Map ``FST3`` / ``3`` style Fitzpatrick codes to a numeric 1-6."""
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return float("nan")
+        token = str(value).strip().upper().replace("FST", "").replace("TYPE", "").strip()
+        try:
+            return float(token)
+        except ValueError:
+            return float("nan")
+
+    @staticmethod
+    def _scin_resolve_image(
+        row: pd.Series, image_cols: list[str], image_index: dict[str, str]
+    ) -> str | None:
+        """First non-null image_*_path whose basename resolves to a real file."""
+        for col in image_cols:
+            raw = row.get(col)
+            if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+                continue
+            basename = Path(str(raw)).name
+            resolved = image_index.get(basename)
+            if resolved:
+                return resolved
+        return None
 
     def _build_image_index(self, dataset_dir: Path, cfg: dict[str, Any]) -> dict[str, str]:
         globs = cfg.get("image_globs") or ["images/*.png", "images/imgs_part_*/*.png"]
