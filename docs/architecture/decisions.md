@@ -102,6 +102,40 @@ subgroups never silently inflate a fairness delta. Mitigation for images, if
 added, is post-processing only (`ThresholdOptimizer` on saved probabilities);
 pre/in-processing for CNNs is explicitly out of scope.
 
+### SCIN Is Profiling-Only With An Approximate Target
+
+SCIN (`configs/schema/dermatology.json` → `scin`, loaded by
+`DermatologyDataLoader._standardize_scin`) is a **schema-generalization +
+fairness-profiling** dataset, not a second skin-cancer training set (only 25
+malignant top-1 cases out of 3061 loaded locally). It proves the config-driven pipeline absorbs a
+different schema — two CSVs joined on `case_id`, pre-binned native `age_group`,
+`FST1..FST6` Fitzpatrick, multi-image cases, and a weighted-condition-dict label
+— through the same `load → profile → recommend` stages with no pipeline rewrite.
+
+Key decisions:
+- **Scope**: profiling-only, **case-level** (one row per `case_id`, no image
+  explode, no split, no training). Opt-in via `--datasets scin`; not in the
+  default `runtime.datasets`, so default PAD runs are unchanged. Gradability
+  training (review Step 6) stays deferred.
+- **Approximate target**: `skin_cancer` = top-1 (highest-weight) condition from
+  `weighted_skin_condition_label` mapped against a curated cancer-like substring
+  set (`positive_label_substrings` in the schema). This is an approximate label
+  for complexity/triage profiling only and must not be presented as a trained
+  diagnostic. The substring set was finalized against the real 211-name label
+  vocabulary — `melanoma`, `carcinoma`, `basal cell`, `squamous cell`, `scc`,
+  `lymphoma`, `sarcoma`, `metastasis` — yielding 25 malignant positives (SCC/SCCIS
+  8, BCC 6, cutaneous lymphoma 7, Kaposi's sarcoma 2, metastasis 1, melanoma 1).
+  Premalignant Actinic Keratosis is treated as negative, consistent with PAD's
+  `ACK` → negative mapping. The set stays config-driven for future tuning.
+- **Recommend stage honors `--datasets`**: `scripts/common/generate_recommendations.py`
+  globs every `*_standardized.csv` on disk, so a `--datasets scin` run previously
+  also emitted a stale `pad_ufes_20` triage. It now accepts a `--datasets` filter
+  (passed through from the pipeline shell) so the recommend phase is scoped like
+  every other phase; default (no flag) still processes all standardized datasets.
+- **`case_id` excluded from complexity**: it is a large signed integer key; left
+  in, it would dominate distance-based complexity metrics. Added to
+  `_COMPLEXITY_EXCLUDE_COLS` alongside `year`/`release`.
+
 ## Related
 
 - Module map: [modules.md](modules.md)
