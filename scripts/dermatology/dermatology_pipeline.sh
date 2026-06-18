@@ -220,7 +220,7 @@ fi
 if should_run 3; then
     if [[ "$RUN_RECOMMENDATIONS" == "true" ]]; then
         echo "[PHASE 3/7] Generating recommendations"
-        "$PYTHON" "$ROOT_DIR/scripts/dermatology/generate_recommendations.py" --run-id "$RUN_ID" $VERBOSE_FLAG
+        "$PYTHON" "$ROOT_DIR/scripts/dermatology/generate_recommendations.py" "${DATASET_ARGS[@]}" --run-id "$RUN_ID" $VERBOSE_FLAG
     else
         echo "[3/7] recommend - SKIPPED (disabled)"
     fi

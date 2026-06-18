@@ -40,6 +40,55 @@
           }
         }
       }
+    },
+    "scin": {
+      "standardizer": "scin",
+      "metadata_filename": "scin_cases.csv",
+      "labels_filename": "scin_labels.csv",
+      "join_key": "case_id",
+      "relative_dir": "scin/dataset",
+      "source": "SCIN",
+      "label": "weighted_skin_condition_label",
+      "target": "weighted_skin_condition_label",
+      "target_standardized": "skin_cancer",
+      "weighted_label_column": "weighted_skin_condition_label",
+      "positive_label_substrings": [
+        "melanoma",
+        "carcinoma",
+        "basal cell",
+        "squamous cell",
+        "scc",
+        "lymphoma",
+        "sarcoma",
+        "metastasis"
+      ],
+      "image_path_columns": ["image_1_path", "image_2_path", "image_3_path"],
+      "image_globs": ["images/*.png", "images/*/*.png"],
+      "age_group_column": "age_group",
+      "sex_column": "sex_at_birth",
+      "fitzpatrick_column": "fitzpatrick_skin_type",
+      "include_features": [],
+      "exclude_features": ["weighted_skin_condition_label"],
+      "sensitive_attributes": {
+        "age_group": {
+          "type": "categorical"
+        },
+        "sex_at_birth": {
+          "type": "categorical",
+          "mapping": {
+            "FEMALE": "Female",
+            "MALE": "Male"
+          }
+        },
+        "fitzpatrick_skin_type": {
+          "type": "ordinal",
+          "groups": {
+            "I-II": [1, 2],
+            "III-IV": [3, 4],
+            "V-VI": [5, 6]
+          }
+        }
+      }
     }
   },
   "unified_schema": {

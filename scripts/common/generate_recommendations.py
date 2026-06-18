@@ -55,6 +55,12 @@ def main():
         default=os.getenv("RUN_ID"),
         help="Run identifier (optional, enables run-scoped outputs)",
     )
+    parser.add_argument(
+        "--datasets",
+        type=str,
+        nargs="+",
+        help="Restrict pipeline mode to these dataset keys (default: all standardized datasets)",
+    )
 
     # Ad-hoc CSV mode
     parser.add_argument("--csv", type=str, help="Path to a CSV file (ad-hoc mode)")
@@ -235,6 +241,19 @@ def _process_pipeline_datasets(engine, project_root, pipeline, args, output_dir)
     )
 
     dataset_files = sorted(data_raw.glob("*_standardized.csv"))
+
+    requested = getattr(args, "datasets", None)
+    if requested:
+        wanted = set(requested)
+        dataset_files = [
+            fp for fp in dataset_files if fp.stem.replace("_standardized", "") in wanted
+        ]
+        missing = wanted - {fp.stem.replace("_standardized", "") for fp in dataset_files}
+        if missing:
+            logging.warning(
+                "Requested dataset(s) with no standardized CSV (skipped): %s",
+                ", ".join(sorted(missing)),
+            )
 
     if not dataset_files:
         logging.error(f"No standardized datasets found in {data_raw}")

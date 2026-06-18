@@ -31,6 +31,12 @@ _COMPLEXITY_EXCLUDE_COLS: list[str] = [
     "lesion_id",
     "diagnostic",
     "diagnostic_label",
+    # SCIN-specific metadata: case_id is a large signed integer key (would
+    # dominate distance-based complexity metrics); year/release are dataset
+    # provenance, not lesion features.
+    "case_id",
+    "year",
+    "release",
 ]
 
 
@@ -72,6 +78,12 @@ class DataProfiler:
         numeric_cols = prepared.select_dtypes(include="number").columns
         for col in numeric_cols:
             if col == target or not prepared[col].isna().any():
+                continue
+            # All-NaN columns have no median
+            # (numpy [through pandas] would warn "Mean of empty slice");
+            # fill with 0 directly and skip the empty reduction.
+            if prepared[col].isna().all():
+                prepared[col] = prepared[col].fillna(0)
                 continue
             fill_value = prepared[col].median()
             if pd.isna(fill_value):
