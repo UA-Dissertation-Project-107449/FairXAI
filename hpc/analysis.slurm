@@ -4,9 +4,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --partition=gpu
-#SBATCH --gres=gpu:nvidia-rtx-a2000
-#SBATCH --mem=10G
+#SBATCH --partition=cpu
+#SBATCH --mem=8G
 #SBATCH --time=01:00:00
 #
 # FairXAI optional / post-hoc analysis SLURM job: binning, clustering, or triage.
@@ -29,7 +28,7 @@ set -euo pipefail
 : "${RESULT_FILE:?RESULT_FILE is required}"
 : "${TARGET_COLUMN:?TARGET_COLUMN is required}"
 
-HPC_MODULES="${HPC_MODULES:-python/3.11.7 cuda/12.4.0}"
+HPC_MODULES="${HPC_MODULES:-python/3.11.7}"
 if command -v module >/dev/null 2>&1; then
     # shellcheck disable=SC2086
     module load $HPC_MODULES
