@@ -22,6 +22,7 @@ from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
+from sklearn.base import BaseEstimator, ClassifierMixin
 
 from .image_assessment import assess_predictions_frame, decode_groups
 from .mitigation import PostProcessingMitigation
@@ -40,13 +41,18 @@ DEFAULT_OBJECTIVE = "balanced_accuracy_score"
 DEFAULT_MIN_GROUP_SAMPLES = 50
 
 
-class _PrecomputedScoreEstimator:
+class _PrecomputedScoreEstimator(ClassifierMixin, BaseEstimator):
     """Minimal sklearn-style wrapper exposing stored positive-class scores.
 
     Lets fairlearn's ``ThresholdOptimizer`` (``prefit=True``) operate model-free on
     saved probabilities. The single input column is the positive-class probability;
     ``predict_proba`` returns the 2-column form fairlearn expects, ``predict``
     thresholds at 0.5.
+
+    Subclasses ``BaseEstimator``/``ClassifierMixin`` so it exposes
+    ``__sklearn_tags__`` (required by scikit-learn >= 1.6, which fairlearn calls on
+    the prefit estimator); without it CI on newer sklearn raises
+    ``'_PrecomputedScoreEstimator' object has no attribute '__sklearn_tags__'``.
     """
 
     def __init__(self) -> None:
