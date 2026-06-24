@@ -18,14 +18,14 @@ training:
   modality: image
   target: skin_cancer
   model: resnet18
-  model_types: [resnet18, mobilenet_v3_large, efficientnet_b0]
+  model_types: [resnet18, mobilenet_v3_large, efficientnet_b0, densenet121]
   training_methods: [single_split]
   thresholds: [0.5]
   use_hpo: false
   image:
     image_column: image_path
     device: auto      # auto probes cuda -> rocm -> cpu
-    epochs: 5
+    epochs: 50        # Epoch cap, not a target (early stopping decides the real length per model)
     batch_size: 32
     learning_rate: 0.0003
     image_size: 224
@@ -35,6 +35,15 @@ training:
     # Frozen-backbone speedup: extract features once, train only the head over them.
     # ON by default for frozen baselines; standard path used automatically when backbone unfrozen
     cache_frozen_features: true
+    # Train to convergence instead of a fixed epoch count. A stratified validation
+    # slice is carved from train (row-stratified, not patient-grouped — it never feeds
+    # the reported test metric); best-val_auc weights are restored on stop.
+    early_stopping:
+      enabled: true
+      monitor: val_auc
+      patience: 5
+      min_delta: 0.001
+      val_fraction: 0.15
 
 profiling:
   # Stage 2 (profile): extra sensitive attributes profiled where present but kept
@@ -49,6 +58,9 @@ fairness:
   # group-fairness metrics and reported under skipped_groups (avoids claims on
   # tiny cells, e.g. PAD Fitzpatrick V-VI). Override per run with --min-group-samples.
   min_group_samples: 50
+  # Stage 8 (assess): render subgroup-performance heatmaps (and per-view intersection
+  # figures when group_views is enabled) from the saved per-group metrics. No retraining.
+  figures: true
   group_views:
     # Stage 8 add-on: recompute fairness over post-hoc subgroup definitions from
     # saved prediction CSVs. No retraining; canonical fairness_report.json is unchanged.
@@ -93,6 +105,8 @@ mitigation:
   enabled: true
   objective: balanced_accuracy_score
   min_group_samples: 50
+  # Render baseline-vs-mitigated fairness-delta figures per attribute x constraint.
+  figures: true
   # Defaults to fairness.sensitive_attributes when omitted.
   sensitive_attributes: [age_group, sex, fitzpatrick_group]
   constraints:
