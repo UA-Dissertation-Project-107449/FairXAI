@@ -67,6 +67,7 @@
       "age_group_column": "age_group",
       "sex_column": "sex_at_birth",
       "fitzpatrick_column": "fitzpatrick_skin_type",
+      "combined_race_column": "combined_race",
       "include_features": [],
       "exclude_features": ["weighted_skin_condition_label"],
       "sensitive_attributes": {
@@ -87,6 +88,10 @@
             "III-IV": [3, 4],
             "V-VI": [5, 6]
           }
+        },
+        "race_group": {
+          "type": "categorical",
+          "note": "Profiling-only audit attribute from combined_race (~47% missing). SCIN-specific; PAD has no race."
         }
       }
     }

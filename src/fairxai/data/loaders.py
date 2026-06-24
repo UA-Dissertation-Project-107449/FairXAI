@@ -555,6 +555,14 @@ class DermatologyDataLoader:
             out["fitzpatrick"] = "unknown"
             out["fitzpatrick_group"] = "unknown"
 
+        race_col = cfg.get("combined_race_column", "combined_race")
+        if race_col in out.columns:
+            out["race_raw"] = out[race_col]
+            out["race_group"] = out[race_col].map(self._scin_race_group)
+        else:
+            out["race_raw"] = pd.NA
+            out["race_group"] = "unknown"
+
         image_index = self._build_image_index(dataset_dir, cfg)
         image_cols = [c for c in cfg.get("image_path_columns", []) if c in out.columns]
         out["image_path"] = out.apply(
@@ -667,6 +675,30 @@ class DermatologyDataLoader:
         if value <= 4:
             return "III-IV"
         return "V-VI"
+
+    @staticmethod
+    def _scin_race_group(value: Any) -> str:
+        """Collapse SCIN ``combined_race`` to a single readable group.
+
+        SCIN's own column already collapses the 11 ``race_ethnicity_*`` one-hots
+        (only ``combined_race`` is ingested). NaN/empty -> ``unknown``;
+        ``PREFER_NOT_TO_ANSWER`` kept as its own bucket (declining is itself
+        informative); any multi-race (comma-joined, or the explicit
+        ``TWO_OR_MORE_AFTER_MITIGATION`` token) -> ``Multiple``; a single race
+        token is title-cased (``BLACK_OR_AFRICAN_AMERICAN`` -> ``Black Or African
+        American``).
+        """
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return "unknown"
+        token = str(value).strip()
+        if not token or token.lower() in {"nan", "none"}:
+            return "unknown"
+        upper = token.upper()
+        if upper == "PREFER_NOT_TO_ANSWER":
+            return "prefer_not_to_answer"
+        if "," in token or upper == "TWO_OR_MORE_AFTER_MITIGATION":
+            return "Multiple"
+        return token.replace("_", " ").title()
 
 
 def get_dataset_summary(df: pd.DataFrame, dataset_name: str) -> dict[str, object]:

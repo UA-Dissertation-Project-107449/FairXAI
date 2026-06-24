@@ -91,6 +91,13 @@ def main():
     sensitive_attrs = pipeline_cfg.get("fairness", {}).get(
         "sensitive_attributes", ["age_group", "sex"]
     )
+    # Profiling-only sensitive attributes present in some datasets but not all
+    # (e.g. SCIN race_group, absent from PAD). Kept out of fairness.sensitive_attributes
+    # so prediction-stage assess/mitigate do not iterate columns that never exist there;
+    # the profiler guards per-dataframe column presence. Backwards-compatible: configs
+    # without this key are unchanged.
+    extra_sensitive = pipeline_cfg.get("profiling", {}).get("extra_sensitive_attributes", [])
+    sensitive_attrs = list(dict.fromkeys([*sensitive_attrs, *extra_sensitive]))
     profiler = DataProfiler(sensitive_attrs=sensitive_attrs)
 
     # Find all standardized datasets

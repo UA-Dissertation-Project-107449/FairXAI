@@ -75,6 +75,7 @@ def _write_scin_fixture(root: Path) -> Path:
             "age_group": "AGE_40_TO_49",
             "sex_at_birth": "MALE",
             "fitzpatrick_skin_type": "FST5",
+            "combined_race": "BLACK_OR_AFRICAN_AMERICAN",
             "image_1_path": "dataset/images/h1.png",
             "image_2_path": "",
             "image_3_path": "",
@@ -85,6 +86,8 @@ def _write_scin_fixture(root: Path) -> Path:
             "age_group": "AGE_18_TO_29",
             "sex_at_birth": "FEMALE",
             "fitzpatrick_skin_type": "FST2",
+            # Multi-race comma value -> collapsed to "Multiple".
+            "combined_race": "HISPANIC_LATINO_OR_SPANISH_ORIGIN,WHITE",
             # First image path empty -> loader falls back to image_2_path.
             "image_1_path": "",
             "image_2_path": "dataset/images/h2.png",
@@ -96,6 +99,8 @@ def _write_scin_fixture(root: Path) -> Path:
             "age_group": "AGE_UNKNOWN",
             "sex_at_birth": "OTHER_OR_UNSPECIFIED",
             "fitzpatrick_skin_type": "",
+            # Empty race -> "unknown" (missingness is informative in SCIN).
+            "combined_race": "",
             "image_1_path": "dataset/images/h3.png",
             "image_2_path": "",
             "image_3_path": "",
@@ -137,6 +142,7 @@ def _write_scin_schema(path: Path) -> Path:
                 "age_group_column": "age_group",
                 "sex_column": "sex_at_birth",
                 "fitzpatrick_column": "fitzpatrick_skin_type",
+                "combined_race_column": "combined_race",
             }
         },
         "dermatology_relevant_datasets": ["scin"],
@@ -162,6 +168,9 @@ def test_scin_loader_joins_labels_and_standardizes(tmp_path: Path) -> None:
     assert df["sex"].tolist() == [1, 0, -1]
     assert df["fitzpatrick_group"].tolist() == ["V-VI", "I-II", "unknown"]
     assert df["age_group"].tolist() == ["40-49", "18-29", "unknown"]
+    # combined_race collapsed to a single readable group (multi-race -> Multiple,
+    # empty -> unknown). Only combined_race is ingested (not the 11 one-hots).
+    assert df["race_group"].tolist() == ["Black Or African American", "Multiple", "unknown"]
     # Image falls back across image_1/2/3 columns and resolves to real files.
     assert df["image_path"].map(Path).map(Path.exists).all()
     assert loader.last_image_reports["scin"]["missing_images"] == 0
@@ -180,6 +189,31 @@ def test_scin_profile_excludes_case_id_and_runs(tmp_path: Path) -> None:
     assert "complexity_metrics" in profile
     # case_id must not leak into the model feature set / complexity inputs.
     assert "case_id" in df.columns  # survives standardization as raw column
+
+
+def test_scin_profile_reports_race_group_distribution(tmp_path: Path) -> None:
+    _write_scin_fixture(tmp_path)
+    schema_path = _write_scin_schema(tmp_path / "dermatology.json")
+    loader = DermatologyDataLoader(str(schema_path))
+    df = loader.load_dataset("scin", str(tmp_path))
+
+    # race_group is profiled when supplied (profiling-only audit attr).
+    profiler = DataProfiler(sensitive_attrs=["age_group", "sex", "race_group"])
+    profile = profiler.profile_dataset(df, target="skin_cancer", dataset_name="scin")
+    race_dist = profile["sensitive_attr_distribution"]["race_group"]["counts"]
+    assert set(race_dist) == {"Black Or African American", "Multiple", "unknown"}
+
+
+def test_scin_race_group_helper_covers_all_branches() -> None:
+    fn = DermatologyDataLoader._scin_race_group
+    assert fn("WHITE") == "White"
+    assert fn("AMERICAN_INDIAN_OR_ALASKA_NATIVE") == "American Indian Or Alaska Native"
+    assert fn("HISPANIC_LATINO_OR_SPANISH_ORIGIN,WHITE") == "Multiple"
+    assert fn("TWO_OR_MORE_AFTER_MITIGATION") == "Multiple"
+    assert fn("PREFER_NOT_TO_ANSWER") == "prefer_not_to_answer"
+    assert fn("") == "unknown"
+    assert fn(float("nan")) == "unknown"
+    assert fn(None) == "unknown"
 
 
 def test_pad_loader_maps_target_and_resolves_split_images(tmp_path: Path) -> None:
