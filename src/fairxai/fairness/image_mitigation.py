@@ -335,6 +335,17 @@ def render_markdown(reports: dict[str, dict[str, Any]]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _render_figures(reports: dict[str, dict[str, Any]], out_dir: Path, attrs: list[str]) -> None:
+    """Delegate before/after figure rendering to viz (matplotlib imported only here)."""
+    try:
+        from fairxai.viz.dermatology_mitigation import render_mitigation_figures
+    except ImportError as exc:
+        logger.warning("Skipping dermatology mitigation figures (viz/matplotlib): %s", exc)
+        return
+    rows = _flatten_for_csv(reports).to_dict("records")
+    render_mitigation_figures(rows, out_dir, attrs=attrs)
+
+
 def mitigate_run(
     run_root: Path,
     sensitive_attrs: list[str],
@@ -345,11 +356,13 @@ def mitigate_run(
     datasets: Optional[list[str]] = None,
     model_types: Optional[list[str]] = None,
     random_state: int = 42,
+    write_figures: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Mitigate every baseline prediction pair in *run_root* and write reports.
 
     Outputs land in ``<run_root>/baseline/mitigation/``: ``mitigation_report.json``,
-    ``mitigation_report.md``, ``mitigation_groups.csv``.
+    ``mitigation_report.md``, ``mitigation_groups.csv`` (and ``figures/`` when
+    *write_figures*).
     """
     results_dir = run_root / "baseline" / "results"
     discovered = _discover_prediction_pairs(results_dir, datasets, model_types)
@@ -378,6 +391,8 @@ def mitigate_run(
     )
     (out_dir / "mitigation_report.md").write_text(render_markdown(reports))
     _flatten_for_csv(reports).to_csv(out_dir / "mitigation_groups.csv", index=False)
+    if write_figures and reports:
+        _render_figures(reports, out_dir, sensitive_attrs)
     logger.info("Wrote mitigation report to %s", out_dir)
     return reports
 

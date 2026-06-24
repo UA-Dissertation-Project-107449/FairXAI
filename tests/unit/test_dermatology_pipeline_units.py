@@ -456,7 +456,7 @@ def test_train_head_reduces_loss_on_separable_features() -> None:
     optimizer = torch.optim.AdamW(head.parameters(), lr=0.05)
     device = torch.device("cpu")
 
-    history, total_time = _train_head(
+    history, total_time, summary = _train_head(
         head,
         features,
         labels,
@@ -472,6 +472,9 @@ def test_train_head_reduces_loss_on_separable_features() -> None:
     assert len(history) == 30
     assert history[-1]["train_loss"] < history[0]["train_loss"]
     assert total_time >= 0.0
+    # Early stopping defaults off, so all epochs run and no validation is computed.
+    assert summary["early_stopped"] is False
+    assert summary["epochs_run"] == 30
 
     scores = _head_scores(head, features, device, torch)
     assert len(scores) == n

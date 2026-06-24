@@ -90,6 +90,23 @@ must be testable without GPU/checkpoints; the orchestration is pipeline glue.
 Keeping them separate also lets the assessment/figures stages consume the
 heatmap fns without inheriting the driver's I/O assumptions.
 
+### Frozen-Head Training Uses Early Stopping, Not A Fixed Epoch Count
+
+Image baselines train a linear head over once-cached frozen-backbone features
+(`training/vision.py`), so epochs are cheap but a fixed count is the wrong knob — a
+linear head converges in a few epochs. `epochs` is therefore a **cap** (config 50)
+and training stops via patience-based early stopping on validation AUC (fallback
+`-val_loss` when a slice is single-class), restoring the best-AUC weights. The
+validation slice is carved **from train**, row-stratified (not patient-grouped); it
+drives stopping only and never feeds the reported **test** metric, which keeps the
+upstream patient-grouped split. The same logic mirrors into the non-cached
+full-model path. `epochs_run`/`best_epoch`/`early_stopped` and per-epoch
+`val_loss`/`val_auc` are recorded in the metrics JSON and surfaced as
+`model_comparison.csv` columns + a stage-9 learning-curve figure, so "trained to
+convergence" is a checkable claim, not an assertion. This is a deliberate override
+of the review doc's fixed `epochs: 5`; everything else (AdamW, lr, image_size 224,
+frozen backbone, one split, one seed) stays fixed so it remains a single-axis study.
+
 ### Image Fairness Is Post-Prediction Only (No Retrain)
 
 Dermatology fairness (`fairness/image_assessment.py`) scores from a saved

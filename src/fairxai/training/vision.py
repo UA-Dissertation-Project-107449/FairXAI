@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import time
@@ -221,6 +222,135 @@ def _extract_features(
     return torch.cat(feats, dim=0), labels, row_indices
 
 
+class _EarlyStopper:
+    """Patience-based early stopping with best-weight restoration.
+
+    Monitors a single "higher is better" score: validation AUC when defined, else
+    ``-val_loss`` (so a degenerate single-class validation slice falls back to loss
+    without changing the comparison direction). The caller supplies a no-arg
+    ``state_provider`` returning the module ``state_dict`` to snapshot at each new best.
+    """
+
+    def __init__(self, patience: int, min_delta: float, enabled: bool):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.enabled = enabled
+        self.best_score = float("-inf")
+        self.best_epoch = 0
+        self.best_state: Any = None
+        self.num_bad = 0
+        self.stopped = False
+
+    @staticmethod
+    def score(val_loss: Any, val_auc: Any) -> Any:
+        if val_auc is not None:
+            return float(val_auc)
+        if val_loss is not None:
+            return -float(val_loss)
+        return None
+
+    def update(self, epoch: int, val_loss: Any, val_auc: Any, state_provider: Any) -> bool:
+        """Record this epoch's validation score; return True when training should stop."""
+        if not self.enabled:
+            return False
+        current = self.score(val_loss, val_auc)
+        if current is None:
+            return False
+        if current > self.best_score + self.min_delta:
+            self.best_score = current
+            self.best_epoch = epoch
+            self.best_state = copy.deepcopy(state_provider())
+            self.num_bad = 0
+        else:
+            self.num_bad += 1
+            if self.num_bad >= self.patience:
+                self.stopped = True
+        return self.stopped
+
+
+def _stratified_split_indices(
+    labels: Any, val_fraction: float, torch: Any, seed: int
+) -> tuple[Any, Any]:
+    """Split row indices into (train, val) keeping per-class proportions.
+
+    Row-stratified only (not patient-grouped): this internal validation slice drives
+    early stopping during fit and never feeds the reported test metric, which keeps
+    the upstream patient-grouped split.
+    """
+    gen = torch.Generator().manual_seed(seed)
+    label_list = [int(v) for v in labels.tolist()]
+    train_parts: list[Any] = []
+    val_parts: list[Any] = []
+    for cls in sorted(set(label_list)):
+        cls_idx = torch.tensor([i for i, v in enumerate(label_list) if v == cls], dtype=torch.long)
+        perm = cls_idx[torch.randperm(cls_idx.numel(), generator=gen)]
+        total = perm.numel()
+        if total <= 1:
+            train_parts.append(perm)  # too few to validate on; keep for fitting
+            continue
+        n_val = int(round(total * val_fraction))
+        n_val = min(max(n_val, 1), total - 1)  # keep both sides non-empty
+        val_parts.append(perm[:n_val])
+        train_parts.append(perm[n_val:])
+    empty = torch.tensor([], dtype=torch.long)
+    train_idx = torch.cat(train_parts) if train_parts else empty
+    val_idx = torch.cat(val_parts) if val_parts else empty
+    return train_idx.long(), val_idx.long()
+
+
+def _evaluate_head(
+    head: Any, features: Any, labels: Any, criterion: Any, device: Any, torch: Any, batch_size: int
+) -> tuple[float, Any]:
+    """Validation loss + AUC for a linear head over cached features (AUC None if degenerate)."""
+    head.eval()
+    total_loss = 0.0
+    total_seen = 0
+    probs: list[float] = []
+    with torch.no_grad():
+        for start in range(0, features.size(0), batch_size):
+            xb = features[start : start + batch_size].to(device)
+            yb = labels[start : start + batch_size].to(device)
+            logits = head(xb)
+            loss = criterion(logits, yb)
+            total_loss += float(loss.item()) * int(yb.size(0))
+            total_seen += int(yb.size(0))
+            probs.extend(float(p) for p in torch.softmax(logits, dim=1)[:, 1].cpu().tolist())
+    val_loss = total_loss / max(total_seen, 1)
+    y_true = [int(v) for v in labels.tolist()]
+    try:
+        val_auc: Any = float(roc_auc_score(y_true, probs))
+    except ValueError:
+        val_auc = None
+    return val_loss, val_auc
+
+
+def _evaluate_model(
+    model: Any, loader: Any, criterion: Any, device: Any, torch: Any
+) -> tuple[float, Any]:
+    """Validation loss + AUC for the full model over a loader (AUC None if degenerate)."""
+    model.eval()
+    total_loss = 0.0
+    total_seen = 0
+    probs: list[float] = []
+    y_true: list[int] = []
+    with torch.no_grad():
+        for images, labels, _ in loader:
+            images = images.to(device)
+            labels = labels.to(device)
+            logits = model(images)
+            loss = criterion(logits, labels)
+            total_loss += float(loss.item()) * int(labels.size(0))
+            total_seen += int(labels.size(0))
+            probs.extend(float(p) for p in torch.softmax(logits, dim=1)[:, 1].cpu().tolist())
+            y_true.extend(int(v) for v in labels.cpu().tolist())
+    val_loss = total_loss / max(total_seen, 1)
+    try:
+        val_auc: Any = float(roc_auc_score(y_true, probs))
+    except ValueError:
+        val_auc = None
+    return val_loss, val_auc
+
+
 def _train_head(
     head: Any,
     features: Any,
@@ -233,22 +363,52 @@ def _train_head(
     device: Any,
     torch: Any,
     random_state: int,
-) -> tuple[list[dict[str, Any]], float]:
-    """Train a linear head over cached features. No image decode, no backbone forward."""
-    head.train()
-    n = features.size(0)
+    early_stopping: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], float, dict[str, Any]]:
+    """Train a linear head over cached features. No image decode, no backbone forward.
+
+    When ``early_stopping['enabled']`` is True, a stratified validation slice is carved
+    from the cached features; ``epochs`` becomes a cap and the best-AUC head weights are
+    restored on stop. Returns ``(history, train_time_seconds, summary)`` where ``summary``
+    carries ``epochs_run``/``best_epoch``/``early_stopped``.
+    """
+    es_cfg = early_stopping or {}
+    es_enabled = bool(es_cfg.get("enabled", False))
+    patience = int(es_cfg.get("patience", 5))
+    min_delta = float(es_cfg.get("min_delta", 0.0))
+    val_fraction = float(es_cfg.get("val_fraction", 0.15))
+
+    val_features = val_labels = None
+    if es_enabled and val_fraction > 0:
+        train_idx, val_idx = _stratified_split_indices(labels, val_fraction, torch, random_state)
+        if val_idx.numel() > 0 and train_idx.numel() > 0:
+            val_features = features[val_idx]
+            val_labels = labels[val_idx]
+            fit_features = features[train_idx]
+            fit_labels = labels[train_idx]
+        else:  # too few rows to validate on; fall back to plain training
+            es_enabled = False
+            fit_features, fit_labels = features, labels
+    else:
+        es_enabled = False
+        fit_features, fit_labels = features, labels
+
+    stopper = _EarlyStopper(patience, min_delta, es_enabled)
     generator = torch.Generator().manual_seed(random_state)
     history: list[dict[str, Any]] = []
     train_start = time.perf_counter()
+    m = fit_features.size(0)
+    epochs_run = 0
     for epoch in range(epochs):
         epoch_start = time.perf_counter()
-        perm = torch.randperm(n, generator=generator)
+        head.train()
+        perm = torch.randperm(m, generator=generator)
         total_loss = 0.0
         total_seen = 0
-        for start in range(0, n, batch_size):
+        for start in range(0, m, batch_size):
             idx = perm[start : start + batch_size]
-            xb = features[idx].to(device)
-            yb = labels[idx].to(device)
+            xb = fit_features[idx].to(device)
+            yb = fit_labels[idx].to(device)
             optimizer.zero_grad(set_to_none=True)
             logits = head(xb)
             loss = criterion(logits, yb)
@@ -256,14 +416,32 @@ def _train_head(
             optimizer.step()
             total_loss += float(loss.item()) * int(yb.size(0))
             total_seen += int(yb.size(0))
+        val_loss = val_auc = None
+        if val_features is not None:
+            val_loss, val_auc = _evaluate_head(
+                head, val_features, val_labels, criterion, device, torch, batch_size
+            )
         history.append(
             {
                 "epoch": epoch + 1,
                 "train_loss": total_loss / max(total_seen, 1),
+                "val_loss": val_loss,
+                "val_auc": val_auc,
                 "epoch_time_seconds": time.perf_counter() - epoch_start,
             }
         )
-    return history, time.perf_counter() - train_start
+        epochs_run = epoch + 1
+        if stopper.update(epoch + 1, val_loss, val_auc, head.state_dict):
+            break
+
+    if stopper.best_state is not None:
+        head.load_state_dict(stopper.best_state)  # restore best-AUC weights
+    summary = {
+        "epochs_run": epochs_run,
+        "best_epoch": stopper.best_epoch if stopper.best_state is not None else epochs_run,
+        "early_stopped": stopper.stopped,
+    }
+    return history, time.perf_counter() - train_start, summary
 
 
 def _head_scores(
@@ -305,6 +483,7 @@ def train_image_baseline(
     num_workers: int = 0,
     random_state: int = 42,
     cache_frozen_features: bool = True,
+    early_stopping: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Train one image baseline and persist model, predictions, metrics.
 
@@ -416,7 +595,7 @@ def train_image_baseline(
         feature_extraction_time_seconds = time.perf_counter() - extract_start
         head = head.to(device)
         optimizer = torch.optim.AdamW(head.parameters(), lr=learning_rate)
-        history, head_train_time_seconds = _train_head(
+        history, head_train_time_seconds, train_summary = _train_head(
             head,
             train_features,
             torch.tensor(train_labels, dtype=torch.long),
@@ -427,17 +606,27 @@ def train_image_baseline(
             device=device,
             torch=torch,
             random_state=random_state,
+            early_stopping=early_stopping,
         )
         # Total wall time = one-off feature extraction + head training, so cache-path
         # speedup numbers do not under-report the real cost.
         train_time_seconds = feature_extraction_time_seconds + head_train_time_seconds
         for entry in history:
             logger.info(
-                "  epoch=%d/%d train_loss=%.4f epoch_time=%.2fs",
+                "  epoch=%d/%d train_loss=%.4f val_loss=%s val_auc=%s epoch_time=%.2fs",
                 entry["epoch"],
                 epochs,
                 entry["train_loss"],
+                _fmt_metric(entry.get("val_loss")),
+                _fmt_metric(entry.get("val_auc")),
                 entry["epoch_time_seconds"],
+            )
+        if train_summary["early_stopped"]:
+            logger.info(
+                "  early-stopped at epoch=%d/%d best_epoch=%d",
+                train_summary["epochs_run"],
+                epochs,
+                train_summary["best_epoch"],
             )
         train_predictions, train_metrics = _build_predictions_df(
             train_labels,
@@ -463,14 +652,49 @@ def train_image_baseline(
             lr=learning_rate,
         )
 
+        es_cfg = early_stopping or {}
+        es_enabled = bool(es_cfg.get("enabled", False))
+        es_patience = int(es_cfg.get("patience", 5))
+        es_min_delta = float(es_cfg.get("min_delta", 0.0))
+        es_val_fraction = float(es_cfg.get("val_fraction", 0.15))
+
+        # Carve a stratified validation slice for monitoring; the full train_loader is
+        # still used afterwards to emit the train-prediction CSV downstream stages need.
+        fit_loader = train_loader
+        val_loader_es = None
+        if es_enabled and es_val_fraction > 0:
+            from torch.utils.data import Subset  # type: ignore
+
+            targets = torch.tensor(train_dataset.df[target_col].astype(int).tolist())
+            tr_idx, va_idx = _stratified_split_indices(
+                targets, es_val_fraction, torch, random_state
+            )
+            if va_idx.numel() > 0 and tr_idx.numel() > 0:
+                fit_loader = DataLoader(
+                    Subset(train_dataset, tr_idx.tolist()),
+                    batch_size=batch_size,
+                    shuffle=True,
+                    **loader_kwargs,
+                )
+                val_loader_es = DataLoader(
+                    Subset(train_dataset, va_idx.tolist()),
+                    batch_size=batch_size,
+                    shuffle=False,
+                    **loader_kwargs,
+                )
+            else:
+                es_enabled = False
+
+        stopper = _EarlyStopper(es_patience, es_min_delta, es_enabled)
         history = []
         train_start = time.perf_counter()
+        epochs_run = 0
         for epoch in range(epochs):
             epoch_start = time.perf_counter()
             model.train()
             total_loss = 0.0
             total_seen = 0
-            for images, labels, _ in train_loader:
+            for images, labels, _ in fit_loader:
                 images = images.to(device)
                 labels = labels.to(device)
                 optimizer.zero_grad(set_to_none=True)
@@ -481,17 +705,44 @@ def train_image_baseline(
                 total_loss += float(loss.item()) * int(labels.size(0))
                 total_seen += int(labels.size(0))
             epoch_loss = total_loss / max(total_seen, 1)
+            val_loss = val_auc = None
+            if val_loader_es is not None:
+                val_loss, val_auc = _evaluate_model(model, val_loader_es, criterion, device, torch)
             epoch_time = time.perf_counter() - epoch_start
             history.append(
-                {"epoch": epoch + 1, "train_loss": epoch_loss, "epoch_time_seconds": epoch_time}
+                {
+                    "epoch": epoch + 1,
+                    "train_loss": epoch_loss,
+                    "val_loss": val_loss,
+                    "val_auc": val_auc,
+                    "epoch_time_seconds": epoch_time,
+                }
             )
             logger.info(
-                "  epoch=%d/%d train_loss=%.4f epoch_time=%.2fs",
+                "  epoch=%d/%d train_loss=%.4f val_loss=%s val_auc=%s epoch_time=%.2fs",
                 epoch + 1,
                 epochs,
                 epoch_loss,
+                _fmt_metric(val_loss),
+                _fmt_metric(val_auc),
                 epoch_time,
             )
+            epochs_run = epoch + 1
+            if stopper.update(epoch + 1, val_loss, val_auc, model.state_dict):
+                break
+        if stopper.best_state is not None:
+            model.load_state_dict(stopper.best_state)  # restore best-AUC weights
+            logger.info(
+                "  early-stopped at epoch=%d/%d best_epoch=%d",
+                epochs_run,
+                epochs,
+                stopper.best_epoch,
+            )
+        train_summary = {
+            "epochs_run": epochs_run,
+            "best_epoch": stopper.best_epoch if stopper.best_state is not None else epochs_run,
+            "early_stopped": stopper.stopped,
+        }
         train_time_seconds = time.perf_counter() - train_start
         # No separate feature-extraction phase in the standard path; the backbone runs
         # inside every epoch, so all wall time is head/backbone training.
@@ -564,6 +815,9 @@ def train_image_baseline(
         "train_metrics": train_metrics,
         "test_metrics": test_metrics,
         "history": history,
+        "epochs_run": train_summary["epochs_run"],
+        "best_epoch": train_summary["best_epoch"],
+        "early_stopped": train_summary["early_stopped"],
         "device_requested": device_request,
         "device_resolved": resolved,
         "torch_device": torch_device_name,
@@ -578,6 +832,7 @@ def train_image_baseline(
             "freeze_backbone": freeze_backbone,
             "num_workers": num_workers,
             "cache_frozen_features": cache_frozen_features,
+            "early_stopping": early_stopping or {"enabled": False},
         },
     }
     metrics_path = output_root / "results" / f"{dataset_name}_{model_name}_metrics.json"

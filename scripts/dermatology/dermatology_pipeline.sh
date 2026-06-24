@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Dermatology baseline pipeline: load -> profile -> recommend -> preprocess -> train.
-# Optional stages 8 (assess), 9 (compare) and 10 (explain) run post-prediction
-# fairness, the cross-model comparison table, and post-hoc XAI overlays; reach
-# them with --go-until assess|compare|explain (or RESUME_FROM=... over an
-# existing run).
+# Dermatology baseline pipeline: load -> profile -> recommend -> preprocess ->
+# train -> assess -> compare -> explain -> mitigate. All stages run by default
+# (like cardiac); scope a subset with --go-until <stage> / --resume-from <stage>
+# (or RESUME_FROM=... / GO_UNTIL=... env vars) over an existing run.
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
 PYTHON=${PYTHON:-python3}
 RUN_RECOMMENDATIONS=${RUN_RECOMMENDATIONS:-true}
 VERBOSE=${VERBOSE:-0}
 RESUME_FROM=${RESUME_FROM:-""}
-GO_UNTIL=${GO_UNTIL:-train}
+GO_UNTIL=${GO_UNTIL:-""}
 DATASETS=()
 MODEL_TYPES=()
 DEVICE=""
@@ -116,7 +115,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 START_NUM=1
-END_NUM=7
+END_NUM=11
 [[ -n "$RESUME_FROM" ]] && START_NUM=$(resolve_stage "$RESUME_FROM")
 [[ -n "$GO_UNTIL" ]] && END_NUM=$(resolve_stage "$GO_UNTIL")
 if (( START_NUM > END_NUM )); then
@@ -203,39 +202,39 @@ echo "Device:           ${DEVICE:-config/default}"
 echo ""
 
 if should_run 1; then
-    echo "[PHASE 1/7] Loading dermatology datasets"
+    echo "[PHASE 1] Loading dermatology datasets"
     "$PYTHON" "$ROOT_DIR/scripts/dermatology/load_data.py" "${DATASET_ARGS[@]}" $VERBOSE_FLAG
     mark_done 1 load
 else
-    echo "[1/7] load - SKIPPED"
+    echo "[1] load - SKIPPED"
 fi
 
 if should_run 2; then
-    echo "[PHASE 2/7] Profiling dermatology datasets"
+    echo "[PHASE 2] Profiling dermatology datasets"
     "$PYTHON" "$ROOT_DIR/scripts/dermatology/profile_data.py" "${DATASET_ARGS[@]}" --run-id "$RUN_ID" $VERBOSE_FLAG
     mark_done 2 profile
 else
-    echo "[2/7] profile - SKIPPED"
+    echo "[2] profile - SKIPPED"
 fi
 
 if should_run 3; then
     if [[ "$RUN_RECOMMENDATIONS" == "true" ]]; then
-        echo "[PHASE 3/7] Generating recommendations"
+        echo "[PHASE 3] Generating recommendations"
         "$PYTHON" "$ROOT_DIR/scripts/dermatology/generate_recommendations.py" "${DATASET_ARGS[@]}" --run-id "$RUN_ID" $VERBOSE_FLAG
     else
-        echo "[3/7] recommend - SKIPPED (disabled)"
+        echo "[3] recommend - SKIPPED (disabled)"
     fi
     mark_done 3 recommend
 else
-    echo "[3/7] recommend - SKIPPED"
+    echo "[3] recommend - SKIPPED"
 fi
 
 if should_run 4; then
-    echo "[PHASE 4/7] Preprocessing dermatology datasets"
+    echo "[PHASE 4] Preprocessing dermatology datasets"
     "$PYTHON" "$ROOT_DIR/scripts/dermatology/preprocess.py" "${DATASET_ARGS[@]}" "${FIGURE_ARGS[@]}" $VERBOSE_FLAG
     mark_done 4 preprocess
 else
-    echo "[4/7] preprocess - SKIPPED"
+    echo "[4] preprocess - SKIPPED"
 fi
 
 if should_run 7; then
@@ -248,7 +247,7 @@ fi
 
 if should_run 8; then
     echo "[PHASE 8] Assessing post-prediction fairness"
-    "$PYTHON" "$ROOT_DIR/scripts/dermatology/assess_predictions.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" "${GROUP_VIEW_ARGS[@]}" $VERBOSE_FLAG
+    "$PYTHON" "$ROOT_DIR/scripts/dermatology/assess_predictions.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" "${GROUP_VIEW_ARGS[@]}" "${FIGURE_ARGS[@]}" $VERBOSE_FLAG
     mark_done 8 assess
 else
     echo "[8] assess - SKIPPED"
@@ -272,7 +271,7 @@ fi
 
 if should_run 11; then
     echo "[PHASE 11] Post-processing fairness mitigation"
-    "$PYTHON" "$ROOT_DIR/scripts/dermatology/mitigate.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $VERBOSE_FLAG
+    "$PYTHON" "$ROOT_DIR/scripts/dermatology/mitigate.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" "${FIGURE_ARGS[@]}" $VERBOSE_FLAG
     mark_done 11 mitigate
 else
     echo "[11] mitigate - SKIPPED"
