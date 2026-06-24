@@ -36,6 +36,13 @@ training:
     # ON by default for frozen baselines; standard path used automatically when backbone unfrozen
     cache_frozen_features: true
 
+profiling:
+  # Stage 2 (profile): extra sensitive attributes profiled where present but kept
+  # out of fairness.sensitive_attributes (PAD has no race; SCIN does). SCIN is
+  # profiling-only, so race fairness here = data-fairness (support / missingness /
+  # prevalence over the approximate skin_cancer proxy), not prediction fairness.
+  extra_sensitive_attributes: [race_group]
+
 fairness:
   sensitive_attributes: [age_group, sex, fitzpatrick_group]
   # Stage 8 (assess): groups with fewer than this many test rows are dropped from
@@ -48,7 +55,7 @@ fairness:
     enabled: true
     min_group_samples: 50
     intersection_min_group_samples: 30
-    views: [age_coarse, sex, fitzpatrick_group, sex_x_fitzpatrick]
+    views: [age_coarse, sex, fitzpatrick_group, sex_x_fitzpatrick, age_coarse_x_fitzpatrick]
 
 readiness_figures:
   # Stage 4 (preprocess): render dissertation-ready data-validity figures from the
@@ -75,6 +82,24 @@ xai:
   n_samples: 12          # images explained per model
   per_cell: 1            # images per (sensitive group, outcome) stratum before budget
   lime_num_samples: 1000 # LIME perturbations per image (lower = faster, noisier)
+
+mitigation:
+  # Stage 11 (mitigate): post-processing only. Group-wise decision thresholds via
+  # fairlearn ThresholdOptimizer, fit on saved train predictions and applied to
+  # test predictions. Per sensitive attribute in isolation, every constraint
+  # reported side-by-side. No retraining; no model load. CNN pre/in-processing
+  # mitigation is deliberately out of scope (would require retraining) — see
+  # docs/DECISIONS.md.
+  enabled: true
+  objective: balanced_accuracy_score
+  min_group_samples: 50
+  # Defaults to fairness.sensitive_attributes when omitted.
+  sensitive_attributes: [age_group, sex, fitzpatrick_group]
+  constraints:
+    - demographic_parity
+    - equalized_odds
+    - true_positive_rate_parity
+    - false_positive_rate_parity
 
 studies:
   skip: true

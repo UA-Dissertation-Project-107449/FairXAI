@@ -49,7 +49,13 @@ _VALUE_LABELS: dict[str, dict[Any, str]] = {
 
 DEFAULT_MIN_GROUP_SAMPLES = 50
 DEFAULT_INTERSECTION_MIN_GROUP_SAMPLES = 30
-DEFAULT_GROUP_VIEWS = ["age_coarse", "sex", "fitzpatrick_group", "sex_x_fitzpatrick"]
+DEFAULT_GROUP_VIEWS = [
+    "age_coarse",
+    "sex",
+    "fitzpatrick_group",
+    "sex_x_fitzpatrick",
+    "age_coarse_x_fitzpatrick",
+]
 
 
 def decode_groups(df: pd.DataFrame, attr: str) -> pd.Series:
@@ -123,6 +129,19 @@ def derive_group_view_columns(
             work[view] = sex + " x " + fitz
             metadata[view] = {
                 "source_attributes": ["sex", "fitzpatrick_group"],
+                "exploratory": True,
+            }
+        elif view == "age_coarse_x_fitzpatrick":
+            if "age_group" not in work.columns or "fitzpatrick_group" not in work.columns:
+                logger.warning(
+                    "Group view '%s' skipped: missing age_group or fitzpatrick_group", view
+                )
+                continue
+            age = derive_age_coarse(work)
+            fitz = decode_groups(work, "fitzpatrick_group")
+            work[view] = age + " x " + fitz
+            metadata[view] = {
+                "source_attributes": ["age_group", "fitzpatrick_group"],
                 "exploratory": True,
             }
         else:

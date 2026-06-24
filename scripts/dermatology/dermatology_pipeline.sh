@@ -26,8 +26,9 @@ declare -A STAGE_NUM=(
     [triage]=3 [preprocess]=4 [preprocessing]=4 [train]=7 [baseline]=7 [training]=7
     [assess]=8 [assessment]=8 [fairness]=8 [compare]=9 [comparison]=9
     [explain]=10 [explainability]=10 [xai]=10
+    [mitigate]=11 [mitigation]=11
 )
-declare -A STAGE_NAME=([1]=load [2]=profile [3]=recommend [4]=preprocess [7]=train [8]=assess [9]=compare [10]=explain)
+declare -A STAGE_NAME=([1]=load [2]=profile [3]=recommend [4]=preprocess [7]=train [8]=assess [9]=compare [10]=explain [11]=mitigate)
 
 resolve_stage() {
     local input="${1,,}"
@@ -43,7 +44,7 @@ resolve_stage() {
     if [[ -n "${STAGE_NUM[$input]+x}" ]]; then
         echo "${STAGE_NUM[$input]}"; return
     fi
-    echo "ERROR: Unknown stage '$1'. Valid: load(1) profile(2) recommend(3) preprocess(4) train(7) assess(8) compare(9) explain(10)" >&2
+    echo "ERROR: Unknown stage '$1'. Valid: load(1) profile(2) recommend(3) preprocess(4) train(7) assess(8) compare(9) explain(10) mitigate(11)" >&2
     exit 1
 }
 
@@ -267,6 +268,14 @@ if should_run 10; then
     mark_done 10 explain
 else
     echo "[10] explain - SKIPPED"
+fi
+
+if should_run 11; then
+    echo "[PHASE 11] Post-processing fairness mitigation"
+    "$PYTHON" "$ROOT_DIR/scripts/dermatology/mitigate.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $VERBOSE_FLAG
+    mark_done 11 mitigate
+else
+    echo "[11] mitigate - SKIPPED"
 fi
 
 echo "Dermatology baseline complete: $RUN_ROOT"

@@ -102,6 +102,36 @@ def test_sex_x_fitzpatrick_uses_decoded_sex_labels() -> None:
     assert meta["sex_x_fitzpatrick"]["exploratory"] is True
 
 
+def test_age_coarse_x_fitzpatrick_combines_coarse_age_and_fitzpatrick() -> None:
+    df = pd.DataFrame(
+        {
+            "age_group": ["20-39", "40-59", "80+", "unknown"],
+            "fitzpatrick_group": ["I-II", "III-IV", "V-VI", "unknown"],
+            "y_true": [0, 1, 0, 1],
+            "y_pred": [0, 1, 0, 1],
+            "y_proba": [0.1, 0.9, 0.2, 0.8],
+        }
+    )
+    work, meta = derive_group_view_columns(df, ["age_coarse_x_fitzpatrick"])
+    assert work["age_coarse_x_fitzpatrick"].tolist() == [
+        "<40 x I-II",
+        "40-59 x III-IV",
+        "60+ x V-VI",
+        "Unknown x unknown",
+    ]
+    assert meta["age_coarse_x_fitzpatrick"]["exploratory"] is True
+    assert meta["age_coarse_x_fitzpatrick"]["source_attributes"] == [
+        "age_group",
+        "fitzpatrick_group",
+    ]
+
+
+def test_age_coarse_x_fitzpatrick_skipped_when_columns_missing() -> None:
+    df = pd.DataFrame({"age_group": ["20-39"], "y_true": [0], "y_pred": [0], "y_proba": [0.1]})
+    _, meta = derive_group_view_columns(df, ["age_coarse_x_fitzpatrick"])
+    assert "age_coarse_x_fitzpatrick" not in meta
+
+
 def test_overall_performance_present() -> None:
     df = _synthetic_predictions()
     report = assess_predictions_frame(df, ["sex"], min_group_samples=50)
