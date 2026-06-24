@@ -178,6 +178,50 @@ def test_csv_is_one_row_per_model(tmp_path: Path) -> None:
     assert {"dataset", "model", "auc", "sex_tpr_delta"} <= set(df.columns)
 
 
+def test_rows_carry_early_stopping_columns_and_learning_curve(tmp_path: Path) -> None:
+    run_root = tmp_path / "runs" / "run_es"
+    results = run_root / "baseline" / "results"
+    results.mkdir(parents=True)
+    (results / "pad_ufes_20_resnet18_metrics.json").write_text(
+        json.dumps(
+            {
+                "status": "success",
+                "model_type": "resnet18",
+                "architecture": "resnet18",
+                "n_test": 682,
+                "train_time_seconds": 10.0,
+                "epochs_run": 7,
+                "best_epoch": 4,
+                "early_stopped": True,
+                "test_metrics": {
+                    "accuracy": 0.70,
+                    "precision": 0.70,
+                    "recall": 0.60,
+                    "f1_score": 0.65,
+                    "auc_roc": 0.80,
+                },
+                "history": [
+                    {
+                        "epoch": i,
+                        "train_loss": 1.0 / i,
+                        "val_loss": 1.2 / i,
+                        "val_auc": 0.5 + 0.05 * i,
+                        "epoch_time_seconds": 0.1,
+                    }
+                    for i in range(1, 8)
+                ],
+            }
+        )
+    )
+    rows = compare_run(run_root, write_figures=True)
+    row = next(r for r in rows if r["model"] == "resnet18")
+    assert row["epochs_run"] == 7
+    assert row["best_epoch"] == 4
+    assert row["early_stopped"] is True
+    figures = run_root / "baseline" / "comparison" / "figures"
+    assert (figures / "learning_curve_pad_ufes_20_resnet18.png").exists()
+
+
 def test_empty_run_yields_no_rows(tmp_path: Path) -> None:
     run_root = tmp_path / "runs" / "empty"
     (run_root / "baseline" / "results").mkdir(parents=True)
