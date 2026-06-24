@@ -17,7 +17,11 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy>=2.0.0",        # (reqs: 2.3.5)  array ops used everywhere
     "pandas>=2.0.0",       # (reqs: 2.3.3)  tabular data throughout pipeline
-    "scikit-learn>=1.5.0", # (reqs: 1.7.2)  train/test split, scaling, encoding
+    # Upper bound <1.8: 1.8 deprecates LogisticRegression(penalty=...) and 1.9
+    # deprecates SVC(probability=True); their replacement APIs are 1.8-only and
+    # change model behavior. Pin keeps CI reproducible (tested 1.7.2) and
+    # warning-free. Bumping past 1.8 is a deliberate model-behavior migration.
+    "scikit-learn>=1.5.0,<1.8", # (reqs: 1.7.2)  train/test split, scaling, encoding
     "PyYAML>=6.0.1",       # (reqs: 6.0.3)  config loading in utils and data loaders
 ]
 
@@ -29,7 +33,7 @@ experiment = [
     "joblib>=1.3.0",            # (reqs: 1.5.2)  model serialisation / persistence
     "scipy>=1.10.0",            # (reqs: 1.15.3) distance metrics, statistical functions
     "imbalanced-learn>=0.12.0", # (reqs: 0.14.0) SMOTE, oversampling, undersampling
-    "fairlearn>=0.10.0",        # (reqs: 0.13.0) fairness metrics and mitigation algorithms
+    "fairlearn>=0.10.0,<0.14",  # (reqs: 0.13.0) fairness metrics and mitigation algorithms
     "xgboost>=3.2.0",           # (reqs: 3.2.0) gradient-boosted trees for model_type='xgboost'
     "interpret>=0.6.0",         # (reqs: 0.6.10) InterpretML — loads the EBM difficulty model
     "psutil>=5.9.0",            # (reqs: 7.0.0)  memory-aware worker budgeting in studies
