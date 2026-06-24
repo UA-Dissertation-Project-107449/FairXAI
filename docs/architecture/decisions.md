@@ -94,13 +94,32 @@ heatmap fns without inheriting the driver's I/O assumptions.
 
 Dermatology fairness (`fairness/image_assessment.py`) scores from a saved
 predictions CSV, never from model weights. Post-hoc **group views** (alternate
-subgroup definitions, including one intersectional `sex_x_fitzpatrick`) are a CSV
-`groupby`, not a retraining multiplier — "5 binnings" cost 5× a groupby, not 5×
-training. Support gates (`min_group_samples=50`, intersectional `=30`) drop
-undersized groups from metrics while reporting them as skipped, so small
-subgroups never silently inflate a fairness delta. Mitigation for images, if
-added, is post-processing only (`ThresholdOptimizer` on saved probabilities);
-pre/in-processing for CNNs is explicitly out of scope.
+subgroup definitions, including two intersectional views `sex_x_fitzpatrick` and
+`age_coarse_x_fitzpatrick`) are a CSV `groupby`, not a retraining multiplier —
+"5 binnings" cost 5× a groupby, not 5× training. Support gates
+(`min_group_samples=50`, intersectional `=30`) drop undersized groups from metrics
+while reporting them as skipped, so small subgroups never silently inflate a
+fairness delta.
+
+**Mitigation for images is post-processing only** (stage 11,
+`fairness/image_mitigation.py`). Group-wise decision thresholds via fairlearn
+`ThresholdOptimizer` are fit on the saved **train** predictions and applied to the
+**test** predictions (never fit and evaluated on the same rows), per sensitive
+attribute *in isolation*, for every configured constraint side-by-side
+(`demographic_parity`, `equalized_odds`, `true_positive_rate_parity`,
+`false_positive_rate_parity`). It reuses
+`PostProcessingMitigation.apply_threshold_optimizer` through a precomputed-score
+estimator wrapper, so no model is loaded. Thresholds are fit only on **eligible**
+train groups (>= `min_group_samples` and both classes present); fairlearn rejects
+degenerate single-class groups (PAD `<20` age, `Unknown` sex/Fitzpatrick), so
+those are excluded from the fit and their test rows keep the baseline prediction.
+An attribute with fewer than two eligible groups is reported with a `note` and no
+threshold tuning. Pre-processing (reweighting/SMOTE) and
+in-processing (ExponentiatedGradient/GridSearch) for CNNs are **explicitly out of
+scope**: they require retraining and are tabular-first. The contribution is
+*measurement plus a cheap post-hoc correction*, not full bias removal — a
+deliberate, documented limitation that keeps stage 11 runnable on a laptop from
+saved predictions.
 
 ### SCIN Is Profiling-Only With An Approximate Target
 
