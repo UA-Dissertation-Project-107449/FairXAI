@@ -72,6 +72,19 @@ def main() -> None:
         action="store_false",
         help="Skip post-hoc group-view fairness reports (overrides config).",
     )
+    parser.add_argument(
+        "--figures",
+        dest="figures",
+        action="store_true",
+        default=None,
+        help="Render subgroup/intersection PNGs (overrides config).",
+    )
+    parser.add_argument(
+        "--no-figures",
+        dest="figures",
+        action="store_false",
+        help="Skip subgroup/intersection PNGs (overrides config).",
+    )
     parser.add_argument("-v", action="store_const", const=1, dest="verbose", default=0)
     parser.add_argument("-vv", action="store_const", const=2, dest="verbose")
     args = parser.parse_args()
@@ -103,13 +116,15 @@ def main() -> None:
     intersection_min = int(
         group_view_cfg.get("intersection_min_group_samples", DEFAULT_INTERSECTION_MIN_GROUP_SAMPLES)
     )
+    write_figures = _resolve_bool_flag(args.figures, fairness_cfg, "figures", False)
 
     logging.info(
         "[PHASE] Assessing dermatology post-prediction fairness run_id=%s "
-        "min_group_samples=%s group_views=%s",
+        "min_group_samples=%s group_views=%s figures=%s",
         run_id,
         min_group,
         write_group_views,
+        write_figures,
     )
     print(f"[PHASE 8] Assessing post-prediction fairness for run {run_id}")
     reports = assess_run(
@@ -122,6 +137,7 @@ def main() -> None:
         group_views=group_views,
         group_view_min_group_samples=group_view_min,
         intersection_min_group_samples=intersection_min,
+        write_figures=write_figures,
     )
 
     if not reports:
@@ -137,6 +153,8 @@ def main() -> None:
     print(f"  Report: {out_dir}")
     if write_group_views:
         print(f"  Group views: {out_dir / 'group_views'}")
+    if write_figures:
+        print(f"  Figures: {out_dir / 'figures'}")
 
 
 if __name__ == "__main__":

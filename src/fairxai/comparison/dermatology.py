@@ -142,6 +142,9 @@ def build_rows(
             "n_train": data.get("n_train"),
             "n_test": data.get("n_test"),
             "train_time_seconds": _safe_float(data.get("train_time_seconds")),
+            "epochs_run": data.get("epochs_run"),
+            "best_epoch": data.get("best_epoch"),
+            "early_stopped": data.get("early_stopped"),
             "accuracy": _safe_float(test.get("accuracy")),
             "precision": _safe_float(test.get("precision")),
             "recall": _safe_float(test.get("recall")),
@@ -200,10 +203,18 @@ def render_markdown(rows: list[dict[str, Any]], attrs: list[str]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _render_figures(rows: list[dict[str, Any]], attrs: list[str], out_dir: Path) -> None:
+def _render_figures(
+    rows: list[dict[str, Any]],
+    attrs: list[str],
+    out_dir: Path,
+    metrics: dict[str, dict[str, Any]],
+) -> None:
     """Delegate figure rendering to viz (matplotlib imported only here)."""
     try:
-        from fairxai.viz.dermatology_comparison import render_comparison_figures
+        from fairxai.viz.dermatology_comparison import (
+            render_comparison_figures,
+            render_learning_curves,
+        )
     except ImportError as exc:
         logger.warning("Skipping dermatology comparison figures (viz/matplotlib): %s", exc)
         return
@@ -214,6 +225,7 @@ def _render_figures(rows: list[dict[str, Any]], attrs: list[str], out_dir: Path)
         perf_columns=_PERF_COLUMNS,
         fairness_labels=_FAIRNESS_LABELS,
     )
+    render_learning_curves(metrics, out_dir)
 
 
 def compare_run(
@@ -236,6 +248,6 @@ def compare_run(
     md = render_markdown(rows, attrs)
     (out_dir / "model_comparison.md").write_text(md)
     if write_figures:
-        _render_figures(rows, attrs, out_dir)
+        _render_figures(rows, attrs, out_dir, metrics)
     logger.info("Wrote comparison for %d model(s) to %s", len(rows), out_dir)
     return rows

@@ -166,6 +166,80 @@ def _plot_fairness_attr(
     )
 
 
+def _plot_learning_curve(
+    run_key: str, history: Sequence[Mapping[str, Any]], best_epoch: Any, figures_dir: Path
+) -> Optional[Path]:
+    """Train/val loss (left axis) + val AUC (right axis) vs epoch for one model."""
+    epochs = [h.get("epoch") for h in history]
+    if not epochs:
+        return None
+    train_loss = [_num(h.get("train_loss")) for h in history]
+    val_loss = [_num(h.get("val_loss")) for h in history]
+    val_auc = [_num(h.get("val_auc")) for h in history]
+
+    fig, ax1 = plt.subplots(figsize=(7.5, 5.0))
+    ax1.plot(epochs, train_loss, marker="o", color="#0072B2", label="train loss")
+    if any(v is not None for v in val_loss):
+        ax1.plot(
+            epochs,
+            [float("nan") if v is None else v for v in val_loss],
+            marker="s",
+            linestyle="--",
+            color="#D55E00",
+            label="val loss",
+        )
+    ax1.set_xlabel("Epoch")
+    ax1.set_ylabel("Loss")
+    ax1.grid(alpha=0.25)
+
+    handles, labels = ax1.get_legend_handles_labels()
+    if any(v is not None for v in val_auc):
+        ax2 = ax1.twinx()
+        ax2.plot(
+            epochs,
+            [float("nan") if v is None else v for v in val_auc],
+            marker="^",
+            color="#009E73",
+            label="val AUC",
+        )
+        ax2.set_ylabel("Validation AUC")
+        ax2.set_ylim(0, 1.05)
+        h2, l2 = ax2.get_legend_handles_labels()
+        handles += h2
+        labels += l2
+    best = _num(best_epoch)
+    if best is not None:
+        ax1.axvline(best, color="#555555", linestyle=":", linewidth=1.0)
+        ax1.annotate(
+            f"best epoch {int(best)}",
+            xy=(best, ax1.get_ylim()[1]),
+            fontsize=8,
+            ha="center",
+            va="top",
+        )
+    ax1.legend(handles, labels, loc="best")
+    ax1.set_title(f"Learning Curve - {run_key}")
+    fig.tight_layout()
+    out_path = figures_dir / f"learning_curve_{_slug(run_key)}.png"
+    save_figure(fig, out_path)
+    plt.close(fig)
+    return out_path
+
+
+def render_learning_curves(metrics: Mapping[str, Mapping[str, Any]], out_dir: Path) -> list[Path]:
+    """One learning-curve PNG per model from each metrics dict's ``history``."""
+    figures_dir = out_dir / "figures"
+    figures_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for run_key, data in sorted(metrics.items()):
+        history = data.get("history") or []
+        path = _plot_learning_curve(run_key, history, data.get("best_epoch"), figures_dir)
+        if path:
+            written.append(path)
+    logger.info("[SUCCESS] Learning curves saved to %s (%d figure(s))", figures_dir, len(written))
+    return written
+
+
 def render_comparison_figures(
     rows: Sequence[Mapping[str, Any]],
     attrs: Sequence[str],

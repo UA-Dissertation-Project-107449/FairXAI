@@ -525,6 +525,29 @@ def _discover_predictions(
     return found
 
 
+def _render_figures(
+    reports: dict[str, dict[str, Any]],
+    group_view_reports: dict[str, dict[str, Any]],
+    out_dir: Path,
+    attrs: list[str],
+) -> None:
+    """Delegate stage-8 figure rendering to viz (matplotlib imported only here)."""
+    try:
+        from fairxai.viz.dermatology_fairness import (
+            render_group_view_figures,
+            render_subgroup_heatmaps,
+        )
+    except ImportError as exc:
+        logger.warning("Skipping dermatology fairness figures (viz/matplotlib): %s", exc)
+        return
+    render_subgroup_heatmaps(_flatten_for_csv(reports).to_dict("records"), out_dir, attrs=attrs)
+    if group_view_reports:
+        render_group_view_figures(
+            _flatten_group_views_for_csv(group_view_reports).to_dict("records"),
+            out_dir / "group_views",
+        )
+
+
 def assess_run(
     run_root: Path,
     sensitive_attrs: list[str],
@@ -536,11 +559,13 @@ def assess_run(
     group_views: Optional[list[str]] = None,
     group_view_min_group_samples: int = DEFAULT_MIN_GROUP_SAMPLES,
     intersection_min_group_samples: int = DEFAULT_INTERSECTION_MIN_GROUP_SAMPLES,
+    write_figures: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Assess every baseline prediction CSV in *run_root* and write the report.
 
     Outputs land in ``<run_root>/baseline/prediction_fairness/``:
-    ``fairness_report.json``, ``fairness_report.md``, ``fairness_groups.csv``.
+    ``fairness_report.json``, ``fairness_report.md``, ``fairness_groups.csv`` (and
+    ``figures/`` plus ``group_views/figures/`` when *write_figures*).
     """
     results_dir = run_root / "baseline" / "results"
     discovered = _discover_predictions(results_dir, datasets, model_types)
@@ -585,5 +610,8 @@ def assess_run(
             group_dir / "group_view_groups.csv", index=False
         )
         logger.info("Wrote group-view fairness report to %s", group_dir)
+
+    if write_figures and reports:
+        _render_figures(reports, group_view_reports, out_dir, sensitive_attrs)
 
     return reports

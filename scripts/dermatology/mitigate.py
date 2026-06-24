@@ -54,6 +54,19 @@ def main() -> None:
     parser.add_argument("--datasets", nargs="*", help="Restrict to these datasets.")
     parser.add_argument("--model-types", nargs="*", help="Restrict to these model types.")
     parser.add_argument("--min-group-samples", type=int, default=None)
+    parser.add_argument(
+        "--figures",
+        dest="figures",
+        action="store_true",
+        default=None,
+        help="Render before/after PNGs (overrides config).",
+    )
+    parser.add_argument(
+        "--no-figures",
+        dest="figures",
+        action="store_false",
+        help="Skip before/after PNGs (overrides config).",
+    )
     parser.add_argument("-v", action="store_const", const=1, dest="verbose", default=0)
     parser.add_argument("-vv", action="store_const", const=2, dest="verbose")
     args = parser.parse_args()
@@ -89,12 +102,19 @@ def main() -> None:
         min_group = mitigation_cfg.get(
             "min_group_samples", fairness_cfg.get("min_group_samples", DEFAULT_MIN_GROUP_SAMPLES)
         )
+    write_figures = (
+        bool(args.figures)
+        if args.figures is not None
+        else bool(mitigation_cfg.get("figures", False))
+    )
 
     logging.info(
-        "[PHASE] Mitigating dermatology predictions run_id=%s constraints=%s objective=%s",
+        "[PHASE] Mitigating dermatology predictions run_id=%s constraints=%s objective=%s "
+        "figures=%s",
         run_id,
         constraints,
         objective,
+        write_figures,
     )
     print(f"[PHASE 11] Post-processing mitigation for run {run_id}")
     reports = mitigate_run(
@@ -105,6 +125,7 @@ def main() -> None:
         min_group_samples=min_group,
         datasets=args.datasets,
         model_types=args.model_types,
+        write_figures=write_figures,
     )
 
     if not reports:
@@ -117,6 +138,8 @@ def main() -> None:
     out_dir = run_root / "baseline" / "mitigation"
     logging.info("[SUCCESS] Mitigated %d model(s): %s", len(reports), out_dir)
     print(f"  Report: {out_dir}")
+    if write_figures:
+        print(f"  Figures: {out_dir / 'figures'}")
 
 
 if __name__ == "__main__":
