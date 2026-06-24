@@ -745,10 +745,21 @@ def main():
         cache_frozen_features = _resolve_bool_setting(
             args.cache_frozen_features, image_cfg, "cache_frozen_features", False
         )
+        # Early stopping: epochs becomes a cap and a validation slice decides the real
+        # training length (per-model). Defaults keep it off so behavior is unchanged
+        # unless the config opts in.
+        es_block = image_cfg.get("early_stopping", {}) or {}
+        early_stopping = {
+            "enabled": bool(es_block.get("enabled", False)),
+            "monitor": str(es_block.get("monitor", "val_auc")),
+            "patience": int(es_block.get("patience", 5)),
+            "min_delta": float(es_block.get("min_delta", 0.001)),
+            "val_fraction": float(es_block.get("val_fraction", 0.15)),
+        }
         logging.info(
             "[PHASE] Image baseline configuration models=%s device=%s epochs=%s "
             "batch_size=%s image_size=%s pretrained=%s freeze_backbone=%s "
-            "cache_frozen_features=%s num_workers=%s",
+            "cache_frozen_features=%s num_workers=%s early_stopping=%s",
             model_types,
             device_request,
             epochs,
@@ -758,6 +769,7 @@ def main():
             freeze_backbone,
             cache_frozen_features,
             num_workers,
+            early_stopping,
         )
 
         train_files = []
@@ -836,6 +848,7 @@ def main():
                     num_workers=num_workers,
                     random_state=random_state,
                     cache_frozen_features=cache_frozen_features,
+                    early_stopping=early_stopping,
                 )
                 results_summary[dataset_name][model_type] = result
 
