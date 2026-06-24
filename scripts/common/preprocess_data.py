@@ -88,9 +88,18 @@ def _apply_schema_rules(df: pd.DataFrame, schema_cfg: dict, dataset_name: str) -
 
 
 def _load_domain_config(project_root: Path, pipeline: str) -> dict:
+    """Load optional configs/domain/<pipeline>.yaml.
+
+    Only ``clinical_constraints`` is consumed downstream. Pipelines without a
+    domain file (e.g. dermatology, whose sensitive attributes / target live in
+    the pipeline config) return an empty dict instead of raising.
+    """
     domain_path = project_root / f"configs/domain/{pipeline}.yaml"
+    if not domain_path.exists():
+        logging.info("No domain config at %s; using pipeline config only.", domain_path)
+        return {}
     with open(domain_path, "r") as f:
-        return yaml.safe_load(f)
+        return yaml.safe_load(f) or {}
 
 
 def _resolve_bool_flag(cli_value, cfg: dict, key: str, default: bool) -> bool:
