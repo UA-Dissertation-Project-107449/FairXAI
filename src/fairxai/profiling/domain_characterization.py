@@ -81,6 +81,11 @@ _INDEX_COLUMN_HINTS = [
 
 _PREFERRED_BIN_COUNTS = [2, 5, 10]
 _DEFAULT_HISTOGRAM_BINS = 10
+# Numeric columns with at most this many distinct values are treated as
+# categorical regardless of distinct ratio. Catches low-cardinality codes such
+# as 0-10 clinical scales/grades that small datasets would otherwise (ratio >=
+# 0.05) misclassify as continuous.
+_CATEGORICAL_MAX_UNIQUE = 12
 _CATEGORICAL_TOP_VALUES = 12
 _SENSITIVE_NAME_HINTS = (
     "age",
@@ -163,7 +168,7 @@ def _semantic_type(column_name: str, series: pd.Series, row_count: int, n_unique
     if n_unique == 2:
         return "binary"
     if pd.api.types.is_numeric_dtype(series):
-        if n_unique <= 5 or distinct_ratio < 0.05:
+        if n_unique <= _CATEGORICAL_MAX_UNIQUE or distinct_ratio < 0.05:
             return "categorical"
         return "continuous"
     if n_unique <= 20:
@@ -651,6 +656,29 @@ def _predict_ebm_difficulty(
     return float(prediction)
 
 
+def _impute_for_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """Median (numeric) / mode (other) imputation of a copy.
+
+    The complexity metrics (kNN, SVM, ...) and the EBM cannot consume NaN, but
+    real uploads and the synthetic missingness datasets contain genuine gaps.
+    We impute only the frame handed to the metric computation; the reported
+    missing percentages, column profiles, and semantic types are still derived
+    from the raw ``df`` so the characterization stays honest about missingness.
+    """
+    if not df.isna().any().any():
+        return df
+    out = df.copy()
+    for column in out.columns:
+        if not out[column].isna().any():
+            continue
+        if pd.api.types.is_numeric_dtype(out[column]):
+            out[column] = out[column].fillna(out[column].median())
+        else:
+            mode = out[column].mode(dropna=True)
+            out[column] = out[column].fillna(mode.iloc[0] if not mode.empty else "missing")
+    return out
+
+
 def characterize_dataset(
     filename: str,
     output_dir: str | Path,
@@ -695,7 +723,7 @@ def characterize_dataset(
     y = df[target]
 
     complexity_df = df.drop(columns=[index_column], errors="ignore") if index_column else df
-    complexity = compute_complexity_metrics(complexity_df, target=target)
+    complexity = compute_complexity_metrics(_impute_for_metrics(complexity_df), target=target)
     metrics = {
         "nSamples": int(X.shape[0]),
         "nFeatures": int(X.shape[1]),
