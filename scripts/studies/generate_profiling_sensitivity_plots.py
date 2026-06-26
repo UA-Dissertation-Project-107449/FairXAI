@@ -133,6 +133,29 @@ def plot_complexity_vs_knob(dataset_df: pd.DataFrame, fig_dir: Path) -> None:
         _save(fig, fig_dir / "complexity", f"ebm_difficulty_vs_{label}.png")
 
 
+def plot_duplicates(dataset_df: pd.DataFrame, fig_dir: Path) -> None:
+    sub = dataset_df[dataset_df["label"] == "duplicates"]
+    if sub.empty or "duplicate_pct_observed" not in sub:
+        logger.warning("[WARNING] no duplicates rows; skipping duplicates plot")
+        return
+    fig, ax = plt.subplots(figsize=(7, 5))
+    sns.scatterplot(
+        data=sub,
+        x="duplicate_pct",
+        y="duplicate_pct_observed",
+        style="tier",
+        s=120,
+        ax=ax,
+    )
+    lims = [0, max(sub["duplicate_pct"].max(), sub["duplicate_pct_observed"].max()) + 0.05]
+    ax.plot(lims, lims, ls="--", c="grey", lw=1, label="design = observed")
+    ax.set_xlabel("Designed duplicate fraction")
+    ax.set_ylabel("Observed duplicate-row fraction")
+    ax.set_title("Observed vs designed duplicate rows")
+    ax.legend()
+    _save(fig, fig_dir / "duplicates", "observed_vs_design_duplicates.png")
+
+
 def plot_type_accuracy(dataset_df: pd.DataFrame, fig_dir: Path) -> None:
     if "semantic_type_accuracy" not in dataset_df:
         logger.warning("[WARNING] no accuracy column; skipping accuracy plot")
@@ -200,6 +223,7 @@ def main(argv: list[str] | None = None) -> int:
         plot_missingness(dataset_df, fig_dir)
         plot_class_balance(dataset_df, fig_dir)
         plot_complexity_vs_knob(dataset_df, fig_dir)
+        plot_duplicates(dataset_df, fig_dir)
         plot_type_accuracy(dataset_df, fig_dir)
     if confusion_df is not None:
         plot_type_confusion(confusion_df, fig_dir)

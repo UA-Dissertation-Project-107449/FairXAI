@@ -66,6 +66,7 @@ def _knob_value(cfg: SyntheticConfig) -> Any:
         "separability": cfg.class_sep,
         "size": cfg.n_samples,
         "cardinality": cfg.lowcard_levels,
+        "duplicates": cfg.duplicate_pct,
     }.get(cfg.label, "baseline")
 
 
@@ -187,10 +188,15 @@ def _score_columns(
 
 
 def _dataset_row(
-    result: dict, cfg: SyntheticConfig, status: str, accuracy: float, misclassified: int
+    result: dict,
+    cfg: SyntheticConfig,
+    status: str,
+    accuracy: float,
+    misclassified: int,
+    df: pd.DataFrame,
 ) -> dict:
     metrics = result.get("metrics", {})
-    row = {**asdict(cfg)}
+    row = {**asdict(cfg)}  # includes duplicate_pct as the design value
     row.update(
         {
             "dataset_id": cfg.dataset_id(),
@@ -198,6 +204,7 @@ def _dataset_row(
             "status": status,
             "semantic_type_accuracy": round(accuracy, 4),
             "n_columns_misclassified": misclassified,
+            "duplicate_pct_observed": round(float(df.duplicated().mean()), 4),
             "nSamples": metrics.get("nSamples"),
             "nFeatures": metrics.get("nFeatures"),
             "nClasses": metrics.get("nClasses"),
@@ -285,7 +292,7 @@ def main(argv: list[str] | None = None) -> int:
         column_rows.extend(rows)
         scored = len(rows) or 1
         accuracy = (scored - misclassified) / scored
-        dataset_rows.append(_dataset_row(result, cfg, status, accuracy, misclassified))
+        dataset_rows.append(_dataset_row(result, cfg, status, accuracy, misclassified, df))
 
         for row in rows:
             key = (str(row["expected_semantic_type"]), str(row["observed_semantic_type"]))
