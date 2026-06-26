@@ -10,6 +10,7 @@ from fairxai.data.synthetic import (
     build_grid,
     build_smoke_grid,
     generate,
+    inject_duplicates,
     inject_missingness,
     write_dataset,
 )
@@ -18,8 +19,11 @@ from fairxai.data.synthetic import (
 def test_build_grid_has_unique_dataset_ids():
     grid = build_grid()
     ids = [cfg.dataset_id() for cfg in grid]
-    assert len(grid) == 36
+    assert len(grid) == 24
     assert len(set(ids)) == len(ids)
+    # Both tiers represented; the duplicates sweep is part of the grid.
+    assert {cfg.tier for cfg in grid} == {"abstract", "healthcare"}
+    assert any(cfg.label == "duplicates" and cfg.duplicate_pct > 0 for cfg in grid)
 
 
 def test_generate_is_deterministic():
@@ -80,6 +84,26 @@ def test_mar_missingness_varies_with_conditioning_column():
     # diverge while the overall rate stays near the designed fraction.
     assert abs(rate_a - rate_b) > 0.05
     assert abs(overall - 0.3) < 0.05
+
+
+def test_duplicate_pct_injects_real_duplicate_rows():
+    cfg = SyntheticConfig(
+        tier="abstract", seed=3, n_samples=1000, duplicate_pct=0.2, label="duplicates"
+    )
+    df, _ = generate(cfg)
+    # 1000 originals + 20% copies -> 1200 rows, of which the copies are duplicates.
+    assert len(df) == 1200
+    assert df.duplicated().sum() >= 1
+    # Deterministic with the same config.
+    df_b, _ = generate(cfg)
+    pd.testing.assert_frame_equal(df, df_b)
+
+
+def test_inject_duplicates_zero_is_noop():
+    df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+    out = inject_duplicates(df, 0.0, np.random.default_rng(0))
+    assert len(out) == 3
+    assert out.duplicated().sum() == 0
 
 
 def test_write_dataset_roundtrips_nans(tmp_path):
