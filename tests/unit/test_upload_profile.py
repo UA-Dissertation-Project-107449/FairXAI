@@ -71,7 +71,7 @@ def test_profile_dataset_adds_guidance_for_cardinality_regimes(tmp_path):
     assert profiles["mostly_missing"]["binning_guidance"] == "caution"
 
 
-def test_profile_dataset_marks_ten_distinct_numeric_ok_for_binning(tmp_path):
+def test_profile_dataset_marks_ten_distinct_numeric_categorical_ok_for_binning(tmp_path):
     csv_path = tmp_path / "ten_values.csv"
     pd.DataFrame(
         {
@@ -85,9 +85,32 @@ def test_profile_dataset_marks_ten_distinct_numeric_ok_for_binning(tmp_path):
         profile for profile in result["column_profiles"] if profile["name"] == "score_0_to_9"
     )
 
-    assert profile["semantic_type"] == "continuous"
+    # A 10-distinct numeric code is categorical, not continuous, regardless of
+    # distinct ratio. Binning is still offered because the values are numeric.
+    assert profile["semantic_type"] == "categorical"
     assert profile["binning_guidance"] == "ok_for_binning"
     assert profile["recommended_bin_counts"] == [2, 5, 10]
+
+
+def test_low_cardinality_numeric_is_categorical_in_small_frame(tmp_path):
+    # Regression for the type-inference bug: in a small frame a 10-distinct
+    # numeric column has distinct_ratio >= 0.05 and would previously be tagged
+    # continuous. The absolute cardinality cap keeps it categorical.
+    csv_path = tmp_path / "small_frame.csv"
+    pd.DataFrame(
+        {
+            "grade_0_to_9": list(range(10)) * 12,  # 120 rows, ratio ~0.083
+            "target": [0, 1] * 60,
+        }
+    ).to_csv(csv_path, index=False)
+
+    result = dc.profile_dataset(str(csv_path))
+    profile = next(
+        profile for profile in result["column_profiles"] if profile["name"] == "grade_0_to_9"
+    )
+
+    assert profile["distinct_ratio"] >= 0.05
+    assert profile["semantic_type"] == "categorical"
 
 
 def test_profile_dataset_returns_numeric_feature_distribution(tmp_path):
@@ -187,3 +210,39 @@ def test_characterize_dataset_adds_profile_fields_without_wrapping(tmp_path, mon
     assert any(profile["name"] == "income" for profile in result["column_profiles"])
     assert "feature_distributions" in result
     assert result["feature_distributions"]["age"]["kind"] == "categorical"
+
+
+def test_characterize_dataset_handles_missing_values(tmp_path, monkeypatch):
+    # Real uploads (and the synthetic missingness datasets) contain NaNs. The
+    # complexity metrics / EBM cannot consume NaN, so characterization must
+    # impute internally for the metrics while still reporting honest missingness.
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    n = 80
+    frame = pd.DataFrame(
+        {
+            "f0": rng.normal(size=n),
+            "f1": rng.normal(size=n),
+            "f2": rng.normal(size=n),
+            "target": rng.integers(0, 2, size=n),
+        }
+    )
+    frame.loc[frame.index[:20], "f0"] = np.nan  # 25% missing in one feature
+    csv_path = tmp_path / "with_missing.csv"
+    frame.to_csv(csv_path, index=False)
+
+    monkeypatch.setattr(dc, "_predict_ebm_difficulty", lambda **_kwargs: 0.5)
+
+    result = dc.characterize_dataset(
+        filename=str(csv_path),
+        output_dir=tmp_path / "out",
+        target_column="target",
+    )
+
+    # Metrics computed despite NaNs (no crash).
+    assert result["metrics"]["ebmDifficulty"] == 0.5
+    assert result["metrics"]["nSamples"] == n
+    # Missingness reported honestly from the raw data, not the imputed copy.
+    assert result["top_missing_column"] == "f0"
+    assert result["top_missing_pct"] == 25.0
