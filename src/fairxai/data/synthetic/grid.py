@@ -21,7 +21,10 @@ def _baseline(tier: str, seed: int) -> SyntheticConfig:
         n_samples=2000,
         n_features=12,
         minority_ratio=0.5,
-        class_sep=1.0,
+        # Baseline carries real signal (not near-random) so downstream clustering
+        # and complexity metrics have structure to find; the separability sweep
+        # still probes the hard, low-signal regime.
+        class_sep=1.8,
         missing_mechanism="none",
         missing_pct=0.0,
         n_missing_features=0,
@@ -29,12 +32,20 @@ def _baseline(tier: str, seed: int) -> SyntheticConfig:
         n_lowcard=2,
         lowcard_levels=10,
         n_highcard=1,
+        duplicate_pct=0.0,
         label="base",
     )
 
 
 def build_grid(base_seed: int = 20260625) -> list[SyntheticConfig]:
-    """Return the default ~36-dataset grid."""
+    """Return the default 24-dataset grid (12 per tier).
+
+    One knob family is swept at a time off a per-tier baseline. Sweeps are kept
+    deliberately compact (the study reads conditions, not a full grid search):
+    missingness is well represented (it is the headline knob), cardinality and
+    duplication each get the cases that matter, and the secondary knobs
+    (imbalance / separability / size) carry the contrast points only.
+    """
     configs: list[SyntheticConfig] = []
 
     def _add(cfg: SyntheticConfig) -> None:
@@ -45,9 +56,9 @@ def build_grid(base_seed: int = 20260625) -> list[SyntheticConfig]:
         base = _baseline(tier, base_seed)
         _add(base)
 
-        # Missingness sweep: {mcar, mar} x {0.05, 0.20, 0.40}
+        # Missingness sweep: {mcar, mar} x {0.20, 0.40} (real NaNs; the headline).
         for mechanism in ("mcar", "mar"):
-            for pct in (0.05, 0.20, 0.40):
+            for pct in (0.20, 0.40):
                 _add(
                     replace(
                         base,
@@ -58,27 +69,28 @@ def build_grid(base_seed: int = 20260625) -> list[SyntheticConfig]:
                     )
                 )
 
-        # Class-imbalance sweep
-        for minority in (0.40, 0.30, 0.10, 0.02):
+        # Class-imbalance sweep (strong imbalance; balanced baseline is the ref).
+        for minority in (0.10, 0.02):
             _add(replace(base, minority_ratio=minority, label="imbalance"))
 
-        # Separability sweep
-        for sep in (0.5, 2.0):
-            _add(replace(base, class_sep=sep, label="separability"))
+        # Separability sweep: the hard, low-signal contrast to the baseline.
+        _add(replace(base, class_sep=0.5, label="separability"))
 
-        # Size / difficulty sweep (n=120 triggers the low-card type boundary)
-        for n_samples in (120, 500, 5000):
-            _add(replace(base, n_samples=n_samples, label="size"))
+        # Size sweep: n=120 triggers the low-card type boundary (baseline is large).
+        _add(replace(base, n_samples=120, label="size"))
 
-        # Cardinality / type-mix sweep (explicit 10- and 15-level cases)
-        for levels in (10, 15):
-            _add(replace(base, lowcard_levels=levels, n_highcard=3, label="cardinality"))
+        # Cardinality / type-mix sweep (15-level low-card + extra high-card cols).
+        _add(replace(base, lowcard_levels=15, n_highcard=3, label="cardinality"))
+
+        # Duplicate-rows sweep: a fraction of rows copied verbatim.
+        for dup in (0.05, 0.20):
+            _add(replace(base, duplicate_pct=dup, label="duplicates"))
 
     return configs
 
 
 def build_smoke_grid(base_seed: int = 20260625) -> list[SyntheticConfig]:
-    """A 4-dataset abstract-tier subset for fast smoke tests."""
+    """A 5-dataset abstract-tier subset for fast smoke tests."""
     base = _baseline("abstract", base_seed)
     raw = [
         base,
@@ -91,5 +103,6 @@ def build_smoke_grid(base_seed: int = 20260625) -> list[SyntheticConfig]:
         ),
         replace(base, minority_ratio=0.10, label="imbalance"),
         replace(base, n_samples=120, label="size"),
+        replace(base, duplicate_pct=0.20, label="duplicates"),
     ]
     return [replace(cfg, seed=base_seed + idx) for idx, cfg in enumerate(raw)]
