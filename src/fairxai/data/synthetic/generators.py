@@ -19,6 +19,7 @@ import pandas as pd
 from sklearn.datasets import make_classification
 
 from .config import GroundTruthColumn, SyntheticConfig
+from .duplication import inject_duplicates
 from .missingness import inject_missingness
 
 _AGE_GROUPS = ["<40", "40-49", "50-59", "60-69", "70+"]
@@ -68,6 +69,12 @@ def _apply_and_label_missingness(
             col.missing_mechanism = cfg.missing_mechanism
             col.missing_pct_design = cfg.missing_pct
     return df
+
+
+def _apply_duplicates(df: pd.DataFrame, cfg: SyntheticConfig) -> pd.DataFrame:
+    """Copy ``cfg.duplicate_pct`` of rows verbatim (after missingness is set)."""
+    rng = np.random.default_rng(cfg.seed + 104729)
+    return inject_duplicates(df, cfg.duplicate_pct, rng)
 
 
 def generate_abstract(
@@ -122,6 +129,7 @@ def generate_abstract(
     df = _apply_and_label_missingness(
         df, cfg, ground_truth, feature_names, conditioning_column="age_group"
     )
+    df = _apply_duplicates(df, cfg)
     return df, ground_truth
 
 
@@ -195,6 +203,7 @@ def generate_healthcare(
     df = _apply_and_label_missingness(
         df, cfg, ground_truth, feature_names, conditioning_column="age_group"
     )
+    df = _apply_duplicates(df, cfg)
     return df, ground_truth
 
 

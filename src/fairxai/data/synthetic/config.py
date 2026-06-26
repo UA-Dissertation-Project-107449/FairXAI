@@ -46,6 +46,8 @@ class SyntheticConfig:
     n_lowcard: int = 2  # low-cardinality categorical-numeric columns
     lowcard_levels: int = 10  # distinct values per low-card column (the "10-value" case)
     n_highcard: int = 1  # high-cardinality continuous columns
+    # duplicated rows
+    duplicate_pct: float = 0.0  # fraction of rows copied verbatim (real duplicate records)
     label: str = ""  # human label for the sweep this config belongs to
 
     def dataset_id(self) -> str:
@@ -56,10 +58,11 @@ class SyntheticConfig:
             if self.missing_mechanism != "none" and self.missing_pct > 0
             else "nomiss"
         )
+        dup = f"_dup{self.duplicate_pct:.2f}" if self.duplicate_pct > 0 else ""
         return (
             f"{prefix}{self.tier}"
             f"_n{self.n_samples}_f{self.n_features}"
             f"_min{self.minority_ratio:.2f}_sep{self.class_sep:.1f}"
-            f"_{miss}_lc{self.lowcard_levels}x{self.n_lowcard}"
+            f"_{miss}_lc{self.lowcard_levels}x{self.n_lowcard}{dup}"
             f"_seed{self.seed}"
         )
