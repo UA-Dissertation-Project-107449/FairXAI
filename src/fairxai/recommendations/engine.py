@@ -230,6 +230,17 @@ class RecommendationEngine:
             target=target,
             dataset_name=ingestion.dataset_name or "unknown",
         )
+
+        # Index-aware duplicate detection: a non-unique identifier column is a
+        # hard data-quality failure. Computed here where column roles are known;
+        # the profiler stays role-agnostic.
+        dup = profile.setdefault("duplicate_analysis", {})
+        index_duplicate_count = 0
+        for col in ingestion.identifier_columns:
+            if col in df.columns:
+                index_duplicate_count += int(df[col].duplicated().sum())
+        dup["index_duplicate_count"] = index_duplicate_count
+
         return profile
 
     @staticmethod

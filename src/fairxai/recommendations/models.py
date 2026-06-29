@@ -140,6 +140,32 @@ class TriageCategory(str, Enum):
     D_OVERLAP_AMBIGUITY = "D"  # Overlap and local ambiguity risk
     E_EXPLAINABILITY = "E"  # Explainability suitability
     F_READINESS = "F"  # Fairness benchmark readiness status
+    G_DATA_QUALITY = "G"  # Data quality (missing values, duplicate rows)
+
+
+# One concise line per category describing what it checks. Single source of
+# truth for the UI's per-category tooltips (shipped in ``TriageReport.to_dict``).
+CATEGORY_DESCRIPTIONS: Dict[str, str] = {
+    TriageCategory.A_TASK_FRAMING.value: (
+        "Whether the prediction task is well framed for the available labels and class support."
+    ),
+    TriageCategory.B_SENSITIVE_ADEQUACY.value: (
+        "Whether sensitive attributes are present, complete, and usable for fairness analysis."
+    ),
+    TriageCategory.C_REPRESENTATION.value: (
+        "Whether subgroups have enough samples to support reliable fairness estimates."
+    ),
+    TriageCategory.D_OVERLAP_AMBIGUITY.value: (
+        "Class overlap and local ambiguity that can distort fairness interpretation."
+    ),
+    TriageCategory.E_EXPLAINABILITY.value: (
+        "Whether the data supports stable, trustworthy explanations."
+    ),
+    TriageCategory.F_READINESS.value: ("Overall readiness verdict for fairness benchmarking."),
+    TriageCategory.G_DATA_QUALITY.value: (
+        "Missing values and duplicate rows that must be resolved before benchmarking."
+    ),
+}
 
 
 @dataclass
@@ -219,9 +245,15 @@ class TriageReport:
         return len(self.by_priority(Priority.P1))
 
     def to_dict(self) -> Dict[str, Any]:
+        present_categories = {r.category.value for r in self.recommendations}
         payload: Dict[str, Any] = {
             "readiness_status": self.readiness_status.value,
             "recommendations": [r.to_dict() for r in self.recommendations],
+            "category_descriptions": {
+                code: text
+                for code, text in CATEGORY_DESCRIPTIONS.items()
+                if code in present_categories
+            },
             "visual_panels": self.visual_panels,
             "limitations": self.limitations,
             "dataset_summary": self.dataset_summary,
