@@ -119,6 +119,7 @@ class DataProfiler:
             "representation_balance": self._representation_balance(df),
             "label_imbalance_by_group": self._label_imbalance_by_group(df, target),
             "missing_value_analysis": self._missing_value_analysis(df),
+            "duplicate_analysis": self._duplicate_analysis(df),
             "complexity_metrics": compute_complexity_metrics(
                 complexity_df, target=target, exclude_cols=_COMPLEXITY_EXCLUDE_COLS
             ),
@@ -281,6 +282,19 @@ class DataProfiler:
                 analysis["missing_by_group"][attr] = group_missing
 
         return analysis
+
+    def _duplicate_analysis(self, df: pd.DataFrame) -> Dict:
+        """Count verbatim duplicate rows (role-agnostic, whole-row).
+
+        Index-column duplicate detection is layered on in the engine, where the
+        column roles are known.
+        """
+        n_rows = len(df)
+        duplicate_count = int(df.duplicated().sum())
+        return {
+            "duplicate_count": duplicate_count,
+            "duplicate_pct": round(duplicate_count / n_rows, 4) if n_rows else 0.0,
+        }
 
     def _build_subgroup_frame(self, df: pd.DataFrame, sensitive_attrs: List[str]) -> pd.DataFrame:
         subgroup_df = df.copy()

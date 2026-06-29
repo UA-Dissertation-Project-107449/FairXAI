@@ -68,6 +68,11 @@ class TriageConfig:
         self.max_null_fraction: float = sa.get("max_null_fraction", 0.10)
         self.min_unique_groups: int = sa.get("min_unique_groups", 2)
 
+        # Data quality
+        dq = raw.get("data_quality", {})
+        self.flag_any_missing: bool = dq.get("flag_any_missing", True)
+        self.flag_any_duplicates: bool = dq.get("flag_any_duplicates", True)
+
         # Reference
         ref = raw.get("reference", {})
         self.use_historical: bool = ref.get("use_historical", True)

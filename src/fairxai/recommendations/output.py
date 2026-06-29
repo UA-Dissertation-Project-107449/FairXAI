@@ -39,7 +39,7 @@ _PRIORITY_LABEL = {
     Priority.P0: "**P0 Critical**",
     Priority.P1: "**P1 High**",
     Priority.P2: "P2 Medium",
-    Priority.P3: "P3 Info",
+    Priority.P3: "P3 Low",
 }
 
 

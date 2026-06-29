@@ -1,4 +1,4 @@
-"""Triage rule functions: one per TRIAGE_PLAN category (A–F).
+"""Triage rule functions: one per TRIAGE_PLAN category (A–G).
 
 Each public function accepts a profiling dict, a ``TriageConfig``, and an
 optional ``HistoricalReference``, and returns ``list[Recommendation]``.
@@ -74,24 +74,16 @@ def check_task_framing(
                 title="Consider binary framing for fairness benchmark",
                 evidence=evidence,
                 fairness_relevance=(
-                    "Multiclass subgroup slices with very low support make per-class "
-                    "fairness metrics unreliable and statistically fragile."
+                    "Low-support multiclass slices make per-class fairness metrics unreliable."
                 ),
                 explainability_relevance=(
-                    "High overlap complexity in multiclass settings makes explanations "
-                    "less stable, as decision boundaries between similar classes blur."
+                    "Class overlap in multiclass settings destabilises explanations."
                 ),
                 action=(
-                    "Consider collapsing the target to a binary framing for the "
-                    "initial fairness benchmark. Keep the multiclass formulation only "
-                    "when subgroup-by-class support is adequate (≥{} per slice).".format(
-                        config.multiclass_minority_support
-                    )
+                    "Collapse the target to binary for the initial benchmark unless "
+                    "per-slice support is ≥{}.".format(config.multiclass_minority_support)
                 ),
-                expected_outcome=(
-                    "More reliable fairness diagnostics and clearer explainability "
-                    "narratives in the early profiling phase."
-                ),
+                expected_outcome="More reliable early fairness diagnostics.",
                 confidence=Confidence.HIGH if low_support_groups else Confidence.MEDIUM,
             )
         )
@@ -121,17 +113,12 @@ def check_sensitive_adequacy(
                 title="No sensitive attributes identified",
                 evidence={"declared_sensitive_columns": []},
                 fairness_relevance=(
-                    "Fairness cannot be assessed without at least one sensitive / "
-                    "protected attribute (e.g., sex, age group, ethnicity)."
+                    "Fairness needs at least one sensitive attribute (e.g. sex, age, ethnicity)."
                 ),
                 explainability_relevance=(
-                    "Without sensitive attributes, explanations cannot be audited "
-                    "for differential treatment across demographic groups."
+                    "Explanations can't be audited for differential treatment without one."
                 ),
-                action=(
-                    "Identify and declare at least one sensitive attribute before "
-                    "running any fairness analysis."
-                ),
+                action="Declare at least one sensitive attribute before running fairness analysis.",
                 expected_outcome="Fairness metrics become computable and interpretable.",
                 confidence=Confidence.HIGH,
             )
@@ -154,18 +141,13 @@ def check_sensitive_adequacy(
                         "threshold": config.max_null_fraction,
                     },
                     fairness_relevance=(
-                        f"Attribute '{attr}' has {missing_frac:.1%} missing values. "
-                        "Fairness metrics computed on incomplete group labels are unreliable."
+                        f"'{attr}' is {missing_frac:.1%} missing; fairness metrics on "
+                        "incomplete group labels are unreliable."
                     ),
                     explainability_relevance=(
-                        "Group-conditional explanations will be based on a biased subset "
-                        "of the data if many group labels are missing."
+                        "Group-conditional explanations would rest on a biased subset."
                     ),
-                    action=(
-                        f"Investigate why '{attr}' has high missingness. Consider "
-                        "imputation, data augmentation, or flagging this benchmark "
-                        "as 'limited fairness validity'."
-                    ),
+                    action=f"Investigate and impute '{attr}', or flag limited fairness validity.",
                     expected_outcome="Fairness metrics become interpretable for this attribute.",
                     confidence=Confidence.HIGH,
                 )
@@ -186,17 +168,13 @@ def check_sensitive_adequacy(
                         "threshold": config.min_unique_groups,
                     },
                     fairness_relevance=(
-                        f"Attribute '{attr}' has only {n_groups} group(s). At least "
-                        f"{config.min_unique_groups} are needed for meaningful fairness comparison."
+                        f"'{attr}' has only {n_groups} group(s); "
+                        f"{config.min_unique_groups} are needed for comparison."
                     ),
                     explainability_relevance=(
-                        "Group-contrastive explanations require at least two groups to "
-                        "highlight differential model behaviour."
+                        "Group-contrastive explanations need at least two groups."
                     ),
-                    action=(
-                        f"Verify the encoding of '{attr}'. If the attribute has been "
-                        "incorrectly collapsed, re-process it."
-                    ),
+                    action=f"Verify the encoding of '{attr}'; re-process if wrongly collapsed.",
                     expected_outcome="Group fairness metrics become well-defined.",
                     confidence=Confidence.HIGH,
                 )
@@ -234,21 +212,14 @@ def check_representation_risk(
                         "group_counts": ev.get_group_counts(profile, attr),
                     },
                     fairness_relevance=(
-                        f"Group sizes in '{attr}' differ by {ratio:.1f}x. The minority "
-                        "group's fairness metrics will have wide confidence intervals."
+                        f"Group sizes in '{attr}' differ by {ratio:.1f}x, widening the "
+                        "minority group's confidence intervals."
                     ),
                     explainability_relevance=(
-                        "Explanations may be dominated by patterns in the majority group, "
-                        "under-representing minority-group decision factors."
+                        "Explanations may be dominated by the majority group."
                     ),
-                    action=(
-                        "Mark low-support groups as low-confidence for fairness "
-                        "conclusions. Consider resampling or collecting additional data."
-                    ),
-                    expected_outcome=(
-                        "Reduced risk of misleading fairness claims from unstable "
-                        "subgroup estimates."
-                    ),
+                    action="Mark low-support groups low-confidence; consider resampling or more data.",
+                    expected_outcome="Lower risk of misleading subgroup fairness claims.",
                     confidence=Confidence.HIGH,
                 )
             )
@@ -268,23 +239,17 @@ def check_representation_risk(
                         "positive_rates": ev.get_positive_rates(profile, attr),
                     },
                     fairness_relevance=(
-                        f"Statistical parity difference of {spd:.3f} in '{attr}' "
-                        "indicates the positive-class base rate varies substantially "
-                        "across groups, which will propagate into model predictions."
+                        f"Statistical parity difference of {spd:.3f} in '{attr}' shows the "
+                        "positive-class base rate varies across groups."
                     ),
                     explainability_relevance=(
-                        "Feature importance rankings may reflect base-rate differences "
-                        "rather than genuine predictive signal when label imbalance is high."
+                        "Feature importances may reflect base-rate gaps, not real signal."
                     ),
                     action=(
-                        "Investigate whether the label imbalance reflects real prevalence "
-                        "differences or data collection bias. Document the finding and "
-                        "consider adjusting fairness metric interpretation accordingly."
+                        "Check whether the imbalance is real prevalence or collection bias, "
+                        "and document it."
                     ),
-                    expected_outcome=(
-                        "Better-calibrated expectations for fairness metric values and "
-                        "more nuanced interpretation of any detected disparities."
-                    ),
+                    expected_outcome="Better-calibrated interpretation of detected disparities.",
                     confidence=Confidence.HIGH if spd > 0.25 else Confidence.MEDIUM,
                 )
             )
@@ -305,21 +270,17 @@ def check_representation_risk(
                         "group_counts": counts,
                     },
                     fairness_relevance=(
-                        f"At least one group in '{attr}' has only {min_size} samples, "
-                        f"below the minimum threshold of {config.min_group_samples}. "
-                        "Per-group metrics will be statistically unreliable."
+                        f"A group in '{attr}' has only {min_size} samples (min "
+                        f"{config.min_group_samples}), making per-group metrics unreliable."
                     ),
                     explainability_relevance=(
-                        "Group-level explanations based on very few samples may not "
-                        "generalize to the broader population."
+                        "Explanations from very few samples may not generalise."
                     ),
                     action=(
-                        "Request additional data for under-represented groups, or "
-                        "mark their fairness results as low-confidence."
+                        "Collect more data for under-represented groups, or mark them "
+                        "low-confidence."
                     ),
-                    expected_outcome=(
-                        "More robust per-group fairness and explainability estimates."
-                    ),
+                    expected_outcome="More robust per-group estimates.",
                     confidence=Confidence.HIGH,
                 )
             )
@@ -343,25 +304,18 @@ def check_representation_risk(
                             "group_counts": counts,
                         },
                         fairness_relevance=(
-                            f"Attribute '{attr}' has {len(counts)} groups with a "
-                            f"max/min size ratio of {ratio:.1f}x (threshold: "
-                            f"{config.binning_size_ratio_warning:.1f}x). "
-                            "Extremely unequal bins reduce statistical power for "
-                            "the smallest groups and may distort fairness metrics."
+                            f"'{attr}' has {len(counts)} groups at a {ratio:.1f}x size ratio "
+                            "(threshold "
+                            f"{config.binning_size_ratio_warning:.1f}x), starving the smallest bins."
                         ),
                         explainability_relevance=(
-                            "Explanations for tiny bins may be unreliable; dominant bins "
-                            "can overshadow minority-bin effects in feature-importance."
+                            "Tiny bins yield unreliable, majority-dominated explanations."
                         ),
                         action=(
-                            "Try alternative binning strategies (quantile, equal-width, or "
-                            "fewer bins) to improve group balance. Compare fairness metrics "
-                            "across strategies using the age-binning experiment module."
+                            "Try alternative binning (quantile, equal-width, fewer bins) to "
+                            "balance group sizes."
                         ),
-                        expected_outcome=(
-                            "More balanced group sizes leading to more reliable and "
-                            "comparable per-group fairness estimates."
-                        ),
+                        expected_outcome="More balanced groups and comparable per-group estimates.",
                         confidence=Confidence.MEDIUM,
                     )
                 )
@@ -385,21 +339,14 @@ def check_representation_risk(
                     "examples": slice_details,
                 },
                 fairness_relevance=(
-                    f"{len(low_intersections)} intersectional slice(s) have fewer than "
-                    f"{config.intersectional_min_samples} samples. Intersectional fairness "
-                    "analysis for these groups will be unreliable."
+                    f"{len(low_intersections)} intersectional slice(s) have <"
+                    f"{config.intersectional_min_samples} samples, making their analysis unreliable."
                 ),
                 explainability_relevance=(
-                    "Intersectional explanations (e.g., older females) may be driven by "
-                    "noise rather than signal in low-support slices."
+                    "Low-support intersectional explanations may be driven by noise."
                 ),
-                action=(
-                    "Acknowledge low-support intersections in the fairness report. "
-                    "Avoid strong claims about fairness for these subgroups."
-                ),
-                expected_outcome=(
-                    "Transparent fairness reporting with explicit confidence qualifications."
-                ),
+                action="Flag these low-support intersections; avoid strong fairness claims for them.",
+                expected_outcome="Transparent reporting with explicit confidence qualifications.",
                 confidence=Confidence.MEDIUM,
             )
         )
@@ -450,23 +397,12 @@ def check_overlap_ambiguity(
                 title="Elevated class-overlap / ambiguity metrics",
                 evidence={"elevated_metrics": elevated},
                 fairness_relevance=(
-                    "High overlap means some samples are intrinsically hard to classify "
-                    "correctly. If these overlap regions are concentrated in specific "
-                    "subgroups, fairness gaps will be amplified."
+                    "Intrinsically hard-to-classify samples amplify fairness gaps when "
+                    "concentrated in subgroups."
                 ),
-                explainability_relevance=(
-                    "In high-overlap regions, model explanations become less decisive — "
-                    "small changes in features flip predictions, making SHAP / LIME "
-                    "values unstable."
-                ),
-                action=(
-                    "Flag the dataset as high ambiguity. Require subgroup-level overlap "
-                    "review before comparing fairness metrics across groups."
-                ),
-                expected_outcome=(
-                    "Better interpretation of whether observed fairness gaps originate "
-                    "from representation issues or intrinsic data overlap."
-                ),
+                explainability_relevance=("High overlap makes SHAP/LIME values unstable."),
+                action="Flag the dataset as high-ambiguity; review subgroup overlap before comparing.",
+                expected_outcome="Clearer attribution of fairness gaps to overlap vs. representation.",
                 confidence=Confidence.HIGH if len(elevated) >= 3 else Confidence.MEDIUM,
             )
         )
@@ -509,21 +445,13 @@ def check_overlap_ambiguity(
                     "examples": divergent_groups[:10],
                 },
                 fairness_relevance=(
-                    "Some subgroups face higher intrinsic classification difficulty than "
-                    "others. This can produce fairness gaps even with an unbiased model."
+                    "Uneven subgroup difficulty produces fairness gaps even with an unbiased model."
                 ),
                 explainability_relevance=(
-                    "Explanations will differ in reliability across groups: stable in "
-                    "low-complexity subgroups, noisy in high-complexity ones."
+                    "Explanation reliability varies across groups by complexity."
                 ),
-                action=(
-                    "Investigate which subgroups have elevated complexity and document "
-                    "this as a confounding factor when interpreting fairness gaps."
-                ),
-                expected_outcome=(
-                    "More accurate attribution of fairness gaps to data difficulty "
-                    "vs. model bias."
-                ),
+                action="Document elevated-complexity subgroups as a confounder for fairness gaps.",
+                expected_outcome="More accurate attribution of gaps to difficulty vs. bias.",
                 confidence=Confidence.MEDIUM,
             )
         )
@@ -566,26 +494,146 @@ def check_explainability_suitability(
                 title="Linear explanations may be unreliable",
                 evidence=evidence,
                 fairness_relevance=(
-                    "When linear decision boundaries poorly separate the classes, "
-                    "fairness metrics tied to model performance (e.g., equalized odds) "
-                    "may fluctuate with threshold choice."
+                    "Poor linear separability makes performance-tied fairness metrics "
+                    "fluctuate with the threshold."
                 ),
                 explainability_relevance=(
-                    "High linear complexity means simple feature-attribution explanations "
-                    "(e.g., logistic-regression coefficients, linear SHAP) will capture "
-                    "only part of the decision logic. Users may be misled by seemingly "
-                    "clear but incomplete explanations."
+                    "Simple linear attributions capture only part of the decision logic."
                 ),
                 action=(
-                    "Prefer robust, uncertainty-aware explanation methods (e.g., SHAP "
-                    "with TreeExplainer on ensemble models). Report explanation "
-                    "stability alongside feature importance."
+                    "Prefer robust, uncertainty-aware explainers (e.g. SHAP TreeExplainer) "
+                    "and report explanation stability."
                 ),
-                expected_outcome=(
-                    "More realistic expectations for explanation quality and reduced "
-                    "risk of stakeholders over-trusting simple attributions."
-                ),
+                expected_outcome="Realistic explanation-quality expectations.",
                 confidence=Confidence.MEDIUM,
+            )
+        )
+
+    return recs
+
+
+# ===================================================================
+# G — Data quality (missing values, duplicate rows)
+# ===================================================================
+
+
+def _format_columns(names: List[str], limit: int = 5) -> str:
+    """Render a capped, human-readable column list ('a, b, c and 4 more')."""
+    shown = [f"'{n}'" for n in names[:limit]]
+    extra = len(names) - limit
+    text = ", ".join(shown)
+    if extra > 0:
+        text += f" and {extra} more"
+    return text
+
+
+def check_data_quality(
+    profile: Dict,
+    ingestion: DatasetIngestion,
+    config: TriageConfig,
+) -> List[Recommendation]:
+    """Category G: missing values and duplicate rows.
+
+    Severity depends on the column role. Missing values in the target or an
+    index column, or duplicate index values, are hard failures (P0 → Not ready).
+    Missing feature values or whole-row duplicates are caveats (P1).
+    """
+    recs: List[Recommendation] = []
+
+    columns_with_missing: Dict[str, int] = profile.get("missing_value_analysis", {}).get(
+        "columns_with_missing", {}
+    )
+    dup = profile.get("duplicate_analysis", {})
+    row_duplicates = int(dup.get("duplicate_count", 0) or 0)
+    index_duplicates = int(dup.get("index_duplicate_count", 0) or 0)
+
+    label = ingestion.label_column
+    index_cols = set(ingestion.identifier_columns or [])
+
+    # --- P0: target missing ---
+    if config.flag_any_missing and label and columns_with_missing.get(label, 0) > 0:
+        recs.append(
+            Recommendation(
+                category=TriageCategory.G_DATA_QUALITY,
+                priority=Priority.P0,
+                title=f"Missing values in target column '{label}'",
+                evidence={"column": label, "missing_count": int(columns_with_missing[label])},
+                fairness_relevance="Rows with a missing label cannot be evaluated for fairness.",
+                explainability_relevance="Explanations require a defined target for every row.",
+                action=f"Remove or correct rows where '{label}' is missing before benchmarking.",
+                expected_outcome="Every row has a usable label.",
+                confidence=Confidence.HIGH,
+            )
+        )
+
+    # --- P0: index missing or duplicate ---
+    if config.flag_any_missing:
+        missing_index = [c for c in index_cols if columns_with_missing.get(c, 0) > 0]
+        if missing_index:
+            recs.append(
+                Recommendation(
+                    category=TriageCategory.G_DATA_QUALITY,
+                    priority=Priority.P0,
+                    title=f"Missing values in index column {_format_columns(missing_index)}",
+                    evidence={"columns": missing_index},
+                    fairness_relevance="A missing identifier breaks row traceability.",
+                    explainability_relevance="Per-row explanations need a stable identifier.",
+                    action=f"Populate the index column {_format_columns(missing_index)}.",
+                    expected_outcome="Every row is uniquely identifiable.",
+                    confidence=Confidence.HIGH,
+                )
+            )
+
+    if config.flag_any_duplicates and index_duplicates > 0:
+        recs.append(
+            Recommendation(
+                category=TriageCategory.G_DATA_QUALITY,
+                priority=Priority.P0,
+                title="Duplicate values in the index column",
+                evidence={"index_duplicate_count": index_duplicates},
+                fairness_relevance="A non-unique identifier indicates corrupted or merged records.",
+                explainability_relevance="Duplicate IDs make per-row explanations ambiguous.",
+                action="Ensure the index column holds unique values.",
+                expected_outcome="The index uniquely identifies each row.",
+                confidence=Confidence.HIGH,
+            )
+        )
+
+    # --- P1: feature missing ---
+    if config.flag_any_missing:
+        feature_missing = [
+            c
+            for c, n in columns_with_missing.items()
+            if n > 0 and c != label and c not in index_cols
+        ]
+        if feature_missing:
+            recs.append(
+                Recommendation(
+                    category=TriageCategory.G_DATA_QUALITY,
+                    priority=Priority.P1,
+                    title=f"Missing values in {_format_columns(feature_missing)}",
+                    evidence={"columns": feature_missing},
+                    fairness_relevance="Missing features bias complexity and subgroup estimates.",
+                    explainability_relevance="Imputed or dropped values shift feature attributions.",
+                    action=f"Impute or document the gaps in {_format_columns(feature_missing)}.",
+                    expected_outcome="Profiling metrics reflect complete feature data.",
+                    confidence=Confidence.HIGH,
+                )
+            )
+
+    # --- P1: whole-row duplicates ---
+    if config.flag_any_duplicates and row_duplicates > 0:
+        recs.append(
+            Recommendation(
+                category=TriageCategory.G_DATA_QUALITY,
+                priority=Priority.P1,
+                title=f"{row_duplicates} duplicate row(s)",
+                evidence={"duplicate_count": row_duplicates},
+                fairness_relevance="Duplicate rows over-weight some records and skew group balance.",
+                explainability_relevance="Repeated rows inflate apparent support for their patterns.",
+                action="Deduplicate the dataset, or confirm the repeats are intentional.",
+                expected_outcome="Each record is counted once.",
+                confidence=Confidence.HIGH,
             )
         )
 
@@ -600,6 +648,7 @@ def check_explainability_suitability(
 def check_readiness(
     recommendations: List[Recommendation],
     config: TriageConfig,
+    profile: Optional[Dict] = None,
 ) -> Recommendation:
     """Category F: summarise readiness as a single recommendation.
 
@@ -618,6 +667,20 @@ def check_readiness(
         status = ReadinessStatus.READY
         priority = Priority.P3
 
+    # Defensive cap: any missing data or duplicate rows must prevent a green
+    # "Ready" verdict, regardless of how the priority thresholds are configured.
+    cap_reason: Optional[str] = None
+    if status == ReadinessStatus.READY and profile is not None:
+        total_missing = profile.get("missing_value_analysis", {}).get("total_missing", 0) or 0
+        dup = profile.get("duplicate_analysis", {})
+        total_dupes = (dup.get("duplicate_count", 0) or 0) + (
+            dup.get("index_duplicate_count", 0) or 0
+        )
+        if total_missing > 0 or total_dupes > 0:
+            status = ReadinessStatus.READY_WITH_CAVEATS
+            priority = Priority.P1
+            cap_reason = "Missing values or duplicate rows present; capped below 'Ready'."
+
     top_actions = []
     for r in sorted(recommendations, key=lambda r: r.priority.value):
         if r.priority in (Priority.P0, Priority.P1):
@@ -634,6 +697,7 @@ def check_readiness(
             "p0_count": p0_count,
             "p1_count": p1_count,
             "total_recommendations": len(recommendations),
+            **({"cap_reason": cap_reason} if cap_reason else {}),
         },
         fairness_relevance=(f"Overall readiness for fairness benchmarking: **{status.value}**."),
         explainability_relevance=(
@@ -661,7 +725,7 @@ def run_all_checks(
     config: TriageConfig,
     ref: Optional[HistoricalReference] = None,
 ) -> List[Recommendation]:
-    """Execute categories A–E and then derive F (readiness).
+    """Execute categories A–E plus G (data quality), then derive F (readiness).
 
     Returns the full sorted list including the readiness recommendation.
     """
@@ -671,8 +735,9 @@ def run_all_checks(
     recs.extend(check_representation_risk(profile, config, ref))
     recs.extend(check_overlap_ambiguity(profile, config, ref))
     recs.extend(check_explainability_suitability(profile, config, ref))
+    recs.extend(check_data_quality(profile, ingestion, config))
 
-    readiness = check_readiness(recs, config)
+    readiness = check_readiness(recs, config, profile=profile)
     recs.append(readiness)
 
     # Sort: P0 first, then P1, P2, P3
