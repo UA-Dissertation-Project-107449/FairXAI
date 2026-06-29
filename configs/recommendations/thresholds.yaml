@@ -54,6 +54,10 @@ sensitive_adequacy:
   max_null_fraction: 0.10            # >10 % nulls in a sensitive column → flag
   min_unique_groups: 2               # need at least 2 groups for any fairness analysis
 
+data_quality:
+  flag_any_missing: true             # any missing value → data-quality recommendation
+  flag_any_duplicates: true          # any duplicate row / index value → data-quality recommendation
+
 reference:
   use_historical: true               # use past runs for comparison when available
   fallback_to_defaults: true         # use literature-based defaults when no history
