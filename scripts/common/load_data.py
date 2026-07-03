@@ -142,7 +142,10 @@ def main():
             sensitive_cols = pipeline_cfg.get("fairness", {}).get(
                 "sensitive_attributes", ["age_group", "sex"]
             )
-            required_cols = [target_col, *sensitive_cols]
+            # Derived attrs absent from raw data; validated downstream, not at load.
+            derived_sensitive = {"ethnicity", "group_cluster"}
+            core_sensitive = [c for c in sensitive_cols if c not in derived_sensitive]
+            required_cols = [target_col, *core_sensitive]
             if pipeline_cfg.get("training", {}).get("modality") == "image":
                 required_cols.append("image_path")
             missing_cols = [
@@ -150,6 +153,14 @@ def main():
             ]
             if missing_cols:
                 raise AssertionError(f"Missing required columns: {missing_cols}")
+            absent_derived = [
+                c for c in sensitive_cols if c in derived_sensitive and c not in df_raw.columns
+            ]
+            if absent_derived:
+                logging.info(
+                    "  Derived/optional sensitive attrs absent at load (added later): %s",
+                    absent_derived,
+                )
 
             standardized_datasets[dataset_name] = df_raw
 
