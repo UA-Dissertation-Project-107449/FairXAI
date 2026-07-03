@@ -2,16 +2,28 @@
 
 Standalone provenance, overlap, and archival utilities for the cardiac datasets.
 All are keepable/re-runnable; run from the repo root (`Code/FairXAI/`) with the
-venv active. Each accepts `--json` to persist a machine-readable summary.
+venv active. The three analysis utilities accept `--json` to persist a
+machine-readable summary; `archive_run.py` records directly in
+`archive_manifest.json`.
 
 ## Scripts
 
 | Script | Purpose |
 |---|---|
 | `cleveland_provenance.py` | Diff raw UCI `processed.cleveland.data` (303) against the working `cleveland_standardized.csv` (297): confirms complete-case derivation, the 6 dropped ca/thal-missing rows, and cp/slope/target encoding deltas. |
-| `cardiac_record_overlap.py` | Record-level intersection between two standardized cardiac files, matched on encoding-stable continuous keys (age, sex, resting BP, cholesterol, max HR, ST depression). |
+| `cardiac_record_overlap.py` | One-to-one multiset overlap between two standardized cardiac files using a six-field clinical fingerprint. This measures likely reuse, not exact record or patient identity. |
 | `cardiac_overlap_matrix.py` | All-pairs fingerprint overlap plus a strict 11-predictor + target source-union audit across the four UCI Heart Disease databases, UCI Statlog Heart, curated Kaggle files, and standardized working files. |
 | `archive_run.py` | Copy (or move) a completed run from `output/<domain>/runs/` into `output/<domain>/archived_runs/`, optionally renamed, recording provenance in `archive_manifest.json`. |
+
+## Tests and local data
+
+Synthetic unit tests exercise the matching and provenance logic in CI. The
+end-to-end smoke test against the gitignored cardiac files is marked
+`local_data`, excluded by both CI workflows, and can be run locally with:
+
+```bash
+pytest tests/unit/test_utils_archive_overlap.py -m local_data
+```
 
 ## UCI Statlog Heart source
 
@@ -50,6 +62,8 @@ Consequences and correct usage:
   ```bash
   MAX_SAMPLES=1000000 GO_UNTIL=preprocess bash scripts/cardiac/cardiac_pipeline.sh --datasets cardio70k
   ```
+  The Prefect flow has the same override through `--max-samples 1000000` (or
+  the `MAX_SAMPLES` environment variable).
   On the full 70,000 rows, clinical constraints drop **1,251** records
   (ap_lo 1,006 + ap_hi 228 + height 29 + weight 7, with overlaps) →
   **final analytical n = 68,749**.
