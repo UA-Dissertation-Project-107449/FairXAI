@@ -24,7 +24,7 @@ datasets:
     source: "Cardiovascular Disease Dataset (70k)"
     path: "data/raw/cardiac/cardio70k_standardized.csv"
     n_samples: 70000
-    n_features: 12
+    n_features: 11  # predictors only; excludes id + target
     age_unit: "days"  # ages stored in days, not years
 
 sensitive_attributes:

@@ -145,5 +145,6 @@
       "bmi": ["BMI"]
     }
   },
+  "_cardiac_relevant_datasets_note": "cardio70k intentionally excluded from the default load/train loop (opt-in via --datasets cardio70k). See scripts/utils/README.md.",
   "cardiac_relevant_datasets": ["cleveland", "kaggle_heart"]
 }
