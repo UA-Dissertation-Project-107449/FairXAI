@@ -131,6 +131,7 @@ markers = [
     "slow: marks tests as slow subprocess/pipeline tests (deselect with '-m \"not slow\"')",
     "xgboost_model: marks tests that include xgboost training paths",
     "integration: marks tests that run full pipeline via subprocess",
+    "local_data: requires gitignored local datasets and is excluded from CI",
 ]
 filterwarnings = [
     # seaborn 0.13.x uses deprecated matplotlib internals — nothing we can do

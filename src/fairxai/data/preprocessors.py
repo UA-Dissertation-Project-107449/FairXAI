@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 
 import numpy as np
 import pandas as pd
@@ -281,85 +282,68 @@ class CardiacPreprocessor:
         Returns:
             Tuple of (train_df, test_df)
         """
-        # Create stratification variable combining target and sensitive attributes
+        # Prefer the most detailed target + sensitive-attribute key that sklearn
+        # can stratify without discarding rare rows. If a detailed key contains
+        # singleton groups, progressively remove the least-preferred sensitive
+        # attribute; target-only and finally random splitting are safe fallbacks.
         strat_cols = [target] + [attr for attr in self.sensitive_attrs if attr in df.columns]
         strat_cols = list(dict.fromkeys(strat_cols))
-
-        # Create combined stratification key (dedupe duplicate columns if present)
-        strat_df = df[strat_cols]
-        if strat_df.columns.duplicated().any():
-            strat_df = strat_df.loc[:, ~strat_df.columns.duplicated()]
-        strat_values = strat_df.astype(str).to_numpy()
-        strat_key = ["_".join(row) for row in strat_values]
-        df["_strat_key"] = pd.Series(strat_key, index=df.index)
-
-        # Remove rare combinations (< 2 samples) to avoid split errors
-        strat_counts = df["_strat_key"].value_counts()
-        valid_strats = strat_counts[strat_counts >= 2].index
-        df_valid = df[df["_strat_key"].isin(valid_strats)].copy()
         context = f"[{context_label}] " if context_label else ""
+        working = df.copy()
+        n_test = (
+            math.ceil(len(working) * test_size) if isinstance(test_size, float) else int(test_size)
+        )
+        n_train = len(working) - n_test
+        max_strata = min(n_train, n_test)
+        strat_key = None
+        selected_cols = None
 
-        def _format_index_preview(indices: list[int], limit: int = 10) -> str:
-            head = indices[:limit]
-            suffix = "..." if len(indices) > limit else ""
-            return f"{head}{suffix}"
-
-        if len(df_valid) < len(df):
-            dropped = len(df) - len(df_valid)
-            dropped_indices = sorted(df.index.difference(df_valid.index).tolist())
+        for width in range(len(strat_cols), 0, -1):
+            candidate_cols = strat_cols[:width]
+            candidate_frame = working[candidate_cols]
+            if candidate_frame.columns.duplicated().any():
+                candidate_frame = candidate_frame.loc[:, ~candidate_frame.columns.duplicated()]
+            candidate_key = candidate_frame.astype(str).agg("_".join, axis=1)
+            counts = candidate_key.value_counts()
+            valid = (
+                candidate_key.nunique() >= 2
+                and counts.min() >= 2
+                and candidate_key.nunique() <= max_strata
+            )
+            if valid:
+                strat_key = candidate_key
+                selected_cols = candidate_cols
+                break
             logging.warning(
-                "%sDropped %d samples with rare group combinations; dropped_row_indices=%s",
+                "%sCannot stratify on %s without invalid rare strata; trying a coarser key",
                 context,
-                dropped,
-                _format_index_preview(dropped_indices),
+                candidate_cols,
             )
 
-            # Fallback: if too many dropped, retry with fewer stratification columns
-            if len(df_valid) < 0.9 * len(df):
-                fallback_cols = [target]
-                primary_sensitive = next(
-                    (attr for attr in self.sensitive_attrs if attr in df.columns), None
-                )
-                if primary_sensitive:
-                    fallback_cols.append(primary_sensitive)
-                fallback_df = df[fallback_cols]
-                if fallback_df.columns.duplicated().any():
-                    fallback_df = fallback_df.loc[:, ~fallback_df.columns.duplicated()]
-                fallback_values = fallback_df.astype(str).to_numpy()
-                fallback_key = ["_".join(row) for row in fallback_values]
-                df["_strat_key"] = pd.Series(fallback_key, index=df.index)
-                strat_counts = df["_strat_key"].value_counts()
-                valid_strats = strat_counts[strat_counts >= 2].index
-                df_valid = df[df["_strat_key"].isin(valid_strats)].copy()
-                dropped = len(df) - len(df_valid)
-                dropped_indices = sorted(df.index.difference(df_valid.index).tolist())
-                logging.warning(
-                    "%sFallback stratification dropped %d samples; dropped_row_indices=%s",
-                    context,
-                    dropped,
-                    _format_index_preview(dropped_indices),
-                )
-
-        # Perform stratified split (fallback to unstratified if no valid groups)
-        if df_valid.empty or df_valid["_strat_key"].nunique() < 2:
+        # Perform stratified split; a random split is the final non-dropping
+        # fallback when even target-only stratification is impossible.
+        if strat_key is None:
             logging.warning(
-                "%sStratified split unavailable; falling back to random split",
+                "%sStratified split unavailable; using a non-dropping random split",
                 context,
             )
             train_df, test_df = train_test_split(
-                df, test_size=test_size, random_state=random_state, shuffle=True
+                working, test_size=test_size, random_state=random_state, shuffle=True
             )
         else:
+            if selected_cols != strat_cols:
+                logging.warning(
+                    "%sUsing coarser stratification key %s; all %d rows retained",
+                    context,
+                    selected_cols,
+                    len(working),
+                )
             train_df, test_df = train_test_split(
-                df_valid,
+                working,
                 test_size=test_size,
-                stratify=df_valid["_strat_key"],
+                stratify=strat_key,
                 random_state=random_state,
             )
-
-        # Remove stratification key
-        train_df = train_df.drop(columns=["_strat_key"])
-        test_df = test_df.drop(columns=["_strat_key"])
 
         logging.info(f"[SUCCESS] Split: {len(train_df)} train, {len(test_df)} test")
         logging.info(f"  Test size: {test_size:.1%}")

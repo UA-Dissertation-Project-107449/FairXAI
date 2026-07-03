@@ -77,7 +77,7 @@ jobs:
         run: python3 -m pip install pytest matplotlib seaborn jenkspy prefect tabulate
 
       - name: Unit tests
-        run: pytest tests/unit/ -q
+        run: pytest tests/unit/ -q -m "not local_data"
 
   build:
     name: Build wheel & sdist

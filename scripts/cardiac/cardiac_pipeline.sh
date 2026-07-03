@@ -73,6 +73,8 @@ RUN_RECOMMENDATIONS=${RUN_RECOMMENDATIONS:-true}
 VERBOSE=${VERBOSE:-0}
 RESUME_FROM=${RESUME_FROM:-""}
 GO_UNTIL=${GO_UNTIL:-""}
+# Optional subsample cap forwarded to preprocessing; unset -> 10k default. See scripts/utils/README.md.
+MAX_SAMPLES=${MAX_SAMPLES:-""}
 ATTRIBUTE_BINNING_CONFIG="$ROOT_DIR/configs/experiments/age_binning.yaml"
 GROUPING_CONFIG="$ROOT_DIR/configs/experiments/clustering.yaml"
 MITIGATION_CONFIG="$ROOT_DIR/configs/experiments/mitigation.yaml"
@@ -556,6 +558,10 @@ if should_run 4; then
     PREPROCESS_ARGS=""
     if [[ "$RUN_COMBINATORIAL" == "true" ]]; then
         PREPROCESS_ARGS="--all-binnings"
+    fi
+    if [[ -n "$MAX_SAMPLES" ]]; then
+        PREPROCESS_ARGS="$PREPROCESS_ARGS --max-samples $MAX_SAMPLES"
+        echo "[PHASE 4/12] MAX_SAMPLES override -> --max-samples $MAX_SAMPLES"
     fi
     python3 "$ROOT_DIR/scripts/cardiac/preprocess.py" $PREPROCESS_ARGS "${DATASET_ARGS[@]}" $VERBOSE_FLAG
     mark_done 4 "preprocess"

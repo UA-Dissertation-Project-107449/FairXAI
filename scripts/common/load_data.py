@@ -142,7 +142,13 @@ def main():
             sensitive_cols = pipeline_cfg.get("fairness", {}).get(
                 "sensitive_attributes", ["age_group", "sex"]
             )
-            required_cols = [target_col, *sensitive_cols]
+            # group_cluster is generated downstream. Ethnicity is optional because
+            # the current cardiac sources do not provide it.
+            derived_sensitive = {"group_cluster"}
+            optional_sensitive = {"ethnicity"}
+            non_required_sensitive = derived_sensitive | optional_sensitive
+            core_sensitive = [c for c in sensitive_cols if c not in non_required_sensitive]
+            required_cols = [target_col, *core_sensitive]
             if pipeline_cfg.get("training", {}).get("modality") == "image":
                 required_cols.append("image_path")
             missing_cols = [
@@ -150,6 +156,22 @@ def main():
             ]
             if missing_cols:
                 raise AssertionError(f"Missing required columns: {missing_cols}")
+            absent_derived = [
+                c for c in sensitive_cols if c in derived_sensitive and c not in df_raw.columns
+            ]
+            if absent_derived:
+                logging.info(
+                    "  Derived sensitive attrs absent at load (generated downstream): %s",
+                    absent_derived,
+                )
+            absent_optional = [
+                c for c in sensitive_cols if c in optional_sensitive and c not in df_raw.columns
+            ]
+            if absent_optional:
+                logging.info(
+                    "  Optional sensitive attrs unavailable in this source: %s",
+                    absent_optional,
+                )
 
             standardized_datasets[dataset_name] = df_raw
 
