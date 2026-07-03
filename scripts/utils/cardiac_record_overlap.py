@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Measure record-level overlap between two standardized cardiac datasets.
+"""Measure fingerprint overlap between two standardized cardiac datasets.
 
 Chapter-3 P0 (lines 285, 450): Cleveland is one of the five UCI sources merged
 into the Kaggle Heart compilation, so the standalone Cleveland file and the
-Kaggle file cannot be assumed statistically independent. This quantifies the
-exact intersection so comparisons and aggregate claims can be caveated.
+Kaggle file cannot be assumed statistically independent. This quantifies a
+six-field fingerprint intersection so comparisons and aggregate claims can be
+caveated.
 
 Matching is done on continuous/stable clinical columns that survive schema
 harmonisation unchanged (age, sex, resting BP, cholesterol, max heart rate, ST
@@ -22,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 
 import pandas as pd
@@ -44,31 +46,29 @@ def _key_frame(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
 
 
 def _keys(df: pd.DataFrame, cols: list[str]) -> pd.Series:
-    return _key_frame(df, cols).apply(lambda r: tuple(None if pd.isna(v) else v for v in r), axis=1)
+    return _key_frame(df, cols).apply(
+        lambda row: tuple(None if pd.isna(value) else value for value in row),
+        axis=1,
+    )
 
 
 def overlap(a: pd.DataFrame, b: pd.DataFrame, cols: list[str]) -> dict:
-    ka = _keys(a, cols)
-    kb = _keys(b, cols)
-    set_a, set_b = set(ka), set(kb)
-    inter = set_a & set_b
-
-    # Count how many rows in each file fall in the intersection (duplicates
-    # within a file mean row-count and unique-key-count can differ).
-    a_rows_in = int(ka.isin(inter).sum())
-    b_rows_in = int(kb.isin(inter).sum())
+    count_a = Counter(_keys(a, cols))
+    count_b = Counter(_keys(b, cols))
+    shared = count_a & count_b
+    matched_pairs = sum(shared.values())
 
     return {
-        "key_columns": cols,
+        "fingerprint_columns": cols,
+        "matching_method": "one-to-one multiset fingerprint matching",
         "a_rows": int(len(a)),
         "b_rows": int(len(b)),
-        "a_unique_keys": len(set_a),
-        "b_unique_keys": len(set_b),
-        "intersection_unique_keys": len(inter),
-        "a_rows_in_intersection": a_rows_in,
-        "b_rows_in_intersection": b_rows_in,
-        "a_pct_in_intersection": round(100 * a_rows_in / len(a), 1),
-        "b_pct_in_intersection": round(100 * b_rows_in / len(b), 1),
+        "a_unique_fingerprints": len(count_a),
+        "b_unique_fingerprints": len(count_b),
+        "intersection_unique_fingerprints": len(shared),
+        "matched_row_pairs": matched_pairs,
+        "a_pct_matched": round(100 * matched_pairs / len(a), 1) if len(a) else 0.0,
+        "b_pct_matched": round(100 * matched_pairs / len(b), 1) if len(b) else 0.0,
     }
 
 
@@ -76,21 +76,17 @@ def print_report(a_path: Path, b_path: Path, r: dict) -> None:
     print("=== Cardiac record overlap ===\n")
     print(f"A: {a_path}  ({r['a_rows']} rows)")
     print(f"B: {b_path}  ({r['b_rows']} rows)")
-    print(f"Key columns: {', '.join(r['key_columns'])}\n")
-    print(f"Unique keys A / B          : {r['a_unique_keys']} / {r['b_unique_keys']}")
-    print(f"Intersection (unique keys) : {r['intersection_unique_keys']}")
+    print(f"Fingerprint columns: {', '.join(r['fingerprint_columns'])}\n")
     print(
-        f"A rows inside intersection : {r['a_rows_in_intersection']} "
-        f"({r['a_pct_in_intersection']}% of A)"
+        f"Unique fingerprints A / B   : {r['a_unique_fingerprints']} / {r['b_unique_fingerprints']}"
     )
+    print(f"Shared unique fingerprints  : {r['intersection_unique_fingerprints']}")
+    print(f"One-to-one matched row pairs : {r['matched_row_pairs']}")
+    print(f"Matched share of A / B       : {r['a_pct_matched']}% / {r['b_pct_matched']}%")
     print(
-        f"B rows inside intersection : {r['b_rows_in_intersection']} "
-        f"({r['b_pct_in_intersection']}% of B)"
-    )
-    print(
-        "\nInterpretation: A's share inside the intersection estimates how much of "
-        "the standalone file is re-used in the compilation; treat the two as "
-        "non-independent to that degree."
+        "\nInterpretation: A's matched share estimates reuse in the compilation. "
+        "The six fields are a fingerprint, not proof of exact record or patient "
+        "identity; duplicates are paired at most once."
     )
 
 

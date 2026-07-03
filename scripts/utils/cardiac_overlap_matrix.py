@@ -251,9 +251,7 @@ def build_source_union_audit() -> dict:
     if missing:
         return {"available": False, "missing": missing}
 
-    uci_frames = {
-        label: _load_uci_common(path) for label, path in UCI_SOURCE_PATHS.items()
-    }
+    uci_frames = {label: _load_uci_common(path) for label, path in UCI_SOURCE_PATHS.items()}
     result = audit_common_frames(
         uci_frames,
         _load_statlog_common(STATLOG_PATH),
@@ -281,9 +279,7 @@ def build(sources: dict[str, tuple[Path, Loader]]) -> dict:
         for b in labels:
             n = len(loaded[a] & loaded[b])
             inter[a][b] = n
-            pct_of_unique_keys[a][b] = (
-                round(100 * n / len(loaded[a]), 1) if loaded[a] else 0.0
-            )
+            pct_of_unique_keys[a][b] = round(100 * n / len(loaded[a]), 1) if loaded[a] else 0.0
 
     return {
         "key_columns": FINGERPRINT_KEYS,
