@@ -129,6 +129,7 @@ def preprocess_data(
     run_id: str,
     all_binnings: bool = False,
     datasets: Optional[list[str]] = None,
+    max_samples: Optional[int] = None,
     verbose: int = 0,
 ):
     logger = get_run_logger()
@@ -137,6 +138,9 @@ def preprocess_data(
     args = []
     if all_binnings:
         args.append("--all-binnings")
+    if max_samples is not None:
+        args.extend(["--max-samples", str(max_samples)])
+        logger.info("[PHASE 4/12] MAX_SAMPLES override -> --max-samples %s", max_samples)
     if datasets:
         args.extend(["--datasets", *datasets])
     args.extend(_verbose_flags(verbose))
@@ -456,6 +460,7 @@ def cardiac_pipeline(
     run_id_override: Optional[str] = None,
     datasets: Optional[list[str]] = None,
     model_types: Optional[list[str]] = None,
+    max_samples: Optional[int] = None,
 ):
     """
     The main pipeline flow for the cardiac fairness analysis.
@@ -554,6 +559,18 @@ def cardiac_pipeline(
         cpu_fraction if cpu_fraction is not None else scheduling_cfg.get("cpu_fraction", 0.75)
     )
     effective_cores = _resolve_effective_cores(resolved_max_cores, resolved_cpu_fraction)
+
+    env_max_samples = os.getenv("MAX_SAMPLES")
+    if max_samples is not None:
+        resolved_max_samples = _as_int(max_samples)
+    elif env_max_samples:
+        resolved_max_samples = _as_int(env_max_samples)
+        if resolved_max_samples is None:
+            raise ValueError(f"MAX_SAMPLES must be an integer, got {env_max_samples!r}")
+    else:
+        resolved_max_samples = None
+    if resolved_max_samples is not None and resolved_max_samples < 0:
+        raise ValueError("max_samples must be zero (no cap) or a positive integer")
 
     if resolved_skip_studies:
         run_hpo_study_enabled = False
@@ -667,6 +684,10 @@ def cardiac_pipeline(
     logger.info(f"Comparison config: {COMPARISON_CONFIG}")
     logger.info(f"Datasets override: {datasets if datasets else 'config/default'}")
     logger.info(f"Model types override: {model_types if model_types else 'config/default'}")
+    logger.info(
+        "Preprocessing sample cap: %s",
+        resolved_max_samples if resolved_max_samples is not None else "script default (10000)",
+    )
 
     # --- Helper: checkpoint after a successful task -------------------------
     def _checkpoint(stage_num: int, future):
@@ -722,7 +743,12 @@ def cardiac_pipeline(
     if _should_run(4):
         wait = [profile_task] if profile_task else []
         preprocess_data_task = preprocess_data.submit(
-            run_id, run_combinatorial, datasets, verbose, wait_for=wait
+            run_id,
+            run_combinatorial,
+            datasets,
+            resolved_max_samples,
+            verbose,
+            wait_for=wait,
         )
     else:
         logger.info("[4/12] preprocess - skipped (outside active range)")
@@ -1120,6 +1146,12 @@ Examples:
         default=None,
         help="Model n_jobs passed to HPO base estimator when supported.",
     )
+    p.add_argument(
+        "--max-samples",
+        type=int,
+        default=None,
+        help="Preprocessing sample cap per dataset; zero disables the cap (default: 10000).",
+    )
     skip_group = p.add_mutually_exclusive_group()
     skip_group.add_argument(
         "--skip-studies",
@@ -1233,4 +1265,5 @@ if __name__ == "__main__":
         run_id_override=args.run_id,
         datasets=args.datasets,
         model_types=args.model_types,
+        max_samples=args.max_samples,
     )
