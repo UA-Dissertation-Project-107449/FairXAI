@@ -81,7 +81,7 @@ jobs:
         run: python3 -m fairxai.cli.characterize --help
 
       - name: Unit tests (skip viz smoke in PR quick CI)
-        run: pytest tests/unit/ -q --ignore=tests/unit/test_viz_smoke.py
+        run: pytest tests/unit/ -q -m "not local_data" --ignore=tests/unit/test_viz_smoke.py
 
   build:
     name: Build wheel & sdist
