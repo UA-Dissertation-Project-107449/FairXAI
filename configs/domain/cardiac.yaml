@@ -8,14 +8,28 @@ dataset_info:
   positive_class: 1
 
 datasets:
+  # Analytical cohorts (raw-UCI-derived; built by scripts/utils/build_cardiac_uci_cohorts.py).
+  cleveland_uci:
+    source: "UCI Heart Disease Repository (raw processed.cleveland.data)"
+    path: "data/raw/cardiac/cleveland_uci_standardized.csv"
+    n_samples: 297  # 303 raw -> 297 complete-case (drops 6 ca/thal-missing rows)
+    n_features: 11  # full clinical panel incl. ca/thal/slope; age/sex are sensitive
+
+  four_site_uci:
+    source: "UCI Heart Disease Repository (Cleveland+Hungarian+Switzerland+VA, dedup 918)"
+    path: "data/raw/cardiac/four_site_uci_standardized.csv"
+    n_samples: 918  # 920 raw -> 918 exact-key dedup
+    n_features: 7   # common panel: ca/thal/slope/chol excluded (site-dependent missingness)
+
+  # Curated cohorts retained for the provenance audit only (not in cardiac_relevant_datasets).
   cleveland:
-    source: "UCI Heart Disease Cleveland"
+    source: "Kaggle-curated Cleveland mirror (audit-only)"
     path: "data/raw/cardiac/cleveland_standardized.csv"
     n_samples: 297  # After preprocessing
     n_features: 13
-    
+
   kaggle_heart:
-    source: "Kaggle Heart Disease Dataset"
+    source: "Kaggle Heart Disease Dataset (audit-only)"
     path: "data/raw/cardiac/kaggle_heart_standardized.csv"
     n_samples: 918  # After preprocessing
     n_features: 11
@@ -121,6 +135,12 @@ fairness_context:
 # default_action: drop  -- remove violating rows (safe for training; log count)
 # default_action: flag  -- keep rows, add <col>_invalid boolean column instead
 #
+# MISSING-VALUE POLICY: allow_null is true everywhere. Missing values are NOT a
+# validity failure — they are handled downstream by the per-dataset missing_strategy
+# (holdout-safe imputation for pooled cohorts, complete-case drop for clean ones). If
+# constraints dropped nulls here, the pooled four_site_uci cohort would lose ~25% of
+# rows before imputation. Only physiologically impossible PRESENT values are dropped.
+#
 # SCOPE: continuous/numeric features only.
 # Categorical features (e.g. chest pain type, resting ECG, fasting blood sugar,
 # exercise angina, ST slope, thalassemia, cholesterol/glucose ordinal codes in
@@ -133,54 +153,54 @@ clinical_constraints:
   age:
     min: 1          # 0 or negative is impossible; already normalised to years
     max: 120
-    allow_null: false
+    allow_null: true
     allow_zero: false
 
   resting_blood_pressure:
     min: 40         # below 40 mmHg = haemorrhagic shock / recording error
     max: 250        # above 250 = severe hypertensive crisis; likely data entry error
-    allow_null: false
+    allow_null: true
     allow_zero: false
     note: "Maps to: trestbps (cleveland), RestingBP (kaggle_heart), ap_hi (cardio70k)"
 
   diastolic_blood_pressure:
     min: 30
     max: 200
-    allow_null: false
+    allow_null: true
     allow_zero: false
     note: "Maps to: ap_lo (cardio70k only)"
 
   serum_cholesterol:
     min: 100        # <100 mg/dL possible but extremely rare in practice; treat as suspect
     max: 600        # >600 consistent with familial hypercholesterolaemia
-    allow_null: false
+    allow_null: true
     allow_zero: false   # 0 mg/dL = missing data encoded as zero; 172 rows in kaggle_heart
     note: "Maps to: chol (cleveland), Cholesterol (kaggle_heart). cardio70k uses categorical 1/2/3 -- not applied."
 
   max_heart_rate:
     min: 50         # below 50 bpm at peak exercise = extreme bradycardia / recording error
     max: 230        # theoretical human maximum; >220 almost always a recording error
-    allow_null: false
+    allow_null: true
     allow_zero: false
     note: "Maps to: thalach (cleveland), MaxHR (kaggle_heart)"
 
   st_depression:
     min: -5         # negative = ST elevation, still physiologically meaningful
     max: 10         # >10 mm is an extreme outlier / recording error
-    allow_null: false
+    allow_null: true
     allow_zero: true    # 0 mm = no depression, perfectly valid
     note: "Maps to: oldpeak (cleveland), Oldpeak (kaggle_heart)"
 
   height_cm:
     min: 100        # shortest recorded adult: 54.6 cm; 100 cm is a conservative bound
     max: 250        # tallest person recorded: 272 cm; 250 cm is a conservative upper bound
-    allow_null: false
+    allow_null: true
     allow_zero: false
     note: "Maps to: height (cardio70k only)"
 
   weight_kg:
     min: 30
     max: 300
-    allow_null: false
+    allow_null: true
     allow_zero: false
     note: "Maps to: weight (cardio70k only)"
