@@ -1057,6 +1057,13 @@ def main():
             xai_cfg = pipeline_cfg.get("xai", {})
             xai_dir = experiments_dir / "xai"
             xai_dataset_key = f"{dataset_name}__{model_type}"
+            # NOTE — CV preprocessing-leakage limitation: X_train/X_test arrive
+            # already imputed and scaled on the single holdout split, then are
+            # re-pooled here for k-fold CV. CVTrainer re-splits X_full without
+            # refitting imputation/scaling per fold, so each fold's transforms
+            # include out-of-fold statistics. This biases CV metrics/CV-XAI
+            # optimistically; the primary single_split results are leak-free.
+            # A true fix (refit inside every fold) is a deferred CVTrainer change.
             X_full = pd.concat([X_train, X_test], ignore_index=True)
             y_full = pd.concat([y_train, y_test], ignore_index=True)
             sensitive_full = pd.concat([sensitive_train, sensitive_test], ignore_index=True)

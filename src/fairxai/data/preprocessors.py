@@ -27,6 +27,7 @@ class CardiacPreprocessor:
         self.sensitive_attrs = preferred_sensitive(sensitive_attrs)
         self.scalers = {}
         self.encoders = {}
+        self.impute_values: dict[str, object] = {}
         self.metadata = {}
 
     def analyze_missing_values(self, df: pd.DataFrame) -> dict[str, object]:
@@ -80,11 +81,20 @@ class CardiacPreprocessor:
 
         Args:
             df: DataFrame with potential missing values
-            strategy: 'analyze_only', 'drop_rows', 'drop_columns', or 'median'
+            strategy: 'analyze_only' (log only), 'keep' (retain rows for later
+                holdout-safe imputation), or 'drop_rows' (complete-case). Any other
+                value raises ValueError.
 
         Returns:
             Tuple of (processed DataFrame, actions taken)
         """
+        allowed = {"analyze_only", "keep", "drop_rows"}
+        if strategy not in allowed:
+            raise ValueError(
+                f"Unknown missing-value strategy {strategy!r}; "
+                f"expected one of {sorted(allowed)}."
+            )
+
         df_processed = df.copy()
         actions = {"strategy": strategy, "actions_taken": []}
 
@@ -102,6 +112,17 @@ class CardiacPreprocessor:
                 )
             return df_processed, actions
 
+        elif strategy == "keep":
+            # Retain every row; missing values are imputed later in prepare_features
+            # (holdout-safe: fitted on train, reused on test). Required for pooled
+            # cohorts with structural, site-dependent missingness where drop_rows
+            # would bias.
+            actions["actions_taken"].append(
+                "Kept all rows; missing values deferred to holdout-safe imputation"
+            )
+            logging.info("Missing-value strategy=keep: %d rows retained", len(df_processed))
+            return df_processed, actions
+
         elif strategy == "drop_rows":
             initial_len = len(df_processed)
             df_processed = df_processed.dropna()
@@ -111,27 +132,54 @@ class CardiacPreprocessor:
 
         return df_processed, actions
 
-    def _impute_missing(self, X: pd.DataFrame) -> pd.DataFrame:
+    def _impute_missing(self, X: pd.DataFrame, fit: bool = True) -> pd.DataFrame:
         """Fill missing values: median for numeric columns, mode for categoricals.
+
+        Holdout-safe: with ``fit=True`` the fill value per column is computed from
+        *X* (the training holdout) and cached in ``self.impute_values``; with
+        ``fit=False`` the cached training values are reused, so the held-out test
+        set never sees its own statistics.
+
+        LIMITATION — not CV-fold-safe: the downstream k-fold CV in
+        ``train_baseline`` re-pools this already-imputed train/test matrix
+        (``X_full``) before splitting, so each CV fold is imputed (and scaled)
+        with statistics that include out-of-fold rows. This matches the
+        pre-existing behaviour of :meth:`scale_features` and biases CV metrics
+        optimistically; the primary single holdout split is leak-free. Fixing it
+        requires refitting imputation+scaling inside every fold (deferred).
 
         Args:
             X: Feature matrix (modified in-place and returned).
+            fit: Learn and store fill values (train) vs. reuse stored ones (test).
 
         Returns:
             The same DataFrame with NaNs filled.
         """
-        numeric_cols = X.select_dtypes(include=[np.number]).columns
-        categorical_cols = X.select_dtypes(include=["object", "category"]).columns
+        # is_numeric_dtype catches pandas nullable integers (Int64) that
+        # select_dtypes(include=[np.number]) can miss, so nullable columns are
+        # imputed with a numeric fallback rather than a string.
+        numeric_cols = {col for col in X.columns if pd.api.types.is_numeric_dtype(X[col])}
 
-        for col in numeric_cols:
-            if X[col].isnull().any():
-                X[col] = X[col].fillna(X[col].median())
-
-        for col in categorical_cols:
-            if X[col].isnull().any():
+        if fit:
+            self.impute_values = {}
+            for col in numeric_cols:
+                self.impute_values[col] = X[col].median()
+            for col in X.columns:
+                if col in numeric_cols:
+                    continue
                 mode = X[col].mode(dropna=True)
-                fill_value = mode.iloc[0] if not mode.empty else "unknown"
-                X[col] = X[col].fillna(fill_value)
+                self.impute_values[col] = mode.iloc[0] if not mode.empty else "unknown"
+
+        for col in X.columns:
+            if not X[col].isnull().any():
+                continue
+            fill_value = self.impute_values.get(col)
+            # pd.isna handles every all-missing case: a float NaN median, a
+            # pd.NA from an all-missing nullable Int64 column, or a None for an
+            # unseen column — all fall back to a dtype-appropriate constant.
+            if fill_value is None or pd.isna(fill_value):
+                fill_value = 0 if col in numeric_cols else "unknown"
+            X[col] = X[col].fillna(fill_value)
 
         return X
 
@@ -159,7 +207,12 @@ class CardiacPreprocessor:
         return X
 
     def prepare_features(
-        self, df: pd.DataFrame, target: str = "heart_disease", exclude_cols: list[str] | None = None
+        self,
+        df: pd.DataFrame,
+        target: str = "heart_disease",
+        exclude_cols: list[str] | None = None,
+        extra_exclude: list[str] | None = None,
+        fit: bool = True,
     ) -> tuple[pd.DataFrame, pd.Series, list[str]]:
         """Prepare feature matrix and target vector.
 
@@ -171,6 +224,10 @@ class CardiacPreprocessor:
             df: Input DataFrame
             target: Target column name
             exclude_cols: Columns to exclude from features
+            extra_exclude: Per-dataset model-only exclusions (kept in the canonical
+                data for provenance/profiling, dropped from the model matrix — e.g.
+                source_site, or the sparse ca/thal/slope/chol panel columns).
+            fit: Fit imputation on this frame (train) vs. reuse fitted values (test).
 
         Returns:
             Tuple of (X, y, feature_names)
@@ -217,12 +274,15 @@ class CardiacPreprocessor:
             )
         )
 
+        if extra_exclude:
+            exclude_cols = list(dict.fromkeys(exclude_cols + list(extra_exclude)))
+
         feature_cols = [col for col in df.columns if col not in exclude_cols]
 
         X = df[feature_cols].copy()
         y = df[target].copy()
 
-        X = self._impute_missing(X)
+        X = self._impute_missing(X, fit=fit)
         X = self._encode_categoricals(X)
 
         return X, y, list(feature_cols)

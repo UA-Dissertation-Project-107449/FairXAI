@@ -148,15 +148,19 @@ def _apply_clinical_constraints(
     df: pd.DataFrame,
     constraints_cfg: dict,
     dataset_name: str,
+    skip_columns: set[str] | None = None,
 ) -> pd.DataFrame:
     """Drop (or flag) rows that violate physiological validity constraints.
 
     Constraints are defined in configs/domain/<pipeline>.yaml under
     ``clinical_constraints``. Each key is a canonical feature name resolved to
     an actual column via _CONSTRAINT_ALIASES. Missing features are skipped silently
-    so the same config works across all three datasets.
+    so the same config works across all three datasets. Columns in ``skip_columns``
+    (a dataset's model-excluded features) are not policed — a value we never feed to
+    the model must not delete otherwise-valid rows.
     """
     default_action = constraints_cfg.get("default_action", "drop")
+    skip_columns = skip_columns or set()
     n_before = len(df)
     total_dropped = 0
 
@@ -170,6 +174,11 @@ def _apply_clinical_constraints(
         )
         if col is None:
             continue  # Feature not present in this dataset -- skip silently
+        if col in skip_columns:
+            logging.info(
+                "  [%s] %s (%s): skipped (model-excluded feature)", dataset_name, canonical, col
+            )
+            continue
 
         action = rule.get("action", default_action)
         mask_bad = pd.Series(False, index=df.index)
@@ -381,6 +390,11 @@ def main():
                 data_processed,
             )
 
+            # Per-dataset preprocessing policy (schema-driven).
+            dataset_schema = schema_cfg.get("datasets", {}).get(dataset_name, {})
+            missing_strategy = dataset_schema.get("missing_strategy", "drop_rows")
+            model_exclude = dataset_schema.get("model_exclude_features", [])
+
             # Load dataset
             df = pd.read_csv(filepath)
             df = _apply_schema_rules(df, schema_cfg, dataset_name)
@@ -420,7 +434,9 @@ def main():
             # Must run after age normalization so age_raw is already in years.
             constraints_cfg = domain_cfg.get("clinical_constraints", {})
             if constraints_cfg:
-                df = _apply_clinical_constraints(df, constraints_cfg, dataset_name)
+                df = _apply_clinical_constraints(
+                    df, constraints_cfg, dataset_name, skip_columns=set(model_exclude)
+                )
                 if df.empty:
                     logging.error(
                         f"No rows remaining after clinical constraints for {dataset_name}. Skipping."
@@ -463,8 +479,10 @@ def main():
                         f"  {col}: {info['count']} ({info['percentage']:.1f}%) - {info['action']}"
                     )
 
-            # Handle missing values (strategy: drop rows if < 5% missing)
-            df_clean, actions = preprocessor.handle_missing_values(df, strategy="drop_rows")
+            # Handle missing values per the dataset's declared strategy:
+            #   drop_rows -> complete-case (clean single-site cohorts)
+            #   keep      -> retain rows; impute holdout-safe at feature prep (pooled cohorts)
+            df_clean, actions = preprocessor.handle_missing_values(df, strategy=missing_strategy)
             if df_clean.empty:
                 logging.error(
                     f"No rows available after missing-value handling for {dataset_name}. Skipping."
@@ -580,9 +598,11 @@ def main():
             logging.info("Feature preparation and scaling:")
 
             X_train, y_train, feature_names = preprocessor.prepare_features(
-                train_df, target=target_col
+                train_df, target=target_col, extra_exclude=model_exclude, fit=True
             )
-            X_test, y_test, _ = preprocessor.prepare_features(test_df, target=target_col)
+            X_test, y_test, _ = preprocessor.prepare_features(
+                test_df, target=target_col, extra_exclude=model_exclude, fit=False
+            )
 
             logging.info(f"Features: {len(feature_names)}")
             logging.info(
