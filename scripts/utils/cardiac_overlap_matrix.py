@@ -91,8 +91,13 @@ def _canon(df: pd.DataFrame) -> pd.DataFrame:
     return k
 
 
-def _canonical_common(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalize the 11 shared predictors plus target to numeric UCI encodings."""
+def canonical_common(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize the 11 shared predictors plus target to numeric UCI encodings.
+
+    Public: the exact-key deduplication used to build the analytical cohorts
+    (scripts/utils/build_cardiac_uci_cohorts.py) reuses this so the 918 count is
+    guaranteed identical to the provenance audit.
+    """
     out = df[COMMON_KEYS].copy()
     for col in COMMON_KEYS:
         out[col] = pd.to_numeric(out[col], errors="coerce")
@@ -111,7 +116,7 @@ def _load_uci_raw(path: Path) -> pd.DataFrame:
 def _load_uci_common(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path, header=None, names=UCI_RAW_COLUMNS, na_values="?")
     df["target"] = (pd.to_numeric(df["num"], errors="coerce") > 0).astype("Int64")
-    return _canonical_common(df)
+    return canonical_common(df)
 
 
 def _load_statlog_frame(path: Path) -> pd.DataFrame:
@@ -126,7 +131,7 @@ def _load_statlog_common(path: Path) -> pd.DataFrame:
     df = _load_statlog_frame(path)
     # Statlog target: 1 = absence, 2 = presence.
     df["target"] = (pd.to_numeric(df["num"], errors="coerce") == 2).astype("Int64")
-    return _canonical_common(df)
+    return canonical_common(df)
 
 
 def _load_kaggle_cleveland(path: Path) -> pd.DataFrame:
@@ -153,7 +158,7 @@ def _load_heart918_common(path: Path) -> pd.DataFrame:
             "target": df["HeartDisease"],
         }
     )
-    return _canonical_common(out)
+    return canonical_common(out)
 
 
 def _load_heart918(path: Path) -> pd.DataFrame:
