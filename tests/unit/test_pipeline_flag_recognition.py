@@ -37,6 +37,7 @@ def test_prefect_help_lists_scope_flags() -> None:
     assert "--parallel-studies" in output
     assert "--parallel-experiments" in output
     assert "--max-cores" in output
+    assert "--max-samples" in output
     assert "--hpo-search-n-jobs" in output
 
 
@@ -128,3 +129,11 @@ def test_prefect_compare_stage_forwards_dataset_scope_to_grouping() -> None:
     assert "def compare_experiments(run_id: str, datasets:" in source
     assert 'grouping_args.extend(["--datasets", *datasets])' in source
     assert "compare_experiments.submit(run_id, datasets, verbose" in source
+
+
+def test_prefect_preprocess_forwards_max_samples() -> None:
+    source = PREFECT_FLOW.read_text(encoding="utf-8")
+
+    assert 'args.extend(["--max-samples", str(max_samples)])' in source
+    assert "resolved_max_samples," in source
+    assert "max_samples=args.max_samples" in source
