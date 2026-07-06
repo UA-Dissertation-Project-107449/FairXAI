@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+from typing import Any, Callable, Optional
 
 import numpy as np
 import pandas as pd
@@ -140,13 +141,11 @@ class CardiacPreprocessor:
         ``fit=False`` the cached training values are reused, so the held-out test
         set never sees its own statistics.
 
-        LIMITATION — not CV-fold-safe: the downstream k-fold CV in
-        ``train_baseline`` re-pools this already-imputed train/test matrix
-        (``X_full``) before splitting, so each CV fold is imputed (and scaled)
-        with statistics that include out-of-fold rows. This matches the
-        pre-existing behaviour of :meth:`scale_features` and biases CV metrics
-        optimistically; the primary single holdout split is leak-free. Fixing it
-        requires refitting imputation+scaling inside every fold (deferred).
+        Cross-validation is handled separately and is also leak-free: the CV path
+        feeds the raw (pre-imputation, pre-scaling) matrix to
+        :class:`FoldPreprocessor` via ``CVTrainer.fold_preprocessor_factory``,
+        which refits imputation+scaling inside every fold on that fold's training
+        rows only. This method governs the single holdout split.
 
         Args:
             X: Feature matrix (modified in-place and returned).
@@ -578,3 +577,83 @@ class DermatologyPreprocessor(CardiacPreprocessor):
                 "age_raw",
             ]
         return super().prepare_features(df, target=target, exclude_cols=exclude_cols)
+
+
+class FoldPreprocessor:
+    """Leak-free per-fold imputation + standardization for cross-validation.
+
+    A single ``StandardScaler`` fit on a train/test holdout, then re-pooled and
+    re-split for k-fold CV, leaks out-of-fold statistics into every fold. This
+    transformer restores fold isolation: fit statistics (per-numeric-column
+    median for imputation, ``StandardScaler`` mean/std) are learned **only** from
+    the fold's training rows via :meth:`fit_transform`, then applied unchanged to
+    the validation rows via :meth:`transform`. A fresh instance is created per
+    fold, so no state ever crosses fold boundaries.
+
+    It mirrors the single-split preprocessing (median impute + standardize all
+    numeric feature columns) so CV and holdout use the same transform family,
+    just fit on the correct rows. Row index and column order are preserved so
+    downstream index-based lookups (e.g. LIME tracked instances) keep working.
+    """
+
+    def __init__(self) -> None:
+        self.numeric_cols: list[str] = []
+        self.medians: dict[str, float] = {}
+        self.object_fills: dict[str, object] = {}
+        self.scaler: StandardScaler | None = None
+
+    def fit_transform(self, X: pd.DataFrame) -> pd.DataFrame:
+        """Learn impute/scale statistics from *X* (fold-train) and apply them."""
+        self.numeric_cols = [c for c in X.columns if pd.api.types.is_numeric_dtype(X[c])]
+        self.medians = {c: X[c].median() for c in self.numeric_cols}
+        self.object_fills = {}
+        for col in X.columns:
+            if col in self.numeric_cols:
+                continue
+            mode = X[col].mode(dropna=True)
+            self.object_fills[col] = mode.iloc[0] if not mode.empty else "unknown"
+
+        out = self._impute(X.copy())
+        if self.numeric_cols:
+            self.scaler = StandardScaler()
+            out[self.numeric_cols] = self.scaler.fit_transform(out[self.numeric_cols])
+        return out
+
+    def transform(self, X: pd.DataFrame) -> pd.DataFrame:
+        """Apply the fold-train statistics to *X* (fold-validation)."""
+        out = self._impute(X.copy())
+        if self.scaler is not None and self.numeric_cols:
+            out[self.numeric_cols] = self.scaler.transform(out[self.numeric_cols])
+        return out
+
+    def _impute(self, X: pd.DataFrame) -> pd.DataFrame:
+        for col in self.numeric_cols:
+            if not X[col].isnull().any():
+                continue
+            fill = self.medians.get(col)
+            if fill is None or pd.isna(fill):
+                # Column all-missing in the fold-train rows: safe numeric fallback.
+                fill = 0
+            X[col] = X[col].fillna(fill)
+        for col, fill in self.object_fills.items():
+            if col in X.columns and X[col].isnull().any():
+                X[col] = X[col].fillna(fill)
+        return X
+
+
+def apply_fold_preprocessing(
+    factory: Optional[Callable[[], Any]],
+    X_train: pd.DataFrame,
+    X_val: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Fit a fresh per-fold transformer on *X_train* and apply it to both splits.
+
+    Single choke point shared by every CV surface (sequential/parallel CVTrainer
+    folds, prediction folds, and the combinatorial mitigation loop) so leak-free
+    fold preprocessing behaves identically everywhere. Returns the splits
+    unchanged when *factory* is ``None``.
+    """
+    if factory is None:
+        return X_train, X_val
+    transformer = factory()
+    return transformer.fit_transform(X_train), transformer.transform(X_val)
