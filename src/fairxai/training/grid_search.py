@@ -64,6 +64,7 @@ def run_hpo(
     recall_hard_floor: float = 0.60,
     max_rows_for_rbf_svm: Optional[int] = None,
     random_state: int = 42,
+    preprocess_in_cv: bool = False,
 ) -> Dict[str, Any]:
     """Run hyperparameter optimisation for one model × dataset pair.
 
@@ -85,6 +86,13 @@ def run_hpo(
         max_rows_for_rbf_svm: Maximum train rows to keep ``kernel='rbf'`` for
             SVM grid search. When exceeded, RBF is removed from the grid.
         random_state: Seed for ``RandomizedSearchCV``.
+        preprocess_in_cv: When True, *X_train* holds RAW (unimputed, unscaled)
+            features and the estimator is wrapped in a ``Pipeline`` of
+            ``SimpleImputer(median) -> StandardScaler -> estimator`` so
+            imputation/scaling are refit inside every search fold on that fold's
+            training rows only (leak-free). ``param_grid`` keys stay unprefixed;
+            they are remapped onto the estimator step internally, and the
+            returned ``best_params`` are stripped back to plain estimator keys.
 
     Returns:
         ``{'best_params': dict, 'best_score': float, 'cv_results': dict,
@@ -114,6 +122,23 @@ def run_hpo(
             )
         param_grid = filtered
 
+    # Refit imputation + scaling inside every search fold (leak-free) when the
+    # caller passes raw features. Remap the (unprefixed) grid onto the estimator
+    # step so hpo.yaml stays estimator-native.
+    if preprocess_in_cv:
+        from sklearn.impute import SimpleImputer
+        from sklearn.pipeline import Pipeline
+        from sklearn.preprocessing import StandardScaler
+
+        estimator = Pipeline(
+            [
+                ("impute", SimpleImputer(strategy="median")),
+                ("scale", StandardScaler()),
+                ("model", estimator),
+            ]
+        )
+        param_grid = {f"model__{key}": vals for key, vals in param_grid.items()}
+
     if search == "random" or model_type in _RANDOM_SEARCH_MODELS:
         searcher = RandomizedSearchCV(
             estimator,
@@ -141,7 +166,10 @@ def run_hpo(
     )
     searcher.fit(X_train, y_train)
 
-    best_params = dict(searcher.best_params_)
+    best_params = {
+        (key.split("__", 1)[1] if key.startswith("model__") else key): value
+        for key, value in searcher.best_params_.items()
+    }
     best_score = float(searcher.best_score_)
     logger.info(f"HPO [{model_type}]: best_score={best_score:.4f}, best_params={best_params}")
 
@@ -164,6 +192,8 @@ def run_hpo(
         "n_train": int(len(X_train)),
         "scoring": scoring,
         "search": search,
+        "preprocess_in_cv": bool(preprocess_in_cv),
+        "preprocessing_mode": "fold_safe_pipeline" if preprocess_in_cv else "prescaled_panel",
     }
 
 
