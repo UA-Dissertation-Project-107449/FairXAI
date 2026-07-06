@@ -13,8 +13,8 @@ experiment:
 data:
   base_config: "domain/cardiac.yaml"
   datasets:
-    - cleveland
-    - kaggle_heart
+    - cleveland_uci
+    - four_site_uci
   
   feature_selection:
     exclude: ["heart_disease", "age_group", "sex"]  # Exclude target and sensitive attrs

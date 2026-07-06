@@ -4,8 +4,8 @@
 data:
   dataset: "cardiac"
   datasets:
-    - cleveland
-    - kaggle_heart
+    - cleveland_uci
+    - four_site_uci
   test_size: 0.3
   random_state: 42
   stratify:
