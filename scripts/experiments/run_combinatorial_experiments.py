@@ -29,6 +29,7 @@ from fairxai.cli.runner_utils import (
     resolve_run_id,
     update_latest_pointer,
 )
+from fairxai.data.preprocessors import FoldPreprocessor, apply_fold_preprocessing
 from fairxai.data.schemas import available_sensitive, preferred_sensitive
 from fairxai.experiments.data_io import (
     build_schema_excludes,
@@ -427,6 +428,12 @@ def load_processed_data(
         return {
             "train_df": cached["train_df"].copy(),
             "test_df": cached["test_df"].copy(),
+            "raw_train_df": (
+                cached["raw_train_df"].copy() if cached["raw_train_df"] is not None else None
+            ),
+            "raw_test_df": (
+                cached["raw_test_df"].copy() if cached["raw_test_df"] is not None else None
+            ),
         }
 
     data_dir = processed_dir / f"{dataset_name}_{binning_strategy}"
@@ -441,11 +448,24 @@ def load_processed_data(
     train_df = pd.read_csv(data_dir / f"{dataset_name}_train_scaled.csv")
     test_df = pd.read_csv(data_dir / f"{dataset_name}_test_scaled.csv")
 
-    payload = {"train_df": train_df, "test_df": test_df}
+    # Raw (pre-scaling, pre-imputation) siblings for leak-free per-fold CV.
+    raw_train_path = data_dir / f"{dataset_name}_train.csv"
+    raw_test_path = data_dir / f"{dataset_name}_test.csv"
+    raw_train_df = pd.read_csv(raw_train_path) if raw_train_path.exists() else None
+    raw_test_df = pd.read_csv(raw_test_path) if raw_test_path.exists() else None
+
+    payload = {
+        "train_df": train_df,
+        "test_df": test_df,
+        "raw_train_df": raw_train_df,
+        "raw_test_df": raw_test_df,
+    }
     _PROCESSED_DATA_CACHE[cache_key] = payload
     return {
         "train_df": payload["train_df"].copy(),
         "test_df": payload["test_df"].copy(),
+        "raw_train_df": raw_train_df.copy() if raw_train_df is not None else None,
+        "raw_test_df": raw_test_df.copy() if raw_test_df is not None else None,
     }
 
 
@@ -463,14 +483,20 @@ def prepare_data_splits(
     exclude_cols: List[str],
     sensitive_attrs: List[str],
     target_col: str,
+    raw_train_df: Optional[pd.DataFrame] = None,
+    raw_test_df: Optional[pd.DataFrame] = None,
 ) -> Dict[str, Any]:
     """
     Prepare train/test splits with feature/target separation.
 
     Args:
-        train_df: Training dataframe
-        test_df: Test dataframe
+        train_df: Training dataframe (scaled)
+        test_df: Test dataframe (scaled)
         exclude_cols: Columns to exclude from features
+        raw_train_df / raw_test_df: Unscaled sibling splits, if available. Used to
+            surface a raw (pre-scaling, pre-imputation) feature matrix for
+            leak-free per-fold CV. ``X_*_raw`` is ``None`` when unavailable or the
+            feature columns cannot be aligned, and callers fall back to scaled X.
 
     Returns:
         Dictionary with X, y, sensitive attributes for train and test
@@ -483,6 +509,22 @@ def prepare_data_splits(
     y_train = train_df[target_col]
     X_test = test_df.drop(columns=exclude_cols)
     y_test = test_df[target_col]
+
+    # Raw feature matrices (same columns as scaled X, but pre-scaling values with
+    # missing entries intact) for CV to refit imputation/scaling per fold.
+    def _raw_features(
+        raw_df: Optional[pd.DataFrame], scaled_X: pd.DataFrame
+    ) -> Optional[pd.DataFrame]:
+        if raw_df is None:
+            return None
+        if any(c not in raw_df.columns for c in scaled_X.columns):
+            return None
+        if len(raw_df) != len(scaled_X):
+            return None
+        return raw_df[list(scaled_X.columns)].reset_index(drop=True)
+
+    X_train_raw = _raw_features(raw_train_df, X_train)
+    X_test_raw = _raw_features(raw_test_df, X_test)
 
     sens_cols_train = available_sensitive(train_df, sensitive_attrs)
     sens_cols_test = available_sensitive(test_df, sensitive_attrs)
@@ -501,6 +543,8 @@ def prepare_data_splits(
         "X_test": X_test,
         "y_test": y_test,
         "sensitive_test": sensitive_test,
+        "X_train_raw": X_train_raw,
+        "X_test_raw": X_test_raw,
         "sensitive_cols": list(dict.fromkeys(sens_cols_train + sens_cols_test)),
     }
 
@@ -881,6 +925,8 @@ def run_single_experiment(
             exclude_cols,
             config["sensitive_attributes"],
             target_col,
+            raw_train_df=data.get("raw_train_df"),
+            raw_test_df=data.get("raw_test_df"),
         )
 
         if config["mitigation_technique"] != "baseline" and not splits["sensitive_cols"]:
@@ -1114,8 +1160,26 @@ def run_cv_experiment(
         [splits["sensitive_train"], splits["sensitive_test"]], ignore_index=True
     )
 
+    # Raw (pre-scaling) pool for leak-free per-fold CV. When the raw siblings are
+    # available, imputation/scaling are refit inside each fold; otherwise fall back
+    # to the scaled X_full (holdout-safe only), logged once.
+    if splits.get("X_train_raw") is not None and splits.get("X_test_raw") is not None:
+        X_full_raw = pd.concat([splits["X_train_raw"], splits["X_test_raw"]], ignore_index=True)
+        fold_factory: Optional[type] = FoldPreprocessor
+    else:
+        logger.warning(
+            "Raw split siblings unavailable; CV falls back to scaled X_full "
+            "(holdout-safe only, not per-fold leak-free)."
+        )
+        X_full_raw = X_full
+        fold_factory = None
+
     # Initialize CV trainer
-    cv_trainer = CVTrainer(n_folds=n_folds, random_state=config.get("random_seed", 42))
+    cv_trainer = CVTrainer(
+        n_folds=n_folds,
+        random_state=config.get("random_seed", 42),
+        fold_preprocessor_factory=fold_factory,
+    )
 
     mitigation = config.get("mitigation_technique", "baseline")
     stage = STAGE_MAP.get(mitigation)
@@ -1160,7 +1224,7 @@ def run_cv_experiment(
         # Run CV experiment (baseline only)
         cv_results = cv_trainer.run_cv_experiment(
             model_class=model_class,
-            X=X_full,
+            X=X_full_raw,
             y=y_full,
             sensitive_attrs=sensitive_full,
             model_params=config.get("model_params", {}),
@@ -1174,14 +1238,16 @@ def run_cv_experiment(
 
         # Get fold predictions for fairness calculation
         model = model_class(**config.get("model_params", {}))
-        fold_predictions = cv_trainer.get_fold_predictions(model, X_full, y_full, sensitive_full)
+        fold_predictions = cv_trainer.get_fold_predictions(
+            model, X_full_raw, y_full, sensitive_full
+        )
     else:
         combo_chain = config.get("mitigation_combo")
         if combo_chain is None and stage is None:
             raise ValueError(f"Unknown mitigation technique for CV: {mitigation}")
 
         engine = MitigationEngine()
-        folds = cv_trainer.create_stratified_folds(X_full, y_full, sensitive_full)
+        folds = cv_trainer.create_stratified_folds(X_full_raw, y_full, sensitive_full)
         fold_results = []
         all_predictions = []
 
@@ -1202,12 +1268,15 @@ def run_cv_experiment(
         for fold_idx, (train_idx, val_idx) in enumerate(folds):
             logger.info(f"[FOLD] method=mitigation_cv fold={fold_idx + 1}/{n_folds}")
 
-            X_train = X_full.iloc[train_idx]
+            X_train = X_full_raw.iloc[train_idx]
             y_train = y_full.iloc[train_idx]
-            X_val = X_full.iloc[val_idx]
+            X_val = X_full_raw.iloc[val_idx]
             y_val = y_full.iloc[val_idx]
             sensitive_train = sensitive_full.iloc[train_idx]
             sensitive_val = sensitive_full.iloc[val_idx]
+
+            # Refit imputation/scaling on this fold's train rows only (leak-free).
+            X_train, X_val = apply_fold_preprocessing(fold_factory, X_train, X_val)
 
             if combo_chain:
                 fairness_base_params = config.get("fairness_base_model_params")

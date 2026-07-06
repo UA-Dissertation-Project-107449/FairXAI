@@ -47,14 +47,62 @@ from fairxai.utils.config import load_yaml_config
 
 
 def _load_processed_data(dataset: str, binning: str, processed_dir: Path):
+    """Return ``(scaled_df, raw_df_or_None)`` for a dataset's training split.
+
+    The SCALED split defines the authoritative model panel (imputed, standardized,
+    with ``model_exclude_features`` and the string ``source_site`` already dropped).
+    The RAW sibling holds the same rows/columns pre-imputation/scaling; it feeds
+    leak-free per-fold preprocessing inside GridSearchCV. When the raw sibling is
+    absent, HPO falls back to the scaled panel (holdout-safe only).
+    """
     data_dir = resolve_dataset_dir(processed_dir, dataset, binning)
-    train_path = data_dir / f"{dataset}_train.csv"
-    if not train_path.exists():
+    scaled_path = data_dir / f"{dataset}_train_scaled.csv"
+    if not scaled_path.exists():
         raise FileNotFoundError(
-            f"Processed training data not found: {train_path}\n"
+            f"Processed training data not found: {scaled_path}\n"
             f"Run the preprocess stage first (cardiac_pipeline.sh up to stage 4)."
         )
-    return pd.read_csv(train_path)
+    raw_path = data_dir / f"{dataset}_train.csv"
+    raw_df = pd.read_csv(raw_path) if raw_path.exists() else None
+    return pd.read_csv(scaled_path), raw_df
+
+
+def _select_hpo_matrix(scaled_df, raw_df, feature_cols, target_col, logger):
+    """Pick the feature matrix HPO fits on.
+
+    Prefer the RAW model panel (so imputation/scaling refit inside each CV fold),
+    but only after proving it is a safe drop-in for the scaled panel: all panel
+    columns present, target column present, identical row count, and a target
+    column that aligns row-for-row with the scaled panel. Any failure falls back
+    to the already-scaled panel (holdout-safe only). Returns
+    ``(X_train, y_train, preprocess_in_cv)``.
+    """
+    fallback_reason = None
+    if raw_df is None:
+        fallback_reason = "raw split sibling unavailable"
+    else:
+        missing = [col for col in feature_cols if col not in raw_df.columns]
+        if missing:
+            fallback_reason = f"raw split missing panel columns {missing}"
+        elif target_col not in raw_df.columns:
+            fallback_reason = f"raw split missing target column '{target_col}'"
+        elif len(raw_df) != len(scaled_df):
+            fallback_reason = f"raw/scaled row count mismatch ({len(raw_df)} vs {len(scaled_df)})"
+        elif (
+            not raw_df[target_col]
+            .reset_index(drop=True)
+            .equals(scaled_df[target_col].reset_index(drop=True))
+        ):
+            fallback_reason = "raw/scaled target columns are not row-aligned"
+
+    if fallback_reason is None:
+        return raw_df[feature_cols], raw_df[target_col], True
+
+    logger.warning(
+        "%s; HPO tunes on the scaled panel (holdout-safe only, not per-fold " "leak-free).",
+        fallback_reason,
+    )
+    return scaled_df[feature_cols], scaled_df[target_col], False
 
 
 def main():
@@ -197,21 +245,22 @@ def main():
     for dataset in datasets:
         logger.info(f"[DATASET] name={dataset}")
 
-        train_df = _load_processed_data(dataset, binning, processed_dir)
+        scaled_df, raw_df = _load_processed_data(dataset, binning, processed_dir)
         exclude_cols = default_exclude_columns(
             schema_cfg,
             dataset,
             target=target_col,
             sensitive_attrs=pipeline_cfg.get("fairness", {}).get("sensitive_attributes", []),
         )
-        feature_cols = [c for c in train_df.columns if c not in exclude_cols and c != target_col]
+        feature_cols = [c for c in scaled_df.columns if c not in exclude_cols and c != target_col]
 
-        if target_col not in train_df.columns:
+        if target_col not in scaled_df.columns:
             logger.error(f"Target column '{target_col}' not found in {dataset}. Skipping.")
             continue
 
-        X_train = train_df[feature_cols]
-        y_train = train_df[target_col]
+        X_train, y_train, preprocess_in_cv = _select_hpo_matrix(
+            scaled_df, raw_df, feature_cols, target_col, logger
+        )
         n_rows = len(X_train)
         n_cols = len(feature_cols)
         logger.info(f"  n_train={n_rows}, n_features={n_cols}")
@@ -258,6 +307,7 @@ def main():
                     n_jobs=effective_search_n_jobs,
                     recall_hard_floor=recall_floor,
                     max_rows_for_rbf_svm=max_rows_for_rbf_svm,
+                    preprocess_in_cv=preprocess_in_cv,
                 )
                 result["dataset"] = dataset
                 save_hpo_results(result, out_path)

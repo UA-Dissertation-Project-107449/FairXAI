@@ -126,6 +126,98 @@
         "height": "height_cm",
         "weight": "weight_kg"
       }
+    },
+    "cleveland_uci": {
+      "filename": "cleveland_uci.csv",
+      "source": "UCI Heart Disease Repository (raw processed.cleveland.data)",
+      "label": "num",
+      "target": "num",
+      "target_mapping": {
+        "0": "no_disease",
+        "1": "disease",
+        "2": "disease",
+        "3": "disease",
+        "4": "disease"
+      },
+      "missing_strategy": "drop_rows",
+      "include_features": [],
+      "exclude_features": [],
+      "model_exclude_features": ["source_site"],
+      "sensitive_attributes": {
+        "age": {
+          "type": "continuous",
+          "bins": [0, 40, 50, 60, 70, 120],
+          "labels": ["<40", "40-49", "50-59", "60-69", "70+"]
+        },
+        "sex": {
+          "type": "categorical",
+          "mapping": {
+            "0": "Female",
+            "1": "Male"
+          }
+        }
+      },
+      "clinical_features": [
+        "cp", "trestbps", "chol", "fbs", "restecg",
+        "thalach", "exang", "oldpeak", "slope", "ca", "thal"
+      ],
+      "feature_descriptions": {
+        "cp": "chest_pain_type",
+        "trestbps": "resting_blood_pressure",
+        "chol": "serum_cholesterol",
+        "fbs": "fasting_blood_sugar",
+        "restecg": "resting_ecg",
+        "thalach": "max_heart_rate",
+        "exang": "exercise_induced_angina",
+        "oldpeak": "st_depression",
+        "slope": "st_slope",
+        "ca": "num_major_vessels",
+        "thal": "thalassemia"
+      }
+    },
+    "four_site_uci": {
+      "filename": "four_site_uci.csv",
+      "source": "UCI Heart Disease Repository (Cleveland+Hungarian+Switzerland+VA, exact-key dedup to 918)",
+      "label": "num",
+      "target": "num",
+      "target_mapping": {
+        "0": "no_disease",
+        "1": "disease",
+        "2": "disease",
+        "3": "disease",
+        "4": "disease"
+      },
+      "missing_strategy": "keep",
+      "include_features": [],
+      "exclude_features": [],
+      "model_exclude_features": ["ca", "thal", "slope", "chol", "source_site"],
+      "_missingness_note": "Retained columns (cp, trestbps, fbs, restecg, thalach, exang, oldpeak) have low, non-site-concentrated missingness and are median/mode-imputed WITHOUT missing-indicator columns. This is a deliberate deviation from the redesign plan's chol-sensitivity design: the four columns with heavy, site-dependent missingness (ca 66%, thal 53%, slope 33%, chol 22% concentrated in Switzerland/VA) are excluded from the model entirely rather than imputed+flagged, so no indicator is added for them. A chol impute+chol_missing-flag sensitivity model is deferred (see plan Deferred section).",
+      "sensitive_attributes": {
+        "age": {
+          "type": "continuous",
+          "bins": [0, 40, 50, 60, 70, 120],
+          "labels": ["<40", "40-49", "50-59", "60-69", "70+"]
+        },
+        "sex": {
+          "type": "categorical",
+          "mapping": {
+            "0": "Female",
+            "1": "Male"
+          }
+        }
+      },
+      "clinical_features": [
+        "cp", "trestbps", "fbs", "restecg", "thalach", "exang", "oldpeak"
+      ],
+      "feature_descriptions": {
+        "cp": "chest_pain_type",
+        "trestbps": "resting_blood_pressure",
+        "fbs": "fasting_blood_sugar",
+        "restecg": "resting_ecg",
+        "thalach": "max_heart_rate",
+        "exang": "exercise_induced_angina",
+        "oldpeak": "st_depression"
+      }
     }
   },
   "unified_schema": {
@@ -145,6 +237,6 @@
       "bmi": ["BMI"]
     }
   },
-  "_cardiac_relevant_datasets_note": "cardio70k intentionally excluded from the default load/train loop (opt-in via --datasets cardio70k). See scripts/utils/README.md.",
-  "cardiac_relevant_datasets": ["cleveland", "kaggle_heart"]
+  "_cardiac_relevant_datasets_note": "Analytical cohorts are the raw-UCI-derived cleveland_uci + four_site_uci (built by scripts/utils/build_cardiac_uci_cohorts.py). The curated cleveland/kaggle_heart entries are retained for the provenance audit tools only. cardio70k stays opt-in (--datasets cardio70k; RAM). See scripts/utils/README.md.",
+  "cardiac_relevant_datasets": ["cleveland_uci", "four_site_uci"]
 }

@@ -229,7 +229,7 @@ def _scan_feature_selection(
             "study_dir": None,
             "summary_path": None,
             "manifest_path": None,
-            "recommended_mode": None,
+            "highest_scoring_mode": None,
             "recommended_model_types": [],
             "rfe_top_k": None,
             "mode_scores": {},
@@ -309,9 +309,13 @@ def _scan_feature_selection(
         if mean_score is not None:
             model_scores[model_type] = mean_score
 
-    recommended_mode = None
+    # Highest-scoring mode is reported for comparison ONLY. It is deliberately
+    # NOT used to select the final feature-selection mode: these scores come from
+    # the held-out test set, so letting them pick the mode would leak test signal
+    # into the primary model. The primary mode is predeclared (see main()).
+    highest_scoring_mode = None
     if mode_scores:
-        recommended_mode = max(sorted(mode_scores.keys()), key=lambda mode: mode_scores[mode])
+        highest_scoring_mode = max(sorted(mode_scores.keys()), key=lambda mode: mode_scores[mode])
 
     recommended_model_types = sorted(
         model_scores.keys(),
@@ -324,7 +328,7 @@ def _scan_feature_selection(
         "study_dir": str(study_dir),
         "summary_path": str(summary_path) if summary_path.exists() else None,
         "manifest_path": str(manifest_path) if manifest_path.exists() else None,
-        "recommended_mode": recommended_mode,
+        "highest_scoring_mode": highest_scoring_mode,
         "recommended_model_types": recommended_model_types,
         "rfe_top_k": rfe_top_k,
         "mode_scores": mode_scores,
@@ -428,19 +432,37 @@ def main() -> None:
             "No HPO study output found — use_hpo=False, falling back to base model configs. "
             "Run the HPO study (stage 5) to enable tuned hyperparameters."
         )
-    if not fs_scan.get("recommended_mode"):
-        logger.warning(
-            "No feature-selection study output found — using YAML fallback mode '%s'. "
-            "Run the feature-selection study (stage 6) to enable data-driven mode selection.",
-            fallback_feature_mode,
+
+    # The primary feature-selection mode is PREDECLARED (config/CLI), never chosen
+    # from the feature-selection study's test-set scores. Auto-selecting the mode
+    # from test metrics leaks the test set into the final model; the study's other
+    # modes stay as explicit experimental comparisons, not selection signals.
+    recommended_mode = fallback_feature_mode
+    if fs_scan.get("highest_scoring_mode") and fs_scan["highest_scoring_mode"] != recommended_mode:
+        logger.info(
+            "Feature-selection study's highest-scoring mode was '%s' (test-set, informational "
+            "only); primary mode stays predeclared as '%s'.",
+            fs_scan["highest_scoring_mode"],
+            recommended_mode,
         )
 
-    recommended_mode = fs_scan.get("recommended_mode") or fallback_feature_mode
     recommended_rfe_top_k = fs_scan.get("rfe_top_k")
     if recommended_rfe_top_k is None:
         recommended_rfe_top_k = int(training_cfg.get("rfe_top_k", 10))
 
-    recommended_model_types = fs_scan.get("recommended_model_types") or requested_model_types
+    # Model families are PREDECLARED (the requested set), never narrowed to the
+    # study's test-derived winners: ranking from test-set scores would leak the
+    # test set and silently drop any model whose study run failed. The test-set
+    # ordering is preserved as informational `model_ranking` only.
+    predeclared_model_types = requested_model_types
+    model_ranking = fs_scan.get("recommended_model_types") or []
+    dropped_from_ranking = [m for m in predeclared_model_types if m not in model_ranking]
+    if model_ranking and dropped_from_ranking:
+        logger.info(
+            "Study ranked models %s; predeclared set keeps %s (unranked kept, not dropped).",
+            model_ranking,
+            dropped_from_ranking,
+        )
 
     contract = {
         "schema_version": 1,
@@ -459,14 +481,11 @@ def main() -> None:
         "recommendations": {
             "use_hpo": bool(hpo_scan.get("use_hpo")),
             "feature_selection_mode": recommended_mode,
-            "feature_selection_mode_source": (
-                "feature_selection_study" if fs_scan.get("recommended_mode") else "fallback"
-            ),
+            "feature_selection_mode_source": "predeclared_baseline",
             "rfe_top_k": int(recommended_rfe_top_k),
-            "model_types": recommended_model_types,
-            "model_types_source": (
-                "feature_selection_study" if fs_scan.get("recommended_model_types") else "requested"
-            ),
+            "model_types": predeclared_model_types,
+            "model_types_source": "predeclared_requested",
+            "model_ranking": model_ranking,
         },
     }
 

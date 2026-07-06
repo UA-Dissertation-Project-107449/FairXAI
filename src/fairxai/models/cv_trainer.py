@@ -1,7 +1,7 @@
 """Cross-validation trainer with stratification by sensitive attributes."""
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -17,15 +17,23 @@ def _train_fold_worker(
     y: pd.Series,
     model_class: Any,
     model_params: Dict,
+    fold_preprocessor_factory: Optional[Callable[[], Any]] = None,
 ) -> Dict:
     """Stateless, picklable worker that trains and evaluates one CV fold.
 
     Used by :meth:`CVTrainer.run_cv_experiment` when ``cv_n_jobs != 1`` and
     XAI is disabled (XAI requires the live model object and cannot be
     parallelised this way).
+
+    When ``fold_preprocessor_factory`` is provided, imputation + scaling are
+    fit on this fold's training rows and applied to the validation rows, so no
+    out-of-fold statistics leak into the fold (see :class:`FoldPreprocessor`).
     """
+    from fairxai.data.preprocessors import apply_fold_preprocessing
+
     X_train, y_train = X.iloc[train_idx], y.iloc[train_idx]
     X_val, y_val = X.iloc[val_idx], y.iloc[val_idx]
+    X_train, X_val = apply_fold_preprocessing(fold_preprocessor_factory, X_train, X_val)
     model = model_class(**model_params)
     model.train(X_train, y_train)
     val_metrics = model.evaluate(X_val, y_val)
@@ -43,18 +51,39 @@ class CVTrainer:
     Cross-validation trainer that maintains stratification by target and sensitive attributes.
     """
 
-    def __init__(self, n_folds: int = 5, random_state: int = 42):
+    def __init__(
+        self,
+        n_folds: int = 5,
+        random_state: int = 42,
+        fold_preprocessor_factory: Optional[Callable[[], Any]] = None,
+    ):
         """
         Initialize CV trainer.
 
         Args:
             n_folds: Number of cross-validation folds
             random_state: Random seed for reproducibility
+            fold_preprocessor_factory: Zero-arg callable returning a fresh
+                per-fold transformer with ``fit_transform``/``transform`` (e.g.
+                :class:`fairxai.data.preprocessors.FoldPreprocessor`). When set,
+                imputation + scaling are refit inside every fold on its training
+                rows only, making CV leak-free. When ``None`` (default), *X* is
+                used as-is — callers that pass already-scaled data keep the old
+                behaviour.
         """
         self.n_folds = n_folds
         self.random_state = random_state
+        self.fold_preprocessor_factory = fold_preprocessor_factory
         self.logger = logging.getLogger(__name__)
         self._last_effective_folds = n_folds
+
+    def _fit_fold(
+        self, X_train: pd.DataFrame, X_val: pd.DataFrame
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Apply the per-fold transform (if configured) to one fold's splits."""
+        from fairxai.data.preprocessors import apply_fold_preprocessing
+
+        return apply_fold_preprocessing(self.fold_preprocessor_factory, X_train, X_val)
 
     @staticmethod
     def _coerce_probability_vector(values: Any) -> np.ndarray:
@@ -245,7 +274,9 @@ class CVTrainer:
                 f"Running {self._last_effective_folds} folds in parallel (cv_n_jobs={cv_n_jobs})"
             )
             fold_results = Parallel(n_jobs=cv_n_jobs)(
-                delayed(_train_fold_worker)(i, ti, vi, X, y, model_class, model_params)
+                delayed(_train_fold_worker)(
+                    i, ti, vi, X, y, model_class, model_params, self.fold_preprocessor_factory
+                )
                 for i, (ti, vi) in enumerate(folds)
             )
             for fr in fold_results:
@@ -265,6 +296,9 @@ class CVTrainer:
                 y_train = y.iloc[train_idx]
                 X_val = X.iloc[val_idx]
                 y_val = y.iloc[val_idx]
+
+                # Refit imputation/scaling on this fold's train rows only.
+                X_train, X_val = self._fit_fold(X_train, X_val)
 
                 model = model_class(**model_params)
                 fold_result = self.train_fold(model, X_train, y_train, X_val, y_val)
@@ -591,6 +625,9 @@ class CVTrainer:
             y_train = y.iloc[train_idx]
             X_val = X.iloc[val_idx]
             y_val = y.iloc[val_idx]
+
+            # Refit imputation/scaling on this fold's train rows only.
+            X_train, X_val = self._fit_fold(X_train, X_val)
 
             # Train model on fold
             model.train(X_train, y_train)

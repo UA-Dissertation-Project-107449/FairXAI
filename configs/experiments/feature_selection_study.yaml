@@ -22,7 +22,7 @@
 # include_ethnicity_only — ablation: only ethnicity visible (where present)
 # rfe_top_k             — importance-ranked top-k (agnostic to sensitive attrs)
 
-datasets: [cleveland, kaggle_heart]
+datasets: [cleveland_uci, four_site_uci]
 
 binning_strategy: fixed_10yr
 

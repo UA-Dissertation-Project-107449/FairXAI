@@ -15,8 +15,8 @@ accelerator: auto
 # due to consumer hardware constraints (SVM RBF OOM on full 70k; ~6 min for LR-only sweep).
 # Restore --max-samples or remove the default to run on full 70k (HPC recommended).
 datasets:
-  - cleveland
-  - kaggle_heart
+  - cleveland_uci
+  - four_site_uci
   # - cardio70k
 
 # Age binning strategies

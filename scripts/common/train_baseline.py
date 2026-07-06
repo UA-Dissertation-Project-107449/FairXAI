@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from fairxai.cli.runner_base import load_pipeline_config, resolve_project_root, setup_phase_logging
 from fairxai.data.feature_selection import build_feature_set
+from fairxai.data.preprocessors import FoldPreprocessor
 from fairxai.experiments.data_io import (
     build_schema_excludes,
     resolve_base_dataset,
@@ -69,6 +70,64 @@ def _load_raw_meta(scaled_file: Path, scaled_df: pd.DataFrame) -> Optional[pd.Da
 
     fallback_cols = [c for c in scaled_df.columns if c.endswith("_raw")]
     return scaled_df[fallback_cols].reset_index(drop=True) if fallback_cols else None
+
+
+def _load_raw_split(scaled_file: Path) -> Optional[pd.DataFrame]:
+    """Load the unscaled sibling split (``*_train.csv`` next to ``*_train_scaled.csv``).
+
+    The unscaled split keeps raw, pre-imputation feature values (missing entries
+    intact), which is exactly what leak-free per-fold CV preprocessing needs.
+    Returns ``None`` when the sibling is absent.
+    """
+    raw_file = scaled_file.with_name(scaled_file.name.replace("_scaled", ""))
+    if raw_file != scaled_file and raw_file.exists():
+        return pd.read_csv(raw_file)
+    return None
+
+
+def _build_cv_features(
+    raw_train_df: Optional[pd.DataFrame],
+    raw_test_df: Optional[pd.DataFrame],
+    feature_cols: list,
+    scaled_X_full: pd.DataFrame,
+) -> tuple[pd.DataFrame, Optional[type]]:
+    """Assemble the raw (pre-scaling) feature matrix used for leak-free CV.
+
+    Concatenates train+test raw feature columns in the same row order the scaled
+    ``X_full`` uses, so CV folds can refit imputation/scaling per fold. Falls back
+    to the already-scaled ``X_full`` (and no per-fold transform) if the raw
+    siblings are missing or cannot be row/column aligned — CV then behaves as
+    before (holdout-safe only), logged as a warning.
+    """
+    if raw_train_df is None or raw_test_df is None:
+        logging.warning(
+            "Raw split siblings unavailable; CV falls back to scaled X_full "
+            "(holdout-safe only, not per-fold leak-free)."
+        )
+        return scaled_X_full, None
+
+    missing_train = [c for c in feature_cols if c not in raw_train_df.columns]
+    missing_test = [c for c in feature_cols if c not in raw_test_df.columns]
+    if missing_train or missing_test:
+        logging.warning(
+            "Raw split missing feature columns (train=%s, test=%s); CV falls back to scaled X_full.",
+            missing_train,
+            missing_test,
+        )
+        return scaled_X_full, None
+
+    x_full_raw = pd.concat(
+        [raw_train_df[feature_cols], raw_test_df[feature_cols]], ignore_index=True
+    )
+    if len(x_full_raw) != len(scaled_X_full):
+        logging.warning(
+            "Raw/scaled row count mismatch (%d vs %d); CV falls back to scaled X_full.",
+            len(x_full_raw),
+            len(scaled_X_full),
+        )
+        return scaled_X_full, None
+
+    return x_full_raw, FoldPreprocessor
 
 
 def save_xai_outputs(
@@ -990,6 +1049,11 @@ def main():
         pred_meta_train = _load_raw_meta(train_file, train_df)
         pred_meta_test = _load_raw_meta(test_file, test_df)
 
+        # Raw (pre-scaling, pre-imputation) sibling splits — feed leak-free per-fold
+        # CV preprocessing. Loaded once per dataset; feature selection applied below.
+        raw_train_df = _load_raw_split(train_file)
+        raw_test_df = _load_raw_split(test_file)
+
         logging.info(f"Features: {len(feature_cols)} (mode={fs_mode})")
 
         results_summary.setdefault(dataset_name, {})
@@ -1022,6 +1086,15 @@ def main():
 
             if fs_mode == "rfe_top_k":
                 # Two-pass: quick first fit on all features to importances to reduce to retrain.
+                # LEAKAGE NOTE: this RFE selection is fitted on X_train_full only,
+                # but the k-fold CV pool below is train+test combined. So the
+                # selection has seen the training split (which supplies most fold
+                # validation rows) though not the held-out test split; it is
+                # partially, not fully, leaked w.r.t. CV validation rows. rfe_top_k
+                # is a deliberate experimental comparison, not the predeclared
+                # primary baseline; treat its CV metrics as feature-selection-aware,
+                # not strictly fold-isolated. Move RFE inside the fold loop if it is
+                # ever promoted to a primary reporting mode.
                 logging.info(
                     f"  [rfe_top_k] first-pass fit on {len(X_train_full.columns)} features"
                 )
@@ -1057,9 +1130,22 @@ def main():
             xai_cfg = pipeline_cfg.get("xai", {})
             xai_dir = experiments_dir / "xai"
             xai_dataset_key = f"{dataset_name}__{model_type}"
+            # CV preprocessing is fold-safe for imputation/scaling: X_full (scaled)
+            # is used only for the holdout-model prediction snapshot and the feature
+            # record merged into CV predictions, while CV *training* uses X_full_raw
+            # (the raw, pre-scaling matrix) so each fold refits imputation/scaling on
+            # its own train rows. See FoldPreprocessor + CVTrainer.fold_preprocessor_factory.
+            # SCOPE: this guarantee covers imputation/scaling only. Under fs_mode
+            # 'rfe_top_k' the feature subset is selected once on the full training
+            # pool (below), so that mode is NOT fully fold-safe w.r.t. feature
+            # selection — it is a non-primary experimental mode; the predeclared
+            # primary baseline is 'exclude_sensitive'.
             X_full = pd.concat([X_train, X_test], ignore_index=True)
             y_full = pd.concat([y_train, y_test], ignore_index=True)
             sensitive_full = pd.concat([sensitive_train, sensitive_test], ignore_index=True)
+            X_full_raw, fold_factory = _build_cv_features(
+                raw_train_df, raw_test_df, feature_cols, X_full
+            )
             pred_meta_full = (
                 pd.concat([pred_meta_train, pred_meta_test], ignore_index=True)
                 if pred_meta_train is not None
@@ -1202,6 +1288,7 @@ def main():
                         cv_trainer = CVTrainer(
                             n_folds=training_cfg.get("cv_folds", 5),
                             random_state=random_state,
+                            fold_preprocessor_factory=fold_factory,
                         )
                         shap_enabled = _is_shap_enabled_for_model(model_type, xai_cfg)
                         if not shap_enabled:
@@ -1210,7 +1297,7 @@ def main():
                             )
                         cv_xai_results = cv_trainer.run_cv_experiment(
                             model_class=model_class,
-                            X=X_full,
+                            X=X_full_raw,
                             y=y_full,
                             sensitive_attrs=sensitive_full,
                             model_params=model_params,
@@ -1284,10 +1371,11 @@ def main():
                 cv_trainer = CVTrainer(
                     n_folds=training_cfg.get("cv_folds", 5),
                     random_state=random_state,
+                    fold_preprocessor_factory=fold_factory,
                 )
                 cv_results = cv_trainer.run_cv_experiment(
                     model_class=model_class,
-                    X=X_full,
+                    X=X_full_raw,
                     y=y_full,
                     sensitive_attrs=sensitive_full,
                     model_params=model_params,
@@ -1327,7 +1415,7 @@ def main():
                 cv_pred_model = model_class(**model_params)
                 cv_predictions = cv_trainer.get_fold_predictions(
                     cv_pred_model,
-                    X_full,
+                    X_full_raw,
                     y_full,
                     sensitive_full,
                 )
