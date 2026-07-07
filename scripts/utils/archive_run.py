@@ -7,8 +7,13 @@ records the operation in ``archive_manifest.json`` so provenance survives the
 rename. Prevents runs referenced by the dissertation from being lost to routine
 cleanup of ``runs/``.
 
+The paired per-run log dir (``logs/<domain>/runs/<run_id>``) is archived by
+default into ``<archived_run>/_logs/`` so outputs and the logs that produced them
+stay together; pass ``--no-logs`` to skip it.
+
 Manifest is a JSON list; each entry records when the run was archived, its prior
-name/id, its new name, source and destination paths, and an optional note.
+name/id, its new name, source and destination paths, the paired log paths, and an
+optional note.
 
 Examples (from Code/FairXAI/, venv active):
 
@@ -33,6 +38,7 @@ import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 MANIFEST_NAME = "archive_manifest.json"
 
@@ -88,6 +94,34 @@ def _validate_component(value: str, label: str) -> str:
     return value
 
 
+def _archive_paired_logs(
+    logs_root: Path,
+    domain: str,
+    run_id: str,
+    dest: Path,
+    move: bool,
+) -> Optional[Path]:
+    """Copy (or move) the run's log dir into ``<dest>/_logs`` alongside its output.
+
+    Logs live in the parallel ``logs/<domain>/runs/<run_id>`` tree, keyed by the
+    same run id as the output run, and are usually read paired with the outputs
+    (the log is the evidence that produced the archived numbers). Returns the
+    archived log path, or None when no per-run log dir exists (older runs predate
+    structured run-scoped logging).
+    """
+    log_source = logs_root / domain / "runs" / run_id
+    if not log_source.is_dir():
+        return None
+    log_dest = dest / "_logs"
+    if log_dest.exists():
+        shutil.rmtree(log_dest)
+    if move:
+        shutil.move(str(log_source), str(log_dest))
+    else:
+        shutil.copytree(log_source, log_dest)
+    return log_dest
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("run_id", nargs="?", help="Run id under output/<domain>/runs/.")
@@ -101,6 +135,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Archive an explicit directory instead of output/<domain>/runs/<run_id>.",
     )
     p.add_argument("--output-root", type=Path, default=Path("output"), help="Output root dir.")
+    p.add_argument("--logs-root", type=Path, default=Path("logs"), help="Pipeline logs root dir.")
+    p.add_argument(
+        "--no-logs",
+        dest="with_logs",
+        action="store_false",
+        help="Do not archive the paired logs/<domain>/runs/<run_id> log dir.",
+    )
+    p.set_defaults(with_logs=True)
     p.add_argument("--move", action="store_true", help="Move instead of copy.")
     p.add_argument(
         "--register-only",
@@ -194,6 +236,14 @@ def main(argv: list[str] | None = None) -> int:
             shutil.copytree(source, dest)
         archived_path = dest
 
+    # Archive the paired per-run log dir next to the outputs (skipped for
+    # register-only, which points at an already-relocated directory).
+    logs_archived_path: Optional[Path] = None
+    if args.with_logs and not args.register_only:
+        logs_archived_path = _archive_paired_logs(
+            args.logs_root, domain, original_name, archived_path, args.move
+        )
+
     entry = {
         "archived_at": _now_iso(),
         "domain": domain,
@@ -201,6 +251,10 @@ def main(argv: list[str] | None = None) -> int:
         "archived_name": archived_name,
         "source_path": str(source),
         "archived_path": str(archived_path),
+        "logs_source_path": (
+            str(args.logs_root / domain / "runs" / original_name) if args.with_logs else None
+        ),
+        "logs_archived_path": str(logs_archived_path) if logs_archived_path else None,
         "operation": ("register-only" if args.register_only else ("move" if args.move else "copy")),
         "note": args.note,
     }
@@ -208,6 +262,10 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Archived '{original_name}' -> {archived_path}")
     print(f"Operation: {entry['operation']}")
+    if logs_archived_path:
+        print(f"Logs archived: {logs_archived_path}")
+    elif args.with_logs and not args.register_only:
+        print("Logs: no per-run log dir found; skipped.")
     print(f"Manifest updated: {manifest_path}")
     return 0
 
