@@ -268,15 +268,77 @@ class _EarlyStopper:
         return self.stopped
 
 
-def _stratified_split_indices(
-    labels: Any, val_fraction: float, torch: Any, seed: int
-) -> tuple[Any, Any]:
-    """Split row indices into (train, val) keeping per-class proportions.
+def _grouped_split_indices(
+    labels: Any, groups: Any, val_fraction: float, torch: Any, seed: int
+) -> tuple[Any, Any] | None:
+    """Patient-grouped, class-stratified (train, val) index split, or None if infeasible.
 
-    Row-stratified only (not patient-grouped): this internal validation slice drives
-    early stopping during fit and never feeds the reported test metric, which keeps
-    the upstream patient-grouped split.
+    Every row of a group (patient) lands on one side, so no patient's images span
+    the fit/early-stopping boundary — matching the upstream patient-grouped test
+    split. Returns ``None`` when there are too few distinct groups to carve a
+    non-empty hold-out, so the caller falls back to row stratification.
     """
+    import numpy as np
+    from sklearn.model_selection import GroupShuffleSplit, StratifiedGroupKFold
+
+    y = np.asarray([int(v) for v in labels.tolist()])
+    raw_groups = groups.tolist() if hasattr(groups, "tolist") else list(groups)
+    g = np.asarray([str(v) for v in raw_groups])
+    n = len(y)
+    if n != len(g) or len(set(g)) < 2:
+        return None
+
+    def _wrap(train_i: Any, val_i: Any) -> tuple[Any, Any]:
+        return (
+            torch.as_tensor(np.asarray(train_i), dtype=torch.long),
+            torch.as_tensor(np.asarray(val_i), dtype=torch.long),
+        )
+
+    # StratifiedGroupKFold keeps per-class proportions while respecting groups.
+    # n_splits ~ 1/val_fraction; a fold becomes the ~val_fraction-sized hold-out.
+    n_splits = max(2, min(round(1.0 / val_fraction) if val_fraction else 2, len(set(g))))
+    try:
+        sgkf = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+        first: tuple[Any, Any] | None = None
+        for train_i, val_i in sgkf.split(np.zeros(n), y, g):
+            if not len(val_i) or not len(train_i):
+                continue
+            if first is None:
+                first = (train_i, val_i)
+            if len(set(y[val_i])) >= 2 and len(set(y[train_i])) >= 2:
+                return _wrap(train_i, val_i)  # both classes on both sides: ideal
+        if first is not None:
+            return _wrap(*first)
+    except ValueError:
+        pass
+
+    # Fallback: grouped but not class-stratified (few groups per class).
+    try:
+        gss = GroupShuffleSplit(n_splits=1, test_size=val_fraction, random_state=seed)
+        train_i, val_i = next(gss.split(np.zeros(n), y, g))
+        if len(val_i) and len(train_i):
+            return _wrap(train_i, val_i)
+    except (ValueError, StopIteration):
+        pass
+    return None
+
+
+def _stratified_split_indices(
+    labels: Any, val_fraction: float, torch: Any, seed: int, groups: Any | None = None
+) -> tuple[Any, Any]:
+    """Split row indices into (train, val) for the early-stopping slice.
+
+    With *groups* (per-row patient ids) the slice is patient-grouped as well as
+    class-stratified, so no patient leaks across the fit/validation boundary. When
+    *groups* is None (or too sparse to hold out) it falls back to a per-class
+    row-stratified split. This validation slice only drives early stopping during
+    fit; the reported test metric always comes from the upstream patient-grouped
+    split.
+    """
+    if groups is not None:
+        grouped = _grouped_split_indices(labels, groups, val_fraction, torch, seed)
+        if grouped is not None:
+            return grouped
     gen = torch.Generator().manual_seed(seed)
     label_list = [int(v) for v in labels.tolist()]
     train_parts: list[Any] = []
@@ -364,13 +426,15 @@ def _train_head(
     torch: Any,
     random_state: int,
     early_stopping: dict[str, Any] | None = None,
+    groups: Any | None = None,
 ) -> tuple[list[dict[str, Any]], float, dict[str, Any]]:
     """Train a linear head over cached features. No image decode, no backbone forward.
 
     When ``early_stopping['enabled']`` is True, a stratified validation slice is carved
     from the cached features; ``epochs`` becomes a cap and the best-AUC head weights are
-    restored on stop. Returns ``(history, train_time_seconds, summary)`` where ``summary``
-    carries ``epochs_run``/``best_epoch``/``early_stopped``.
+    restored on stop. *groups* (per-row patient ids, aligned with *features*) makes that
+    slice patient-grouped. Returns ``(history, train_time_seconds, summary)`` where
+    ``summary`` carries ``epochs_run``/``best_epoch``/``early_stopped``.
     """
     es_cfg = early_stopping or {}
     es_enabled = bool(es_cfg.get("enabled", False))
@@ -380,7 +444,9 @@ def _train_head(
 
     val_features = val_labels = None
     if es_enabled and val_fraction > 0:
-        train_idx, val_idx = _stratified_split_indices(labels, val_fraction, torch, random_state)
+        train_idx, val_idx = _stratified_split_indices(
+            labels, val_fraction, torch, random_state, groups=groups
+        )
         if val_idx.numel() > 0 and train_idx.numel() > 0:
             val_features = features[val_idx]
             val_labels = labels[val_idx]
@@ -595,6 +661,13 @@ def train_image_baseline(
         feature_extraction_time_seconds = time.perf_counter() - extract_start
         head = head.to(device)
         optimizer = torch.optim.AdamW(head.parameters(), lr=learning_rate)
+        # Patient ids aligned to cached-feature order (train_row_idx are positional
+        # rows into train_dataset.df) so the early-stopping slice is patient-grouped.
+        train_groups = (
+            train_dataset.df["patient_id"].to_numpy()[train_row_idx]
+            if "patient_id" in train_dataset.df.columns
+            else None
+        )
         history, head_train_time_seconds, train_summary = _train_head(
             head,
             train_features,
@@ -607,6 +680,7 @@ def train_image_baseline(
             torch=torch,
             random_state=random_state,
             early_stopping=early_stopping,
+            groups=train_groups,
         )
         # Total wall time = one-off feature extraction + head training, so cache-path
         # speedup numbers do not under-report the real cost.
@@ -666,8 +740,13 @@ def train_image_baseline(
             from torch.utils.data import Subset  # type: ignore
 
             targets = torch.tensor(train_dataset.df[target_col].astype(int).tolist())
+            es_groups = (
+                train_dataset.df["patient_id"].to_numpy()
+                if "patient_id" in train_dataset.df.columns
+                else None
+            )
             tr_idx, va_idx = _stratified_split_indices(
-                targets, es_val_fraction, torch, random_state
+                targets, es_val_fraction, torch, random_state, groups=es_groups
             )
             if va_idx.numel() > 0 and tr_idx.numel() > 0:
                 fit_loader = DataLoader(

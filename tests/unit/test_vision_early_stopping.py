@@ -13,6 +13,7 @@ import torch.nn as nn  # noqa: E402
 
 from fairxai.training.vision import (  # noqa: E402
     _EarlyStopper,
+    _grouped_split_indices,
     _stratified_split_indices,
     _train_head,
 )
@@ -80,6 +81,28 @@ def test_stratified_split_keeps_both_classes_in_validation():
     assert train_idx.numel() + val_idx.numel() == 50
     val_labels = labels[val_idx].tolist()
     assert 0 in val_labels and 1 in val_labels
+
+
+def test_grouped_split_keeps_each_patient_on_one_side():
+    # 20 patients, 3 rows each; a patient's rows must never straddle train/val.
+    n_patients = 20
+    labels = torch.tensor([i % 2 for i in range(n_patients) for _ in range(3)])
+    groups = [f"p{i}" for i in range(n_patients) for _ in range(3)]
+    train_idx, val_idx = _stratified_split_indices(labels, 0.25, torch, 0, groups=groups)
+    assert train_idx.numel() and val_idx.numel()
+    train_patients = {groups[i] for i in train_idx.tolist()}
+    val_patients = {groups[i] for i in val_idx.tolist()}
+    assert train_patients.isdisjoint(val_patients)  # no patient leakage
+    val_labels = labels[val_idx].tolist()
+    assert 0 in val_labels and 1 in val_labels
+
+
+def test_grouped_split_falls_back_to_row_stratified_when_single_group():
+    # One patient cannot be split by group; returns None so the caller row-splits.
+    labels = torch.tensor([0, 1, 0, 1])
+    assert _grouped_split_indices(labels, ["p0"] * 4, 0.25, torch, 0) is None
+    train_idx, val_idx = _stratified_split_indices(labels, 0.25, torch, 0, groups=["p0"] * 4)
+    assert train_idx.numel() + val_idx.numel() == 4
 
 
 def test_early_stopper_tracks_best_and_restores():
