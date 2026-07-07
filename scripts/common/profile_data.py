@@ -110,6 +110,12 @@ def main():
         dataset_files = [
             p for p in dataset_files if p.stem.replace("_standardized", "") in selected
         ]
+        missing = selected - {p.stem.replace("_standardized", "") for p in dataset_files}
+        if missing:
+            logging.warning(
+                "Requested dataset(s) with no standardized CSV (skipped): %s",
+                ", ".join(sorted(missing)),
+            )
 
     if not dataset_files:
         logging.error(f"No standardized datasets found in {data_raw}")

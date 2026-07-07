@@ -690,7 +690,7 @@ def cardiac_pipeline(
     logger.info(f"Similarity (post-assess individual fairness) enabled: {run_similarity_enabled}")
     logger.info(f"Age-binning sensitivity sweep enabled: {run_age_binning_enabled}")
     logger.info(f"Comparison config: {COMPARISON_CONFIG}")
-    logger.info(f"Datasets override: {datasets if datasets else 'config/default'}")
+    logger.info(f"Effective datasets: {datasets if datasets else 'config/default'}")
     logger.info(f"Model types override: {model_types if model_types else 'config/default'}")
     logger.info(
         "Preprocessing sample cap: %s",
