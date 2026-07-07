@@ -345,10 +345,13 @@ def main():
     preprocessor = preprocessor_cls(sensitive_attrs=sensitive_attrs)
     profiler = DataProfiler(sensitive_attrs=sensitive_attrs)
 
-    # Find all standardized datasets
+    # Find all standardized datasets. No explicit --datasets: scope to the
+    # pipeline's runtime dataset set so a bare run never preprocesses stale/opt-in
+    # cohorts (e.g. cardio70k) left in data/raw from an earlier run.
     dataset_files = list(data_raw.glob("*_standardized.csv"))
-    if args.datasets:
-        selected = set(d.strip() for d in args.datasets)
+    selected_names = args.datasets or (pipeline_cfg.get("runtime", {}) or {}).get("datasets")
+    if selected_names:
+        selected = {str(d).strip() for d in selected_names}
         dataset_files = [
             p for p in dataset_files if p.stem.replace("_standardized", "") in selected
         ]

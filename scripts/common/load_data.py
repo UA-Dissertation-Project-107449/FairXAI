@@ -104,6 +104,13 @@ def main():
 
     logging.info(f"Loading datasets from: {data_external}")
     selected_datasets = [d.strip() for d in args.datasets] if args.datasets else None
+    # No explicit --datasets: scope to the pipeline's runtime dataset set so a bare
+    # run never loads stale/opt-in cohorts (e.g. cardio70k) left in data/external.
+    # Falls back to the loader's load_all_* only when runtime.datasets is unset.
+    if not selected_datasets:
+        cfg_datasets = (pipeline_cfg.get("runtime", {}) or {}).get("datasets")
+        if cfg_datasets:
+            selected_datasets = [str(d).strip() for d in cfg_datasets]
     if selected_datasets:
         datasets = {}
         for dataset_name in selected_datasets:

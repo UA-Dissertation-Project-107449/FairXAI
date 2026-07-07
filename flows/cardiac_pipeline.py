@@ -480,6 +480,14 @@ def cardiac_pipeline(
     except Exception as exc:
         logger.warning("Could not read pipeline config from %s: %s", cfg_path, exc)
 
+    # Scope to runtime.datasets when no explicit override so every stage task
+    # receives the same explicit set the stage scripts would default to (keeps
+    # opt-in/stale cohorts like cardio70k out of a bare run).
+    if not datasets:
+        cfg_datasets = (pipeline_cfg.get("runtime", {}) or {}).get("datasets")
+        if cfg_datasets:
+            datasets = [str(d).strip() for d in cfg_datasets]
+
     studies_cfg = pipeline_cfg.get("studies") or {}
     scheduling_cfg = pipeline_cfg.get("scheduling") or {}
 
