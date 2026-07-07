@@ -218,6 +218,39 @@ def test_degenerate_group_excluded_from_deltas() -> None:
     assert "demographic_parity" in sex["group_fairness"]
 
 
+def test_unknown_group_excluded_from_deltas_by_policy() -> None:
+    # Female, Male, and a well-supported both-classes Unknown bucket (sex=-1).
+    rows = []
+    for i in range(60):
+        rows.append({"sex": 0, "y_true": i % 2, "y_pred": i % 2, "y_proba": 0.7})
+        rows.append({"sex": 1, "y_true": i % 2, "y_pred": (i + 1) % 2, "y_proba": 0.4})
+        rows.append({"sex": -1, "y_true": i % 2, "y_pred": i % 2, "y_proba": 0.6})
+    df = pd.DataFrame(rows)
+
+    report = assess_predictions_frame(df, ["sex"], min_group_samples=50)
+    sex = report["sensitive_attributes"]["sex"]
+
+    # Unknown is well-supported and non-degenerate, but policy holds it out of deltas.
+    assert "Unknown" in sex["group_performance"]
+    assert any(d["group"] == "Unknown" for d in sex["policy_excluded_groups"])
+    # Deltas are still produced over Female/Male only.
+    assert "demographic_parity" in sex["group_fairness"]
+
+
+def test_unknown_group_included_when_policy_disabled() -> None:
+    rows = []
+    for i in range(60):
+        rows.append({"sex": 0, "y_true": i % 2, "y_pred": i % 2, "y_proba": 0.7})
+        rows.append({"sex": -1, "y_true": i % 2, "y_pred": (i + 1) % 2, "y_proba": 0.4})
+    df = pd.DataFrame(rows)
+
+    report = assess_predictions_frame(df, ["sex"], min_group_samples=50, exclude_unknown=False)
+    sex = report["sensitive_attributes"]["sex"]
+    assert sex["policy_excluded_groups"] == []
+    # Female + Unknown are the two comparison groups → deltas computed.
+    assert "demographic_parity" in sex["group_fairness"]
+
+
 def test_missing_attribute_is_skipped() -> None:
     df = _synthetic_predictions()
     report = assess_predictions_frame(df, ["sex", "not_a_column"], min_group_samples=50)
