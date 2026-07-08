@@ -242,7 +242,12 @@ def _process_pipeline_datasets(engine, project_root, pipeline, args, output_dir)
 
     dataset_files = sorted(data_raw.glob("*_standardized.csv"))
 
-    requested = getattr(args, "datasets", None)
+    # No explicit --datasets: scope to the pipeline's runtime dataset set so a
+    # bare run never generates recommendations for stale/opt-in cohorts (e.g.
+    # cardio70k) left in data/raw from an earlier run.
+    requested = getattr(args, "datasets", None) or (pipeline_cfg.get("runtime", {}) or {}).get(
+        "datasets"
+    )
     if requested:
         wanted = set(requested)
         dataset_files = [

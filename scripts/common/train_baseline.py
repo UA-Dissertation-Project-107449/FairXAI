@@ -673,6 +673,24 @@ def main():
         help="Disable frozen-feature caching even if config enables it.",
     )
     parser.add_argument(
+        "--augmentation",
+        dest="augmentation",
+        action="store_true",
+        default=None,
+        help=(
+            "Enable train-only image augmentation (random crop/flip/rotation/blur + "
+            "brightness/contrast). Forces frozen-feature caching OFF (a cached crop has no "
+            "diversity), so it re-runs pixels->features every epoch. Test transform stays "
+            "deterministic."
+        ),
+    )
+    parser.add_argument(
+        "--no-augmentation",
+        dest="augmentation",
+        action="store_false",
+        help="Disable image augmentation even if config enables it.",
+    )
+    parser.add_argument(
         "-v", "--verbose", action="count", default=0, help="Verbosity: -v=info, -vv=debug"
     )
     args = parser.parse_args()
@@ -804,6 +822,17 @@ def main():
         cache_frozen_features = _resolve_bool_setting(
             args.cache_frozen_features, image_cfg, "cache_frozen_features", False
         )
+        use_augmentation = _resolve_bool_setting(
+            args.augmentation, image_cfg, "use_augmentation", False
+        )
+        aug_block = image_cfg.get("augmentation", {}) or {}
+        augmentation = {
+            "crop_scale_min": float(aug_block.get("crop_scale_min", 0.7)),
+            "rotation_degrees": float(aug_block.get("rotation_degrees", 20)),
+            "blur_prob": float(aug_block.get("blur_prob", 0.2)),
+            "brightness": float(aug_block.get("brightness", 0.2)),
+            "contrast": float(aug_block.get("contrast", 0.2)),
+        }
         # Early stopping: epochs becomes a cap and a validation slice decides the real
         # training length (per-model). Defaults keep it off so behavior is unchanged
         # unless the config opts in.
@@ -818,7 +847,7 @@ def main():
         logging.info(
             "[PHASE] Image baseline configuration models=%s device=%s epochs=%s "
             "batch_size=%s image_size=%s pretrained=%s freeze_backbone=%s "
-            "cache_frozen_features=%s num_workers=%s early_stopping=%s",
+            "cache_frozen_features=%s use_augmentation=%s num_workers=%s early_stopping=%s",
             model_types,
             device_request,
             epochs,
@@ -827,6 +856,7 @@ def main():
             pretrained,
             freeze_backbone,
             cache_frozen_features,
+            use_augmentation,
             num_workers,
             early_stopping,
         )
@@ -908,6 +938,8 @@ def main():
                     random_state=random_state,
                     cache_frozen_features=cache_frozen_features,
                     early_stopping=early_stopping,
+                    use_augmentation=use_augmentation,
+                    augmentation=augmentation,
                 )
                 results_summary[dataset_name][model_type] = result
 

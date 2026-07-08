@@ -66,6 +66,22 @@ class _CsvImageDataset(_TorchDataset):
         return self.transform(image), label, idx
 
 
+def _seed_worker(worker_id: int) -> None:
+    """Seed numpy/random per DataLoader worker so augmentation is reproducible.
+
+    Torch already derives each worker's torch RNG from the loader ``generator``; this
+    covers the ``numpy``/``random`` streams some transforms use.
+    """
+    import random as _random
+
+    import numpy as _np
+    import torch  # type: ignore
+
+    worker_seed = torch.initial_seed() % 2**32
+    _np.random.seed(worker_seed)
+    _random.seed(worker_seed)
+
+
 # model_name -> (torchvision factory attr, weights enum attr, head replacement strategy).
 # Head strategies:
 #   "fc"              ResNet family, final layer is ``model.fc``.
@@ -268,15 +284,77 @@ class _EarlyStopper:
         return self.stopped
 
 
-def _stratified_split_indices(
-    labels: Any, val_fraction: float, torch: Any, seed: int
-) -> tuple[Any, Any]:
-    """Split row indices into (train, val) keeping per-class proportions.
+def _grouped_split_indices(
+    labels: Any, groups: Any, val_fraction: float, torch: Any, seed: int
+) -> tuple[Any, Any] | None:
+    """Patient-grouped, class-stratified (train, val) index split, or None if infeasible.
 
-    Row-stratified only (not patient-grouped): this internal validation slice drives
-    early stopping during fit and never feeds the reported test metric, which keeps
-    the upstream patient-grouped split.
+    Every row of a group (patient) lands on one side, so no patient's images span
+    the fit/early-stopping boundary — matching the upstream patient-grouped test
+    split. Returns ``None`` when there are too few distinct groups to carve a
+    non-empty hold-out, so the caller falls back to row stratification.
     """
+    import numpy as np
+    from sklearn.model_selection import GroupShuffleSplit, StratifiedGroupKFold
+
+    y = np.asarray([int(v) for v in labels.tolist()])
+    raw_groups = groups.tolist() if hasattr(groups, "tolist") else list(groups)
+    g = np.asarray([str(v) for v in raw_groups])
+    n = len(y)
+    if n != len(g) or len(set(g)) < 2:
+        return None
+
+    def _wrap(train_i: Any, val_i: Any) -> tuple[Any, Any]:
+        return (
+            torch.as_tensor(np.asarray(train_i), dtype=torch.long),
+            torch.as_tensor(np.asarray(val_i), dtype=torch.long),
+        )
+
+    # StratifiedGroupKFold keeps per-class proportions while respecting groups.
+    # n_splits ~ 1/val_fraction; a fold becomes the ~val_fraction-sized hold-out.
+    n_splits = max(2, min(round(1.0 / val_fraction) if val_fraction else 2, len(set(g))))
+    try:
+        sgkf = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+        first: tuple[Any, Any] | None = None
+        for train_i, val_i in sgkf.split(np.zeros(n), y, g):
+            if not len(val_i) or not len(train_i):
+                continue
+            if first is None:
+                first = (train_i, val_i)
+            if len(set(y[val_i])) >= 2 and len(set(y[train_i])) >= 2:
+                return _wrap(train_i, val_i)  # both classes on both sides: ideal
+        if first is not None:
+            return _wrap(*first)
+    except ValueError:
+        pass
+
+    # Fallback: grouped but not class-stratified (few groups per class).
+    try:
+        gss = GroupShuffleSplit(n_splits=1, test_size=val_fraction, random_state=seed)
+        train_i, val_i = next(gss.split(np.zeros(n), y, g))
+        if len(val_i) and len(train_i):
+            return _wrap(train_i, val_i)
+    except (ValueError, StopIteration):
+        pass
+    return None
+
+
+def _stratified_split_indices(
+    labels: Any, val_fraction: float, torch: Any, seed: int, groups: Any | None = None
+) -> tuple[Any, Any]:
+    """Split row indices into (train, val) for the early-stopping slice.
+
+    With *groups* (per-row patient ids) the slice is patient-grouped as well as
+    class-stratified, so no patient leaks across the fit/validation boundary. When
+    *groups* is None (or too sparse to hold out) it falls back to a per-class
+    row-stratified split. This validation slice only drives early stopping during
+    fit; the reported test metric always comes from the upstream patient-grouped
+    split.
+    """
+    if groups is not None:
+        grouped = _grouped_split_indices(labels, groups, val_fraction, torch, seed)
+        if grouped is not None:
+            return grouped
     gen = torch.Generator().manual_seed(seed)
     label_list = [int(v) for v in labels.tolist()]
     train_parts: list[Any] = []
@@ -364,13 +442,15 @@ def _train_head(
     torch: Any,
     random_state: int,
     early_stopping: dict[str, Any] | None = None,
+    groups: Any | None = None,
 ) -> tuple[list[dict[str, Any]], float, dict[str, Any]]:
     """Train a linear head over cached features. No image decode, no backbone forward.
 
     When ``early_stopping['enabled']`` is True, a stratified validation slice is carved
     from the cached features; ``epochs`` becomes a cap and the best-AUC head weights are
-    restored on stop. Returns ``(history, train_time_seconds, summary)`` where ``summary``
-    carries ``epochs_run``/``best_epoch``/``early_stopped``.
+    restored on stop. *groups* (per-row patient ids, aligned with *features*) makes that
+    slice patient-grouped. Returns ``(history, train_time_seconds, summary)`` where
+    ``summary`` carries ``epochs_run``/``best_epoch``/``early_stopped``.
     """
     es_cfg = early_stopping or {}
     es_enabled = bool(es_cfg.get("enabled", False))
@@ -380,7 +460,9 @@ def _train_head(
 
     val_features = val_labels = None
     if es_enabled and val_fraction > 0:
-        train_idx, val_idx = _stratified_split_indices(labels, val_fraction, torch, random_state)
+        train_idx, val_idx = _stratified_split_indices(
+            labels, val_fraction, torch, random_state, groups=groups
+        )
         if val_idx.numel() > 0 and train_idx.numel() > 0:
             val_features = features[val_idx]
             val_labels = labels[val_idx]
@@ -463,6 +545,82 @@ def _head_scores(
     return scores
 
 
+def _build_image_transforms(
+    transforms: Any,
+    image_size: int,
+    *,
+    use_augmentation: bool,
+    aug_cfg: dict[str, Any],
+    normalize_mean: list[float],
+    normalize_std: list[float],
+) -> tuple[Any, Any, dict[str, Any]]:
+    """Build ``(train_transform, eval_transform, transform_meta)``.
+
+    The eval transform is always deterministic ImageNet-standard framing:
+    ``Resize(resize_size) -> CenterCrop(image_size) -> ToTensor -> Normalize`` with
+    ``resize_size = round(image_size * 256 / 224)`` (256/224 for the default 224 input).
+    This replaces the old square ``Resize((image_size, image_size))`` squish, which
+    distorted lesion aspect ratio.
+
+    When ``use_augmentation`` is False the train transform is identical to the eval
+    transform (deterministic). When True it prepends *train-only* stochastic ops for
+    smartphone robustness — random resized crop (also fixes the squish), horizontal/
+    vertical flips (lesions are orientation-free), mild rotation, optional Gaussian
+    blur, and brightness/contrast jitter. Colour is limited to brightness/contrast on
+    purpose: no hue/saturation, so skin tone is not shifted (fairness guard).
+    """
+    normalize = transforms.Normalize(mean=normalize_mean, std=normalize_std)
+    resize_size = round(image_size * 256 / 224)
+    eval_transform = transforms.Compose(
+        [
+            transforms.Resize(resize_size),
+            transforms.CenterCrop(image_size),
+            transforms.ToTensor(),
+            normalize,
+        ]
+    )
+    transform_meta: dict[str, Any] = {
+        "resize": resize_size,
+        "center_crop": image_size,
+        "normalize_mean": normalize_mean,
+        "normalize_std": normalize_std,
+        "use_augmentation": bool(use_augmentation),
+    }
+
+    if not use_augmentation:
+        return eval_transform, eval_transform, transform_meta
+
+    crop_scale_min = float(aug_cfg.get("crop_scale_min", 0.7))
+    rotation_degrees = float(aug_cfg.get("rotation_degrees", 20))
+    blur_prob = float(aug_cfg.get("blur_prob", 0.2))
+    brightness = float(aug_cfg.get("brightness", 0.2))
+    contrast = float(aug_cfg.get("contrast", 0.2))
+    train_ops: list[Any] = [
+        transforms.RandomResizedCrop(image_size, scale=(crop_scale_min, 1.0)),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomVerticalFlip(),
+        transforms.RandomRotation(rotation_degrees),
+    ]
+    if blur_prob > 0:
+        train_ops.append(
+            transforms.RandomApply(
+                [transforms.GaussianBlur(kernel_size=5, sigma=(0.1, 2.0))], p=blur_prob
+            )
+        )
+    # No saturation/hue: brightness/contrast only, so skin tone is left untouched.
+    train_ops.append(transforms.ColorJitter(brightness=brightness, contrast=contrast))
+    train_ops.extend([transforms.ToTensor(), normalize])
+    train_transform = transforms.Compose(train_ops)
+    transform_meta["augmentation"] = {
+        "crop_scale_min": crop_scale_min,
+        "rotation_degrees": rotation_degrees,
+        "blur_prob": blur_prob,
+        "brightness": brightness,
+        "contrast": contrast,
+    }
+    return train_transform, eval_transform, transform_meta
+
+
 def train_image_baseline(
     *,
     train_csv: Path,
@@ -484,6 +642,8 @@ def train_image_baseline(
     random_state: int = 42,
     cache_frozen_features: bool = True,
     early_stopping: dict[str, Any] | None = None,
+    use_augmentation: bool = False,
+    augmentation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Train one image baseline and persist model, predictions, metrics.
 
@@ -503,46 +663,90 @@ def train_image_baseline(
     torch.manual_seed(random_state)
     if torch_device_name == "cuda":
         torch.cuda.manual_seed_all(random_state)
+    # Also seed the main-process numpy/random streams so the num_workers=0 path (transforms
+    # run in-process) is reproducible; worker processes are seeded via worker_init_fn below.
+    import random as _random
+
+    import numpy as _np
+
+    _np.random.seed(random_state)
+    _random.seed(random_state)
 
     normalize_mean = [0.485, 0.456, 0.406]
     normalize_std = [0.229, 0.224, 0.225]
-    transform = transforms.Compose(
-        [
-            transforms.Resize((image_size, image_size)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=normalize_mean, std=normalize_std),
-        ]
+    train_transform, eval_transform, transform_meta = _build_image_transforms(
+        transforms,
+        image_size,
+        use_augmentation=use_augmentation,
+        aug_cfg=augmentation or {},
+        normalize_mean=normalize_mean,
+        normalize_std=normalize_std,
     )
-    transform_meta = {
-        "resize": [image_size, image_size],
-        "normalize_mean": normalize_mean,
-        "normalize_std": normalize_std,
-    }
-    train_dataset = _CsvImageDataset(train_csv, transform, image_col, target_col)
-    test_dataset = _CsvImageDataset(test_csv, transform, image_col, target_col)
+    # Train gets the (optionally stochastic) augmentation transform; test/eval always
+    # uses the deterministic transform so reported metrics are reproducible.
+    train_dataset = _CsvImageDataset(train_csv, train_transform, image_col, target_col)
+    test_dataset = _CsvImageDataset(test_csv, eval_transform, image_col, target_col)
+    # Deterministic view of the train split (eval transform): used for the
+    # early-stopping validation slice and the exported train-prediction CSV, so a
+    # stochastic augmentation never leaks into best-epoch selection or the train
+    # predictions that downstream stages (mitigation, XAI) consume. When augmentation
+    # is off the transforms are identical, so alias to avoid a redundant read.
+    train_eval_dataset = (
+        _CsvImageDataset(train_csv, eval_transform, image_col, target_col)
+        if use_augmentation
+        else train_dataset
+    )
+
     # forkserver avoids the Python 3.12 "fork() in a multi-threaded process" deadlock
     # warning (torch spins up threads). persistent_workers keeps workers alive across
     # epochs so they are spawned once per loader instead of re-spawned every epoch.
+    # Each loader gets its own generator (seed + fixed offset) so shuffle order and
+    # per-worker torch RNG are independent yet reproducible; worker_init_fn extends the
+    # seed to numpy/random so the augmentation stream repeats exactly across reruns.
+    def _loader_generator(offset: int) -> Any:
+        gen = torch.Generator()
+        gen.manual_seed(random_state + offset)
+        return gen
+
     loader_kwargs: dict[str, Any] = {
         "num_workers": num_workers,
         "pin_memory": torch_device_name == "cuda",
+        "worker_init_fn": _seed_worker,
     }
     if num_workers > 0:
         loader_kwargs["persistent_workers"] = True
         loader_kwargs["multiprocessing_context"] = "forkserver"
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, **loader_kwargs)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, **loader_kwargs)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        generator=_loader_generator(0),
+        **loader_kwargs,
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        generator=_loader_generator(1),
+        **loader_kwargs,
+    )
 
     if cache_frozen_features and not freeze_backbone:
         logger.warning(
             "cache_frozen_features=True ignored: feature caching requires a frozen backbone "
             "(freeze_backbone=False). Falling back to the standard per-epoch training path."
         )
-    feature_cache = bool(cache_frozen_features and freeze_backbone)
+    if use_augmentation and cache_frozen_features and freeze_backbone:
+        logger.warning(
+            "use_augmentation=True disables frozen-feature caching: cached features are extracted "
+            "once, so a random train transform would freeze a single crop per image (no diversity). "
+            "Falling back to the per-epoch path (backbone stays frozen, pixels->features each epoch)."
+        )
+    feature_cache = bool(cache_frozen_features and freeze_backbone and not use_augmentation)
     logger.info(
         "[PHASE] Image model start dataset=%s model=%s device_requested=%s "
         "device_resolved=%s torch_device=%s pretrained=%s freeze_backbone=%s "
-        "feature_cache=%s epochs=%s batch_size=%s image_size=%s",
+        "feature_cache=%s use_augmentation=%s epochs=%s batch_size=%s image_size=%s",
         dataset_name,
         model_name,
         device_request,
@@ -551,6 +755,7 @@ def train_image_baseline(
         pretrained,
         freeze_backbone,
         feature_cache,
+        use_augmentation,
         epochs,
         batch_size,
         image_size,
@@ -595,6 +800,13 @@ def train_image_baseline(
         feature_extraction_time_seconds = time.perf_counter() - extract_start
         head = head.to(device)
         optimizer = torch.optim.AdamW(head.parameters(), lr=learning_rate)
+        # Patient ids aligned to cached-feature order (train_row_idx are positional
+        # rows into train_dataset.df) so the early-stopping slice is patient-grouped.
+        train_groups = (
+            train_dataset.df["patient_id"].to_numpy()[train_row_idx]
+            if "patient_id" in train_dataset.df.columns
+            else None
+        )
         history, head_train_time_seconds, train_summary = _train_head(
             head,
             train_features,
@@ -607,6 +819,7 @@ def train_image_baseline(
             torch=torch,
             random_state=random_state,
             early_stopping=early_stopping,
+            groups=train_groups,
         )
         # Total wall time = one-off feature extraction + head training, so cache-path
         # speedup numbers do not under-report the real cost.
@@ -666,20 +879,27 @@ def train_image_baseline(
             from torch.utils.data import Subset  # type: ignore
 
             targets = torch.tensor(train_dataset.df[target_col].astype(int).tolist())
+            es_groups = (
+                train_dataset.df["patient_id"].to_numpy()
+                if "patient_id" in train_dataset.df.columns
+                else None
+            )
             tr_idx, va_idx = _stratified_split_indices(
-                targets, es_val_fraction, torch, random_state
+                targets, es_val_fraction, torch, random_state, groups=es_groups
             )
             if va_idx.numel() > 0 and tr_idx.numel() > 0:
                 fit_loader = DataLoader(
                     Subset(train_dataset, tr_idx.tolist()),
                     batch_size=batch_size,
                     shuffle=True,
+                    generator=_loader_generator(2),
                     **loader_kwargs,
                 )
                 val_loader_es = DataLoader(
-                    Subset(train_dataset, va_idx.tolist()),
+                    Subset(train_eval_dataset, va_idx.tolist()),
                     batch_size=batch_size,
                     shuffle=False,
+                    generator=_loader_generator(3),
                     **loader_kwargs,
                 )
             else:
@@ -691,6 +911,10 @@ def train_image_baseline(
         epochs_run = 0
         for epoch in range(epochs):
             epoch_start = time.perf_counter()
+            # Standard (non-cache) path: backbone runs in train() so frozen-weight
+            # BatchNorm running stats still adapt to the (augmented) train distribution.
+            # This is the documented behavior of this path and is kept intentionally under
+            # augmentation — accepted as a methodological choice, not an oversight.
             model.train()
             total_loss = 0.0
             total_seen = 0
@@ -766,7 +990,20 @@ def train_image_baseline(
                 y_true, y_prob, row_indices, csv_path, image_col, sensitive_cols
             )
 
-        train_predictions, train_metrics = predict(train_loader, train_csv)
+        # Predict over the deterministic train view (no augmentation) so the exported
+        # train-prediction CSV is stable; reuse train_loader when augmentation is off.
+        train_eval_loader = (
+            DataLoader(
+                train_eval_dataset,
+                batch_size=batch_size,
+                shuffle=False,
+                generator=_loader_generator(4),
+                **loader_kwargs,
+            )
+            if use_augmentation
+            else train_loader
+        )
+        train_predictions, train_metrics = predict(train_eval_loader, train_csv)
         test_predictions, test_metrics = predict(test_loader, test_csv)
 
     models_dir = output_root / "models"
@@ -832,6 +1069,8 @@ def train_image_baseline(
             "freeze_backbone": freeze_backbone,
             "num_workers": num_workers,
             "cache_frozen_features": cache_frozen_features,
+            "use_augmentation": use_augmentation,
+            "augmentation": augmentation or {},
             "early_stopping": early_stopping or {"enabled": False},
         },
     }

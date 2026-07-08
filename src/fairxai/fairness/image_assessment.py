@@ -57,6 +57,23 @@ DEFAULT_GROUP_VIEWS = [
     "age_coarse_x_fitzpatrick",
 ]
 
+# Tokens that mark a group as an undocumented/missing-data bucket rather than a
+# real demographic stratum. Such a bucket must not enter group-difference deltas:
+# an "unknown" cohort is a documentation artefact (label-correlated missingness),
+# not a population, so a parity gap against it is uninterpretable. It stays in the
+# per-group performance table for transparency but is gated out of the deltas.
+_UNKNOWN_GROUP_TOKENS = {"unknown", "nan", "none", ""}
+
+
+def _is_unknown_label(label: str) -> bool:
+    """True when *label* is (or, for an intersection, contains) a missing-data cell.
+
+    Intersectional views join components with `` x ``; a cell is treated as
+    unknown when ANY component is unknown-like (e.g. ``Unknown x V-VI`` or
+    ``Female x unknown``), because the whole cell then rests on missing metadata.
+    """
+    return any(part.strip().lower() in _UNKNOWN_GROUP_TOKENS for part in str(label).split(" x "))
+
 
 def decode_groups(df: pd.DataFrame, attr: str) -> pd.Series:
     """Return *attr* as readable group labels, decoding known encoded columns.
@@ -235,12 +252,19 @@ def assess_predictions_frame(
     sensitive_attrs: list[str],
     *,
     min_group_samples: int = DEFAULT_MIN_GROUP_SAMPLES,
+    exclude_unknown: bool = True,
 ) -> dict[str, Any]:
     """Compute the fairness report for a single prediction DataFrame.
 
     Group fairness for an attribute is computed only over groups meeting
     *min_group_samples*; undersized groups are dropped from the metrics but
     reported under ``skipped_groups`` so nothing is silently ignored.
+
+    When *exclude_unknown* is True (the default policy), an undocumented/missing
+    demographic bucket (``unknown``/``nan`` labels, or any intersection cell that
+    contains one) is kept in the per-group performance table but held out of the
+    group-difference deltas and listed under ``policy_excluded_groups``. Set it
+    False to let such a bucket be treated as an ordinary comparison group.
     """
     proba = df["y_proba"] if "y_proba" in df.columns else None
     report: dict[str, Any] = {
@@ -263,17 +287,31 @@ def assess_predictions_frame(
         kept, skipped = _partition_groups(counts, min_group_samples)
         degenerate = _degenerate_groups(work, decoded_col, kept)
         degenerate_names = {d["group"] for d in degenerate}
-        comparison = [g for g in kept if g not in degenerate_names]
+        policy_excluded = (
+            [
+                {"group": g, "count": int(counts[g]), "reason": "unknown/missing demographic"}
+                for g in kept
+                if g not in degenerate_names and _is_unknown_label(g)
+            ]
+            if exclude_unknown
+            else []
+        )
+        policy_excluded_names = {d["group"] for d in policy_excluded}
+        comparison = [
+            g for g in kept if g not in degenerate_names and g not in policy_excluded_names
+        ]
 
         attr_report: dict[str, Any] = {
             "kept_groups": {g: int(counts[g]) for g in kept},
             "skipped_groups": skipped,
             "degenerate_groups": degenerate,
+            "policy_excluded_groups": policy_excluded,
             "group_performance": _group_performance(work, decoded_col, kept),
         }
 
-        # Deltas are computed only over comparison groups (≥ min support AND both
-        # classes present); degenerate groups stay in the performance table above.
+        # Deltas are computed only over comparison groups (≥ min support, both
+        # classes present, and not an unknown/missing bucket); those groups still
+        # stay in the performance table above.
         if len(comparison) >= 2:
             comp_df = work[work[decoded_col].isin(comparison)]
             fm = FairnessMetrics(sensitive_attributes=[decoded_col])
@@ -284,8 +322,8 @@ def assess_predictions_frame(
             attr_report["group_fairness"] = {}
             attr_report["calibration"] = {}
             attr_report["note"] = (
-                "fewer than 2 comparison groups (min support + both classes present); "
-                "no group-difference metrics"
+                "fewer than 2 comparison groups (min support, both classes present, "
+                "and excluding unknown/missing buckets); no group-difference metrics"
             )
 
         report["sensitive_attributes"][attr] = attr_report
@@ -326,6 +364,11 @@ def render_markdown(reports: dict[str, dict[str, Any]]) -> str:
             if ar.get("degenerate_groups"):
                 degen = ", ".join(f"{d['group']} ({d['reason']})" for d in ar["degenerate_groups"])
                 lines.append(f"- excluded from deltas (degenerate): {degen}")
+            if ar.get("policy_excluded_groups"):
+                policy = ", ".join(
+                    f"{d['group']} (n={d['count']})" for d in ar["policy_excluded_groups"]
+                )
+                lines.append(f"- excluded from deltas (unknown/missing): {policy}")
             if not ar["group_performance"]:
                 lines.append("- no groups met the minimum support threshold")
                 lines.append("")
@@ -365,6 +408,7 @@ def _flatten_for_csv(reports: dict[str, dict[str, Any]]) -> pd.DataFrame:
             dp = gf.get("demographic_parity", {}).get("max_difference")
             eo = gf.get("equalized_odds", {})
             degenerate_names = {d["group"] for d in ar.get("degenerate_groups", [])}
+            policy_excluded_names = {d["group"] for d in ar.get("policy_excluded_groups", [])}
             for group, perf in ar["group_performance"].items():
                 rows.append(
                     {
@@ -377,6 +421,7 @@ def _flatten_for_csv(reports: dict[str, dict[str, Any]]) -> pd.DataFrame:
                         "recall": perf["recall"],
                         "auc": perf["auc"],
                         "degenerate": group in degenerate_names,
+                        "policy_excluded": group in policy_excluded_names,
                         "demographic_parity_max_diff": dp,
                         "tpr_max_diff": eo.get("tpr_max_difference"),
                         "fpr_max_diff": eo.get("fpr_max_difference"),
@@ -391,6 +436,7 @@ def assess_group_views_frame(
     *,
     min_group_samples: int = DEFAULT_MIN_GROUP_SAMPLES,
     intersection_min_group_samples: int = DEFAULT_INTERSECTION_MIN_GROUP_SAMPLES,
+    exclude_unknown: bool = True,
 ) -> dict[str, Any]:
     """Compute post-hoc group-view reports for one prediction DataFrame."""
     work, metadata = derive_group_view_columns(df, views)
@@ -406,9 +452,9 @@ def assess_group_views_frame(
         view_min = (
             intersection_min_group_samples if metadata[view]["exploratory"] else min_group_samples
         )
-        view_report = assess_predictions_frame(work, [view], min_group_samples=view_min)[
-            "sensitive_attributes"
-        ][view]
+        view_report = assess_predictions_frame(
+            work, [view], min_group_samples=view_min, exclude_unknown=exclude_unknown
+        )["sensitive_attributes"][view]
         view_report["min_group_samples"] = int(view_min)
         view_report["source_attributes"] = metadata[view]["source_attributes"]
         view_report["exploratory"] = bool(metadata[view]["exploratory"])
@@ -437,6 +483,11 @@ def render_group_view_markdown(reports: dict[str, dict[str, Any]]) -> str:
             if vr.get("degenerate_groups"):
                 degen = ", ".join(f"{d['group']} ({d['reason']})" for d in vr["degenerate_groups"])
                 lines.append(f"- excluded from deltas (degenerate): {degen}")
+            if vr.get("policy_excluded_groups"):
+                policy = ", ".join(
+                    f"{d['group']} (n={d['count']})" for d in vr["policy_excluded_groups"]
+                )
+                lines.append(f"- excluded from deltas (unknown/missing): {policy}")
             lines.append("")
             lines.append("| group | n | prevalence | accuracy | recall | auc |")
             lines.append("|---|---:|---:|---:|---:|---:|")
@@ -559,6 +610,7 @@ def assess_run(
     group_views: Optional[list[str]] = None,
     group_view_min_group_samples: int = DEFAULT_MIN_GROUP_SAMPLES,
     intersection_min_group_samples: int = DEFAULT_INTERSECTION_MIN_GROUP_SAMPLES,
+    exclude_unknown: bool = True,
     write_figures: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Assess every baseline prediction CSV in *run_root* and write the report.
@@ -577,7 +629,10 @@ def assess_run(
     for key, csv_path in discovered:
         df = pd.read_csv(csv_path)
         reports[key] = assess_predictions_frame(
-            df, sensitive_attrs, min_group_samples=min_group_samples
+            df,
+            sensitive_attrs,
+            min_group_samples=min_group_samples,
+            exclude_unknown=exclude_unknown,
         )
         if write_group_views:
             group_view_reports[key] = assess_group_views_frame(
@@ -585,6 +640,7 @@ def assess_run(
                 group_views or DEFAULT_GROUP_VIEWS,
                 min_group_samples=group_view_min_group_samples,
                 intersection_min_group_samples=intersection_min_group_samples,
+                exclude_unknown=exclude_unknown,
             )
         logger.info("Assessed %s (%d rows)", key, len(df))
 

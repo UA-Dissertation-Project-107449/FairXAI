@@ -29,6 +29,47 @@ pip install -e ".[vision]"
 
 Use `--no-pretrained` if ImageNet weights are not cached and the environment has no network access.
 
+## Data augmentation (train-only)
+
+Stage 7 supports smartphone-robustness augmentation, on by default in
+`configs/pipelines/dermatology.yaml` (`training.image.use_augmentation: true`).
+It is applied to the **train** split only; the eval/test transform stays
+deterministic (`Resize(256) → CenterCrop(224)`), so reported metrics are
+reproducible.
+
+Transforms: `RandomResizedCrop`, horizontal + vertical flips, `RandomRotation`,
+optional `GaussianBlur`, and `ColorJitter` limited to **brightness/contrast**.
+Hue and saturation are deliberately excluded so skin tone is never shifted —
+a fairness guard for Fitzpatrick subgroups.
+
+```yaml
+training:
+  image:
+    use_augmentation: true
+    augmentation:
+      crop_scale_min: 0.7    # RandomResizedCrop lower bound (also fixes square-squish)
+      rotation_degrees: 20   # phone orientation jitter
+      blur_prob: 0.2         # p of mild GaussianBlur (out-of-focus phone shots)
+      brightness: 0.2        # exposure variance
+      contrast: 0.2          # exposure variance
+```
+
+Override per run with `--augmentation` / `--no-augmentation`.
+
+Key behavior when augmentation is on:
+
+- **Feature cache is forced off.** Cached frozen features are extracted once, so a
+  random crop would be frozen with no diversity. The trainer logs a warning, keeps
+  the backbone frozen, and re-runs pixels → features every epoch (slower, but the
+  augmentation is real). The checkpoint and metrics JSON record `feature_cache: false`.
+- **No leakage into evaluation.** Early stopping validates on a deterministic
+  (un-augmented) train slice, and the exported train-prediction CSV consumed by
+  mitigation and XAI also uses the deterministic transform.
+- **Reproducible.** Per-loader seeded generators plus `worker_init_fn` (numpy/random)
+  make the augmentation stream repeat exactly across reruns for a fixed `random_state`.
+
+See `src/fairxai/training/README.md` for the trainer-level detail.
+
 ## Post-prediction stages (8–11)
 
 Stages 8–11 run on saved prediction CSVs — no retraining, no model reload — and are opt-in

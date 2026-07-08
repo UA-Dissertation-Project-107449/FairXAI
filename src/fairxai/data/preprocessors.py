@@ -162,7 +162,7 @@ class CardiacPreprocessor:
         if fit:
             self.impute_values = {}
             for col in numeric_cols:
-                self.impute_values[col] = X[col].median()
+                self.impute_values[col] = X[col].median() if X[col].notna().any() else 0
             for col in X.columns:
                 if col in numeric_cols:
                     continue
@@ -605,7 +605,7 @@ class FoldPreprocessor:
     def fit_transform(self, X: pd.DataFrame) -> pd.DataFrame:
         """Learn impute/scale statistics from *X* (fold-train) and apply them."""
         self.numeric_cols = [c for c in X.columns if pd.api.types.is_numeric_dtype(X[c])]
-        self.medians = {c: X[c].median() for c in self.numeric_cols}
+        self.medians = {c: X[c].median() if X[c].notna().any() else 0 for c in self.numeric_cols}
         self.object_fills = {}
         for col in X.columns:
             if col in self.numeric_cols:

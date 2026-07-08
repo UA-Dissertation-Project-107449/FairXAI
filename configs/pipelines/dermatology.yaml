@@ -31,13 +31,19 @@ training:
     image_size: 224
     pretrained: true
     freeze_backbone: true
-    num_workers: 6
-    # Frozen-backbone speedup: extract features once, train only the head over them.
-    # ON by default for frozen baselines; standard path used automatically when backbone unfrozen
+    # Per-DataLoader worker count (the augmentation path keeps several loaders alive).
+    num_workers: 2
+    # Frozen-backbone speedup: cache features once, train only the head (auto-off if unfrozen).
     cache_frozen_features: true
-    # Train to convergence instead of a fixed epoch count. A stratified validation
-    # slice is carved from train (row-stratified, not patient-grouped — it never feeds
-    # the reported test metric); best-val_auc weights are restored on stop.
+    # Train-only smartphone-robustness aug; forces feature cache off; brightness/contrast only (no hue/sat).
+    use_augmentation: true
+    augmentation:
+      crop_scale_min: 0.7    # RandomResizedCrop lower bound (also fixes square-squish)
+      rotation_degrees: 20   # phone orientation jitter
+      blur_prob: 0.2         # p of mild GaussianBlur (out-of-focus phone shots)
+      brightness: 0.2        # exposure variance
+      contrast: 0.2          # exposure variance
+    # Train to convergence; best-val_auc weights restored on stop (val slice never feeds test metric).
     early_stopping:
       enabled: true
       monitor: val_auc

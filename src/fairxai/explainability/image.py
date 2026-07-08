@@ -239,16 +239,22 @@ def _build_transform(ckpt: dict[str, Any]) -> Any:
     import torchvision.transforms as transforms  # type: ignore
 
     meta = ckpt.get("transform", {})
-    size = meta.get("resize", [ckpt.get("image_size", 224)] * 2)
+    size = meta.get("resize", ckpt.get("image_size", 224))
+    center_crop = meta.get("center_crop")
     mean = meta.get("normalize_mean", [0.485, 0.456, 0.406])
     std = meta.get("normalize_std", [0.229, 0.224, 0.225])
-    return transforms.Compose(
-        [
-            transforms.Resize((size[0], size[1])),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=mean, std=std),
-        ]
-    )
+    ops: list[Any] = []
+    if isinstance(size, (list, tuple)):
+        # Legacy square-squish checkpoints stored resize as [h, w].
+        ops.append(transforms.Resize((int(size[0]), int(size[1]))))
+    else:
+        # Current deterministic eval framing: Resize(short side) -> CenterCrop(image_size),
+        # matching training's eval transform so saliency runs on the same pixels.
+        ops.append(transforms.Resize(int(size)))
+        if center_crop:
+            ops.append(transforms.CenterCrop(int(center_crop)))
+    ops.extend([transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)])
+    return transforms.Compose(ops)
 
 
 def _save_overlay(image_rgb: np.ndarray, heatmap: np.ndarray, out_path: Path) -> None:

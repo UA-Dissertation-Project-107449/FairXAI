@@ -94,6 +94,68 @@ class TestArchiveRun:
         assert (tmp_path / "cardiac" / "archived_runs" / "run_c").exists()
         assert _manifest(tmp_path, "cardiac")[0]["operation"] == "move"
 
+    def test_copy_archives_paired_logs(self, tmp_path):
+        _make_run(tmp_path, "cardiac", "run_logs")
+        log_dir = tmp_path / "logs" / "cardiac" / "runs" / "run_logs"
+        log_dir.mkdir(parents=True)
+        (log_dir / "preprocessing.log").write_text("ok")
+        rc = archive_main(
+            [
+                "run_logs",
+                "--domain",
+                "cardiac",
+                "--output-root",
+                str(tmp_path),
+                "--logs-root",
+                str(tmp_path / "logs"),
+            ]
+        )
+        assert rc == 0
+        dest = tmp_path / "cardiac" / "archived_runs" / "run_logs"
+        assert (dest / "_logs" / "preprocessing.log").read_text() == "ok"
+        assert log_dir.exists()  # copy leaves the live log dir in place
+        entry = _manifest(tmp_path, "cardiac")[0]
+        assert entry["logs_archived_path"] == str(dest / "_logs")
+
+    def test_no_logs_flag_skips_log_archive(self, tmp_path):
+        _make_run(tmp_path, "cardiac", "run_nolog")
+        log_dir = tmp_path / "logs" / "cardiac" / "runs" / "run_nolog"
+        log_dir.mkdir(parents=True)
+        (log_dir / "preprocessing.log").write_text("ok")
+        archive_main(
+            [
+                "run_nolog",
+                "--domain",
+                "cardiac",
+                "--output-root",
+                str(tmp_path),
+                "--logs-root",
+                str(tmp_path / "logs"),
+                "--no-logs",
+            ]
+        )
+        dest = tmp_path / "cardiac" / "archived_runs" / "run_nolog"
+        assert not (dest / "_logs").exists()
+        assert _manifest(tmp_path, "cardiac")[0]["logs_archived_path"] is None
+
+    def test_missing_logs_dir_is_tolerated(self, tmp_path):
+        _make_run(tmp_path, "cardiac", "run_noldir")
+        rc = archive_main(
+            [
+                "run_noldir",
+                "--domain",
+                "cardiac",
+                "--output-root",
+                str(tmp_path),
+                "--logs-root",
+                str(tmp_path / "logs"),
+            ]
+        )
+        assert rc == 0
+        dest = tmp_path / "cardiac" / "archived_runs" / "run_noldir"
+        assert not (dest / "_logs").exists()
+        assert _manifest(tmp_path, "cardiac")[0]["logs_archived_path"] is None
+
     def test_manifest_appends(self, tmp_path):
         _make_run(tmp_path, "cardiac", "run_d1")
         _make_run(tmp_path, "cardiac", "run_d2")
