@@ -13,7 +13,7 @@ Each first-level package has a local `README.md` with file-level details.
 | `explainability` | Tabular SHAP/LIME wrappers and counterfactual placeholder | `shap_explain_tabular`, `lime_explain_instance` |
 | `fairness` | Group/calibration/individual fairness metrics and mitigation engines | `FairnessMetrics`, `MitigationEngine` |
 | `models` | Model registry, wrappers, baseline trainer, CV trainer | `MODEL_REGISTRY`, `get_model_class`, `CVTrainer` |
-| `training` | Hyperparameter optimization helpers | `run_hpo` |
+| `training` | Hyperparameter optimization helpers (tabular) and PyTorch image baseline trainer (dermatology CNNs, `vision.py`) | `run_hpo`, `train_image_baseline` |
 | `profiling` | Complexity metrics, profiling config, WebApp-compatible characterization | `compute_complexity_metrics`, `characterize_dataset` |
 | `recommendations` | Pre-model fairness triage engine | `RecommendationEngine`, `TriageReport` |
 | `pipeline` | Stage registry, aliases, checkpoint markers, resume validation | `STAGES`, `get_stage_range`, `mark_stage_complete` |
@@ -41,7 +41,7 @@ Each first-level package has a local `README.md` with file-level details.
 - Active model types: logistic regression, random forest, SVM, XGBoost.
 - Active subgroup tooling: clustering and similarity modules exist and are tested.
 - Active visualization modules: `distributions`, `comparisons`, `fairness`, `transformations`, `fairness_comparison`, and `clustering`.
-- Scaffolded future domain: dermatology has scripts/config placeholders, but cardiac remains the only complete pipeline.
+- Active dermatology pipeline: image baselines (resnet18, mobilenet_v3_large, efficientnet_b0, densenet121) through stages 1–11, with train-only augmentation (`training.vision`).
 
 ## Documentation Standard
 
