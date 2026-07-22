@@ -6,40 +6,15 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
 
 # ======================================================================
-# Stage mapping (name -> number, number -> name)
+# Stage mapping — loaded from the Python catalog, never declared here.
+# Provides STAGE_NUM / STAGE_NAME / STAGE_MARKERS / STAGE_ORDER /
+# STAGE_FIRST / STAGE_LAST / STAGE_VALID plus resolve_stage and
+# stage_marker_exists.
 # ======================================================================
-declare -A STAGE_NUM=(
-    [load]=1 [profile]=2 [profiling]=2 [recommend]=3 [recommendations]=3
-    [triage]=3 [preprocess]=4 [preprocessing]=4
-    [hpo_study]=5 [hpo]=5 [feature_selection_study]=6 [feature_selection]=6 [fs_study]=6
-    [train]=7 [baseline]=7 [training]=7 [assess]=8 [fairness]=8 [assessment]=8
-    [attribute_binning]=9 [age_binning]=9 [mitigation]=10
-    [combinatorial]=11 [combo]=11 [compare]=12 [comparison]=12
-)
-declare -A STAGE_NAME=(
-    [1]=load [2]=profile [3]=recommend [4]=preprocess [5]=hpo_study
-    [6]=feature_selection_study [7]=train [8]=assess [9]=attribute_binning
-    [10]=mitigation [11]=combinatorial [12]=compare
-)
-
-resolve_stage() {
-    local input="${1,,}"  # lowercase
-    # Plain number
-    if [[ "$input" =~ ^[0-9]+$ ]]; then
-        [[ -n "${STAGE_NAME[$input]+x}" ]] && echo "$input" && return
-    fi
-    # Strip common prefixes (phase3, stage3, step3)
-    local stripped="${input#phase}"
-    stripped="${stripped#stage}"
-    stripped="${stripped#step}"
-    if [[ "$stripped" =~ ^[0-9]+$ ]] && [[ -n "${STAGE_NAME[$stripped]+x}" ]]; then
-        echo "$stripped" && return
-    fi
-    # Name / alias
-    if [[ -n "${STAGE_NUM[$input]+x}" ]]; then
-        echo "${STAGE_NUM[$input]}" && return
-    fi
-    echo "ERROR: Unknown stage '$1'. Valid: load(1) profile(2) recommend(3) preprocess(4) hpo_study(5) feature_selection_study(6) train(7) assess(8) attribute_binning(9) mitigation(10) combinatorial(11) compare(12)" >&2
+# shellcheck source=../common/stage_registry.sh
+source "$ROOT_DIR/scripts/common/stage_registry.sh"
+load_stage_registry cardiac "$ROOT_DIR" || {
+    echo "ERROR: Could not load the cardiac stage registry." >&2
     exit 1
 }
 
@@ -355,8 +330,8 @@ fi
 # ======================================================================
 # Resolve stage range
 # ======================================================================
-START_NUM=1
-END_NUM=12
+START_NUM=$STAGE_FIRST
+END_NUM=$STAGE_LAST
 
 if [[ -n "$RESUME_FROM" ]]; then
     START_NUM=$(resolve_stage "$RESUME_FROM")
@@ -424,8 +399,10 @@ echo "$RUN_ID" > "$_LOG_TXT"
 # Checkpoint helpers
 # ======================================================================
 mark_done() {
+    # Always writes the canonical marker name from the registry, so markers
+    # stay interchangeable with the ones the Prefect flow writes.
     local num=$1
-    local name=$2
+    local name="${STAGE_NAME[$num]}"
     mkdir -p "$CHECKPOINT_DIR"
     cat > "$CHECKPOINT_DIR/${num}_${name}.done" <<EOF
 {
@@ -439,9 +416,8 @@ EOF
 }
 
 check_marker() {
-    local num=$1
-    local name=$2
-    [[ -f "$CHECKPOINT_DIR/${num}_${name}.done" ]]
+    # Accepts the canonical marker plus any legacy name the registry lists.
+    stage_marker_exists "$CHECKPOINT_DIR" "$1"
 }
 
 # ======================================================================
@@ -450,10 +426,11 @@ check_marker() {
 if [[ -n "$RESUME_FROM" ]] && (( START_NUM > 1 )); then
     echo "Validating prior stages for resume..."
     MISSING=""
-    for (( i=1; i<START_NUM; i++ )); do
+    for i in "${STAGE_ORDER[@]}"; do
+        (( i < START_NUM )) || continue
         sname="${STAGE_NAME[$i]}"
-        if ! check_marker "$i" "$sname"; then
-            MISSING="$MISSING  Stage $i ($sname): no checkpoint marker at $CHECKPOINT_DIR/${i}_${sname}.done\n"
+        if ! check_marker "$i"; then
+            MISSING="$MISSING  Stage $i ($sname): no checkpoint marker matching ${STAGE_MARKERS[$i]} under $CHECKPOINT_DIR\n"
         fi
     done
     if [[ -n "$MISSING" ]]; then
@@ -520,7 +497,7 @@ fi
 if should_run 1; then
     echo "[PHASE 1/12] Loading cardiac datasets (standardization)"
     python3 "$ROOT_DIR/scripts/cardiac/load_data.py" "${DATASET_ARGS[@]}" $VERBOSE_FLAG
-    mark_done 1 "load"
+    mark_done 1
     echo ""
 else
     echo "[1/12] load — SKIPPED (outside active range)"
@@ -530,7 +507,7 @@ fi
 if should_run 2; then
     echo "[PHASE 2/12] Profiling datasets (complexity + fairness)"
     python3 "$ROOT_DIR/scripts/cardiac/profile_data.py" "${DATASET_ARGS[@]}" $VERBOSE_FLAG
-    mark_done 2 "profile"
+    mark_done 2
     echo ""
 else
     echo "[2/12] profile — SKIPPED (outside active range)"
@@ -541,11 +518,11 @@ if should_run 3; then
     if [[ "$RUN_RECOMMENDATIONS" == "true" ]]; then
         echo "[PHASE 3/12] Generating fairness triage recommendations"
         python3 "$ROOT_DIR/scripts/cardiac/generate_recommendations.py" --run-id "$RUN_ID" $VERBOSE_FLAG
-        mark_done 3 "recommend"
+        mark_done 3
         echo ""
     else
         echo "[3/12] Recommendations SKIPPED (disabled)"
-        mark_done 3 "recommend"
+        mark_done 3
         echo "[3/12] recommend - checkpointed as skipped (disabled)"
     fi
 else
@@ -564,7 +541,7 @@ if should_run 4; then
         echo "[PHASE 4/12] MAX_SAMPLES override -> --max-samples $MAX_SAMPLES"
     fi
     python3 "$ROOT_DIR/scripts/cardiac/preprocess.py" $PREPROCESS_ARGS "${DATASET_ARGS[@]}" $VERBOSE_FLAG
-    mark_done 4 "preprocess"
+    mark_done 4
     echo ""
 else
     echo "[4/12] preprocess — SKIPPED (outside active range)"
@@ -599,8 +576,8 @@ if should_run 5 && should_run 6 && [[ "$RUN_HPO_STUDY" == "true" ]] && [[ "$RUN_
         exit 1
     fi
 
-    mark_done 5 "hpo_study"
-    mark_done 6 "feature_selection_study"
+    mark_done 5
+    mark_done 6
     PARALLEL_STUDIES_HANDLED=true
     echo ""
 fi
@@ -615,15 +592,15 @@ if should_run 5; then
             --search-n-jobs "$HPO_SEARCH_N_JOBS" \
             --model-n-jobs "$HPO_MODEL_N_JOBS" \
             "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $STUDY_VERBOSE_FLAG
-        mark_done 5 "hpo_study"
+        mark_done 5
         echo ""
     else
         echo "[5/12] HPO study SKIPPED (disabled)"
-        mark_done 5 "hpo_study"
-        echo "[5/12] hpo_study - checkpointed as skipped (disabled)"
+        mark_done 5
+        echo "[5/12] tune - checkpointed as skipped (disabled)"
     fi
 else
-    echo "[5/12] hpo_study — SKIPPED (outside active range)"
+    echo "[5/12] tune — SKIPPED (outside active range)"
 fi
 
 # Stage 6 — Feature-selection study (optional)
@@ -636,15 +613,15 @@ if should_run 6; then
             --pipeline cardiac --config "$FEATURE_SELECTION_STUDY_CONFIG" \
             --jobs "$FS_JOBS" \
             "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $STUDY_VERBOSE_FLAG
-        mark_done 6 "feature_selection_study"
+        mark_done 6
         echo ""
     else
         echo "[6/12] Feature-selection study SKIPPED (disabled)"
-        mark_done 6 "feature_selection_study"
-        echo "[6/12] feature_selection_study - checkpointed as skipped (disabled)"
+        mark_done 6
+        echo "[6/12] select_features - checkpointed as skipped (disabled)"
     fi
 else
-    echo "[6/12] feature_selection_study — SKIPPED (outside active range)"
+    echo "[6/12] select_features — SKIPPED (outside active range)"
 fi
 
 # ---- Optional pre-train clustering (inject group_cluster before training) ----
@@ -694,7 +671,7 @@ if should_run 7; then
     python3 "$ROOT_DIR/scripts/cardiac/train_baseline.py" \
         --selector-contract "$SELECTOR_CONTRACT_PATH" \
         "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $VERBOSE_FLAG
-    mark_done 7 "train"
+    mark_done 7
     echo ""
 else
     echo "[7/12] train — SKIPPED (outside active range)"
@@ -704,7 +681,7 @@ fi
 if should_run 8; then
     echo "[PHASE 8/12] Assessing post-prediction fairness"
     python3 "$ROOT_DIR/scripts/cardiac/assess_predictions.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $VERBOSE_FLAG
-    mark_done 8 "assess"
+    mark_done 8
     echo ""
 else
     echo "[8/12] assess — SKIPPED (outside active range)"
@@ -744,7 +721,7 @@ fi
 ARCHIVE_EXPERIMENTS=true
 PARALLEL_EXPERIMENTS_HANDLED=false
 if should_run 9 && should_run 10 && should_run 11 && [[ "$RUN_ATTRIBUTE_BINNING" == "true" ]] && [[ "$RUN_MITIGATION" == "true" ]] && [[ "$RUN_COMBINATORIAL" == "true" ]] && [[ "$PARALLEL_EXPERIMENTS" == "true" ]]; then
-    echo "[PHASE 9-11/12] Running attribute_binning, mitigation, combinatorial in parallel"
+    echo "[PHASE 9-11/12] Running bin_attributes, mitigate, sweep in parallel"
     set +e
     EXPERIMENT_RUN_MODE=full ARCHIVE_PREVIOUS=$ARCHIVE_EXPERIMENTS python3 "$ROOT_DIR/scripts/experiments/run_attribute_binning_analysis.py" \
         --config "$ATTRIBUTE_BINNING_CONFIG" --run-id "$RUN_ID" --pipeline cardiac "${DATASET_ARGS[@]}" $VERBOSE_FLAG &
@@ -773,9 +750,9 @@ if should_run 9 && should_run 10 && should_run 11 && [[ "$RUN_ATTRIBUTE_BINNING"
         exit 1
     fi
 
-    mark_done 9 "attribute_binning"
-    mark_done 10 "mitigation"
-    mark_done 11 "combinatorial"
+    mark_done 9
+    mark_done 10
+    mark_done 11
     ARCHIVE_EXPERIMENTS=false
     PARALLEL_EXPERIMENTS_HANDLED=true
     echo ""
@@ -789,15 +766,15 @@ if should_run 9; then
         EXPERIMENT_RUN_MODE=full ARCHIVE_PREVIOUS=$ARCHIVE_EXPERIMENTS python3 "$ROOT_DIR/scripts/experiments/run_attribute_binning_analysis.py" \
             --config "$ATTRIBUTE_BINNING_CONFIG" --run-id "$RUN_ID" --pipeline cardiac "${DATASET_ARGS[@]}" $VERBOSE_FLAG
         ARCHIVE_EXPERIMENTS=false
-        mark_done 9 "attribute_binning"
+        mark_done 9
         echo ""
     else
         echo "[9/12] Attribute binning SKIPPED (disabled)"
-        mark_done 9 "attribute_binning"
-        echo "[9/12] attribute_binning - checkpointed as skipped (disabled)"
+        mark_done 9
+        echo "[9/12] bin_attributes - checkpointed as skipped (disabled)"
     fi
 else
-    echo "[9/12] attribute_binning — SKIPPED (outside active range)"
+    echo "[9/12] bin_attributes — SKIPPED (outside active range)"
 fi
 
 # Stage 10 — Mitigation (optional)
@@ -809,15 +786,15 @@ if should_run 10; then
         EXPERIMENT_RUN_MODE=full ARCHIVE_PREVIOUS=$ARCHIVE_EXPERIMENTS python3 "$ROOT_DIR/scripts/cardiac/mitigation.py" \
             --config "$MITIGATION_CONFIG" --run-id "$RUN_ID" "${DATASET_ARGS[@]}" $VERBOSE_FLAG
         ARCHIVE_EXPERIMENTS=false
-        mark_done 10 "mitigation"
+        mark_done 10
         echo ""
     else
         echo "[10/12] Mitigation SKIPPED (disabled)"
-        mark_done 10 "mitigation"
-        echo "[10/12] mitigation - checkpointed as skipped (disabled)"
+        mark_done 10
+        echo "[10/12] mitigate - checkpointed as skipped (disabled)"
     fi
 else
-    echo "[10/12] mitigation — SKIPPED (outside active range)"
+    echo "[10/12] mitigate — SKIPPED (outside active range)"
 fi
 
 # ---- Optional post-mitigation age-binning fairness sensitivity sweep ---------
@@ -861,15 +838,15 @@ if should_run 11; then
             --config "$COMBINATORIAL_CONFIG" --run-id "$RUN_ID" \
             --selector-contract "$SELECTOR_CONTRACT_PATH" \
             "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $VERBOSE_FLAG
-        mark_done 11 "combinatorial"
+        mark_done 11
         echo ""
     else
         echo "[11/12] Combinatorial SKIPPED (disabled)"
-        mark_done 11 "combinatorial"
-        echo "[11/12] combinatorial - checkpointed as skipped (disabled)"
+        mark_done 11
+        echo "[11/12] sweep - checkpointed as skipped (disabled)"
     fi
 else
-    echo "[11/12] combinatorial — SKIPPED (outside active range)"
+    echo "[11/12] sweep — SKIPPED (outside active range)"
 fi
 
 # Stage 12 — Compare (optional)
@@ -879,11 +856,11 @@ if should_run 12; then
         python3 "$ROOT_DIR/scripts/cardiac/compare.py" --run-id "$RUN_ID" --config "$COMPARISON_CONFIG" $VERBOSE_FLAG
         python3 "$ROOT_DIR/scripts/studies/run_grouping_analysis.py" --run-id "$RUN_ID" "${DATASET_ARGS[@]}"
         python3 "$ROOT_DIR/scripts/studies/generate_dissertation_plots.py" --run-id "$RUN_ID" --config "$COMPARISON_CONFIG"
-        mark_done 12 "compare"
+        mark_done 12
         echo ""
     else
         echo "[12/12] Comparison SKIPPED (disabled)"
-        mark_done 12 "compare"
+        mark_done 12
         echo "[12/12] compare - checkpointed as skipped (disabled)"
     fi
 else

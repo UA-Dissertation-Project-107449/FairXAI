@@ -20,30 +20,11 @@ PRETRAINED_ARGS=()
 FIGURE_ARGS=()
 GROUP_VIEW_ARGS=()
 
-declare -A STAGE_NUM=(
-    [load]=1 [profile]=2 [profiling]=2 [recommend]=3 [recommendations]=3
-    [triage]=3 [preprocess]=4 [preprocessing]=4 [train]=7 [baseline]=7 [training]=7
-    [assess]=8 [assessment]=8 [fairness]=8 [compare]=9 [comparison]=9
-    [explain]=10 [explainability]=10 [xai]=10
-    [mitigate]=11 [mitigation]=11
-)
-declare -A STAGE_NAME=([1]=load [2]=profile [3]=recommend [4]=preprocess [7]=train [8]=assess [9]=compare [10]=explain [11]=mitigate)
-
-resolve_stage() {
-    local input="${1,,}"
-    if [[ "$input" =~ ^[0-9]+$ && -n "${STAGE_NAME[$input]+x}" ]]; then
-        echo "$input"; return
-    fi
-    local stripped="${input#phase}"
-    stripped="${stripped#stage}"
-    stripped="${stripped#step}"
-    if [[ "$stripped" =~ ^[0-9]+$ && -n "${STAGE_NAME[$stripped]+x}" ]]; then
-        echo "$stripped"; return
-    fi
-    if [[ -n "${STAGE_NUM[$input]+x}" ]]; then
-        echo "${STAGE_NUM[$input]}"; return
-    fi
-    echo "ERROR: Unknown stage '$1'. Valid: load(1) profile(2) recommend(3) preprocess(4) train(7) assess(8) compare(9) explain(10) mitigate(11)" >&2
+# Stage mapping — loaded from the Python catalog, never declared here.
+# shellcheck source=../common/stage_registry.sh
+source "$ROOT_DIR/scripts/common/stage_registry.sh"
+load_stage_registry dermatology "$ROOT_DIR" "$PYTHON" || {
+    echo "ERROR: Could not load the dermatology stage registry." >&2
     exit 1
 }
 
@@ -114,8 +95,8 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-START_NUM=1
-END_NUM=11
+START_NUM=$STAGE_FIRST
+END_NUM=$STAGE_LAST
 [[ -n "$RESUME_FROM" ]] && START_NUM=$(resolve_stage "$RESUME_FROM")
 [[ -n "$GO_UNTIL" ]] && END_NUM=$(resolve_stage "$GO_UNTIL")
 if (( START_NUM > END_NUM )); then
@@ -156,8 +137,10 @@ ln -sfn "runs/$RUN_ID" "$BASE_RESULTS/latest_run" 2>/dev/null || true
 echo "$RUN_ID" > "$BASE_RESULTS/latest_run.txt"
 
 mark_done() {
+    # Always writes the canonical marker name from the registry, so markers
+    # stay interchangeable with the ones the Python helpers write.
     local num=$1
-    local name=$2
+    local name="${STAGE_NAME[$num]}"
     mkdir -p "$CHECKPOINT_DIR"
     "$PYTHON" - "$CHECKPOINT_DIR/${num}_${name}.done" "$num" "$name" <<'PY'
 import json, os, socket, sys
@@ -204,7 +187,7 @@ echo ""
 if should_run 1; then
     echo "[PHASE 1] Loading dermatology datasets"
     "$PYTHON" "$ROOT_DIR/scripts/dermatology/load_data.py" "${DATASET_ARGS[@]}" $VERBOSE_FLAG
-    mark_done 1 load
+    mark_done 1
 else
     echo "[1] load - SKIPPED"
 fi
@@ -212,7 +195,7 @@ fi
 if should_run 2; then
     echo "[PHASE 2] Profiling dermatology datasets"
     "$PYTHON" "$ROOT_DIR/scripts/dermatology/profile_data.py" "${DATASET_ARGS[@]}" --run-id "$RUN_ID" $VERBOSE_FLAG
-    mark_done 2 profile
+    mark_done 2
 else
     echo "[2] profile - SKIPPED"
 fi
@@ -224,7 +207,7 @@ if should_run 3; then
     else
         echo "[3] recommend - SKIPPED (disabled)"
     fi
-    mark_done 3 recommend
+    mark_done 3
 else
     echo "[3] recommend - SKIPPED"
 fi
@@ -232,7 +215,7 @@ fi
 if should_run 4; then
     echo "[PHASE 4] Preprocessing dermatology datasets"
     "$PYTHON" "$ROOT_DIR/scripts/dermatology/preprocess.py" "${DATASET_ARGS[@]}" "${FIGURE_ARGS[@]}" $VERBOSE_FLAG
-    mark_done 4 preprocess
+    mark_done 4
 else
     echo "[4] preprocess - SKIPPED"
 fi
@@ -240,7 +223,7 @@ fi
 if should_run 7; then
     echo "[PHASE 7] Training image baseline"
     "$PYTHON" "$ROOT_DIR/scripts/dermatology/train_baseline.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" "${DEVICE_ARGS[@]}" "${EPOCH_ARGS[@]}" "${BATCH_ARGS[@]}" "${PRETRAINED_ARGS[@]}" $VERBOSE_FLAG
-    mark_done 7 train
+    mark_done 7
 else
     echo "[7] train - SKIPPED"
 fi
@@ -248,7 +231,7 @@ fi
 if should_run 8; then
     echo "[PHASE 8] Assessing post-prediction fairness"
     "$PYTHON" "$ROOT_DIR/scripts/dermatology/assess_predictions.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" "${GROUP_VIEW_ARGS[@]}" "${FIGURE_ARGS[@]}" $VERBOSE_FLAG
-    mark_done 8 assess
+    mark_done 8
 else
     echo "[8] assess - SKIPPED"
 fi
@@ -256,7 +239,7 @@ fi
 if should_run 9; then
     echo "[PHASE 9] Comparing baseline models"
     "$PYTHON" "$ROOT_DIR/scripts/dermatology/compare.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" "${FIGURE_ARGS[@]}" $VERBOSE_FLAG
-    mark_done 9 compare
+    mark_done 9
 else
     echo "[9] compare - SKIPPED"
 fi
@@ -264,7 +247,7 @@ fi
 if should_run 10; then
     echo "[PHASE 10] Explaining baseline models (XAI)"
     "$PYTHON" "$ROOT_DIR/scripts/dermatology/explain.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $VERBOSE_FLAG
-    mark_done 10 explain
+    mark_done 10
 else
     echo "[10] explain - SKIPPED"
 fi
@@ -272,7 +255,7 @@ fi
 if should_run 11; then
     echo "[PHASE 11] Post-processing fairness mitigation"
     "$PYTHON" "$ROOT_DIR/scripts/dermatology/mitigate.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" "${FIGURE_ARGS[@]}" $VERBOSE_FLAG
-    mark_done 11 mitigate
+    mark_done 11
 else
     echo "[11] mitigate - SKIPPED"
 fi

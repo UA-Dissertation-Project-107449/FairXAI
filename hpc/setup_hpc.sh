@@ -88,7 +88,8 @@ fi
 # --- smoke test -------------------------------------------------------------
 echo "==> Smoke test"
 python3 -c "from fairxai.profiling import characterize_dataset; print('import OK')"
-fairxai-characterize --help >/dev/null && echo "fairxai-characterize CLI OK"
+fairxai characterize --help >/dev/null && echo "fairxai characterize CLI OK"
+fairxai triage --help >/dev/null && echo "fairxai triage CLI OK"
 
 # --- summary for WebApp .env ------------------------------------------------
 cat <<EOF

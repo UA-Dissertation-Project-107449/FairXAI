@@ -62,26 +62,19 @@ case "$ANALYSIS_TYPE" in
         "${cmd[@]}" >"$RESULT_FILE"
         ;;
     triage)
-        # Triage = characterize with --include-triage; emit only triage_report.
-        TMP_DIR="$(mktemp -d)"
-        trap 'rm -rf "$TMP_DIR"' EXIT
         DATASETS_DIR="$(dirname "$DATASET_PATH")"
         FILENAME="$(basename "$DATASET_PATH")"
-        STEM="${FILENAME%.*}"
-        cmd=(fairxai-characterize
+        cmd=(fairxai triage
             --filename "$FILENAME"
             --datasets-dir "$DATASETS_DIR"
-            --output-dir "$TMP_DIR"
-            --target-column "$TARGET_COLUMN"
-            --include-triage)
+            --target-column "$TARGET_COLUMN")
         [ -n "${INDEX_COLUMN:-}" ] && cmd+=(--index-column "$INDEX_COLUMN")
         if [ -n "${SENSITIVE_COLUMNS:-}" ]; then
             # shellcheck disable=SC2206
             sensitive=($SENSITIVE_COLUMNS)
             cmd+=(--sensitive-columns "${sensitive[@]}")
         fi
-        "${cmd[@]}"
-        python3 -c "import json,sys; d=json.load(open('$TMP_DIR/$STEM.json')); r=d.get('triage_report'); sys.exit('no triage_report produced') if not r else json.dump(r, open('$RESULT_FILE','w'))"
+        "${cmd[@]}" >"$RESULT_FILE"
         ;;
     *)
         echo "Unknown ANALYSIS_TYPE: $ANALYSIS_TYPE" >&2
