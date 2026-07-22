@@ -43,6 +43,6 @@ design rationale, see [../architecture/decisions.md](../architecture/decisions.m
 |-----------|--------|
 | Cardiac bash pipeline | Active |
 | Cardiac Prefect flow | Active local/orchestration alternative |
-| WebApp characterization CLI | Active via `fairxai-characterize` |
+| WebApp characterization CLI | Active via `fairxai characterize` / `fairxai triage`; `fairxai-characterize` is a deprecated shim awaiting WebApp migration |
 | WebApp JSON adapters | Active in `fairxai.integration` |
 | HPC deployment | Configured for manual environment setup; run validation remains environment-dependent |
