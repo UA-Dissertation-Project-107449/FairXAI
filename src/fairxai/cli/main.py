@@ -28,9 +28,23 @@ def _build_parser() -> argparse.ArgumentParser:
     char.add_argument("--index-column", default=None)
     char.add_argument("--ebm-model-path", default=None)
     char.add_argument("--print-json", action="store_true")
-    char.add_argument("--include-triage", action="store_true")
-    char.add_argument("--sensitive-columns", nargs="*", default=None)
-    char.add_argument("--triage-project-root", default=None)
+
+    # --- triage --------------------------------------------------------------
+    triage = sub.add_parser(
+        "triage",
+        help="Generate a fairness triage report",
+        description=(
+            "Emit the fairness triage report as JSON on stdout. Nothing is written "
+            "to disk. Text columns are rejected as target or sensitive columns; "
+            "string identifiers remain valid index columns."
+        ),
+    )
+    triage.add_argument("--filename", required=True)
+    triage.add_argument("--target-column", required=True)
+    triage.add_argument("--datasets-dir", default=None)
+    triage.add_argument("--index-column", default=None)
+    triage.add_argument("--sensitive-columns", nargs="*", default=None)
+    triage.add_argument("--triage-project-root", default=None)
 
     # --- binning ------------------------------------------------------------
     binn = sub.add_parser("binning", help="Attribute binning subgroup analysis")
@@ -103,12 +117,24 @@ def main(argv: list[str] | None = None) -> int:
                 target_column=args.target_column,
                 index_column=args.index_column,
                 ebm_model_path=args.ebm_model_path,
-                include_triage=args.include_triage,
-                sensitive_columns=args.sensitive_columns,
-                triage_project_root=args.triage_project_root,
             )
             if args.print_json:
                 print(json.dumps(result, indent=2))
+
+        elif args.command == "triage":
+            from fairxai.integration.triage import triage_dataset
+
+            result = triage_dataset(
+                filename=args.filename,
+                target_column=args.target_column,
+                datasets_dir=args.datasets_dir,
+                index_column=args.index_column,
+                sensitive_columns=args.sensitive_columns,
+                project_root=args.triage_project_root,
+            )
+            # The report is this subcommand's only output, so it is always
+            # printed — matching characterize's --print-json formatting.
+            print(json.dumps(result, indent=2))
 
         elif args.command == "binning":
             from fairxai.integration.binning import run_binning

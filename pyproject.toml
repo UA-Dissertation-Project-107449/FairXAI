@@ -94,8 +94,9 @@ full = [
 ]
 
 [project.scripts]
-fairxai-characterize = "fairxai.cli.characterize:main"  # kept — backwards compat
 fairxai              = "fairxai.cli.main:main"           # unified subcommand CLI
+# DEPRECATED shim — remove once WebApp and the HPC scripts use `fairxai characterize`.
+fairxai-characterize = "fairxai.cli.characterize:main"
 
 [project.urls]
 Repository = "https://github.com/yourusername/fairxai"

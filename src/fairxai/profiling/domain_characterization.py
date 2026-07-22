@@ -17,6 +17,10 @@ from sklearn.decomposition import PCA as SklearnPCA
 
 from .complexity import compute_complexity_metrics
 
+# Semantic type reserved for free text.  Columns of this type are excluded from
+# target and sensitive-attribute roles across the CLI and the WebApp contract.
+TEXT_SEMANTIC_TYPE = "text"
+
 EBM_FEATURE_ORDER = [
     "F2Imbalance",
     "F3Imbalance",
@@ -33,7 +37,7 @@ EBM_FEATURE_ORDER = [
 ]
 
 
-def _resolve_input_csv(filename: str, datasets_dir: str | Path | None = None) -> Path:
+def resolve_input_csv(filename: str, datasets_dir: str | Path | None = None) -> Path:
     input_path = Path(filename)
     if input_path.is_absolute() and input_path.exists():
         return input_path
@@ -153,7 +157,7 @@ def _infer_column_type(series: pd.Series) -> str:
     return "text"
 
 
-def _semantic_type(column_name: str, series: pd.Series, row_count: int, n_unique: int) -> str:
+def infer_semantic_type(column_name: str, series: pd.Series, row_count: int, n_unique: int) -> str:
     non_null = series.dropna()
     if non_null.empty:
         return "unknown"
@@ -173,7 +177,26 @@ def _semantic_type(column_name: str, series: pd.Series, row_count: int, n_unique
         return "continuous"
     if n_unique <= 20:
         return "categorical"
-    return "text"
+    return TEXT_SEMANTIC_TYPE
+
+
+def column_semantic_type(column_name: str, series: pd.Series) -> str:
+    """Infer a column's semantic type from the series alone.
+
+    Convenience wrapper over :func:`infer_semantic_type` for callers that only
+    hold the column and do not already track row/unique counts.
+    """
+    return infer_semantic_type(column_name, series, len(series), int(series.nunique()))
+
+
+def is_analysis_role_eligible(column_name: str, series: pd.Series) -> bool:
+    """Return whether a column may serve as a target or sensitive attribute.
+
+    Free-text columns carry no usable group structure, so they are excluded from
+    both roles.  Index/identifier selection is deliberately *not* covered here —
+    all-unique string identifiers remain valid index columns.
+    """
+    return column_semantic_type(column_name, series) != TEXT_SEMANTIC_TYPE
 
 
 def _recommended_bin_counts(n_unique: int, semantic_type: str) -> list[int]:
@@ -266,7 +289,7 @@ def _build_column_profiles(df: pd.DataFrame) -> list[dict[str, Any]]:
         n_unique = int(series.nunique(dropna=True))
         missing_count = int(series.isna().sum())
         missing_pct = round(float(missing_count / row_count * 100), 2) if row_count else 0.0
-        semantic_type = _semantic_type(str(column_name), series, row_count, n_unique)
+        semantic_type = infer_semantic_type(str(column_name), series, row_count, n_unique)
         is_numeric = pd.api.types.is_numeric_dtype(series)
         binnable, binning_guidance, binning_note = _binning_guidance(
             semantic_type, n_unique, missing_pct, is_numeric
@@ -423,7 +446,7 @@ def _build_feature_distributions(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
         n_unique = int(series.nunique(dropna=True))
         missing_count = int(series.isna().sum())
         missing_pct = round(float(missing_count / row_count * 100), 2) if row_count else 0.0
-        semantic_type = _semantic_type(str(column_name), series, row_count, n_unique)
+        semantic_type = infer_semantic_type(str(column_name), series, row_count, n_unique)
         base: dict[str, Any] = {
             "kind": "other",
             "missing_count": missing_count,
@@ -451,7 +474,7 @@ def profile_dataset(
     datasets_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Return lightweight, flat dataset metadata for upload-time configuration."""
-    csv_path = _resolve_input_csv(filename=filename, datasets_dir=datasets_dir)
+    csv_path = resolve_input_csv(filename=filename, datasets_dir=datasets_dir)
     df = pd.read_csv(csv_path)
     if df.empty:
         raise ValueError(f"Dataset is empty: {csv_path}")
@@ -604,7 +627,7 @@ def _resolve_project_root(project_root: str | Path | None = None) -> Path | None
     return None
 
 
-def _build_triage_report(
+def build_triage_report(
     csv_path: Path,
     dataset_name: str,
     target_column: str,
@@ -686,9 +709,6 @@ def characterize_dataset(
     target_column: str | None = None,
     index_column: str | None = None,
     ebm_model_path: str | Path | None = None,
-    include_triage: bool = False,
-    sensitive_columns: list[str] | None = None,
-    triage_project_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Characterize one dataset and write WebApp-compatible JSON output.
 
@@ -707,7 +727,7 @@ def characterize_dataset(
     ebm_model_path : str | Path | None
         Optional EBM model path override.
     """
-    csv_path = _resolve_input_csv(filename=filename, datasets_dir=datasets_dir)
+    csv_path = resolve_input_csv(filename=filename, datasets_dir=datasets_dir)
     file_id = csv_path.stem
 
     df = pd.read_csv(csv_path)
@@ -808,23 +828,6 @@ def characterize_dataset(
         "class_balance_delta": class_balance_delta,
         "feature_type_summary": feature_type_summary,
     }
-
-    result["triage_status"] = "not_requested"
-    if include_triage:
-        try:
-            triage_report, _triage_feature_summary = _build_triage_report(
-                csv_path=csv_path,
-                dataset_name=file_id,
-                target_column=target,
-                index_column=index_column,
-                sensitive_columns=sensitive_columns,
-                project_root=triage_project_root,
-            )
-            result["triage_report"] = triage_report
-            result["triage_status"] = "success"
-        except Exception as exc:  # pragma: no cover - keep characterize resilient
-            result["triage_error"] = str(exc)
-            result["triage_status"] = "failed"
 
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

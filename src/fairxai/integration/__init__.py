@@ -4,5 +4,12 @@ from fairxai.integration.binning import run_binning
 from fairxai.integration.characterize import characterize_dataset
 from fairxai.integration.clustering import run_clustering
 from fairxai.integration.profile import profile_dataset
+from fairxai.integration.triage import triage_dataset
 
-__all__ = ["characterize_dataset", "profile_dataset", "run_binning", "run_clustering"]
+__all__ = [
+    "characterize_dataset",
+    "profile_dataset",
+    "run_binning",
+    "run_clustering",
+    "triage_dataset",
+]
