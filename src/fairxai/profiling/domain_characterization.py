@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA as SklearnPCA
+from sklearn.preprocessing import StandardScaler
 
 from .complexity import compute_complexity_metrics
 
@@ -550,21 +551,35 @@ def _clip_metrics(metrics: dict[str, Any]) -> None:
             metrics[name] = float(np.clip(v, 0.0, 1.0))
 
 
-def _compute_pca2d(X: pd.DataFrame, y: pd.Series) -> list[list[float | int]]:
+def _compute_pca2d(X: pd.DataFrame, y: pd.Series) -> tuple[list[list[float | int]], float | None]:
     """Reduce dataset to 2D via PCA for the frontend scatter plot.
 
-    Returns a list of [x, y_coord, classLabel] triples.
+    Features are standardised first. Without that, PCA maximises *raw* variance,
+    so the projection is decided by whichever column happens to be recorded on
+    the widest numeric scale — on Cleveland, PC1 loads 0.998 on cholesterol and
+    the scatter is a cholesterol axis wearing a PCA label. It also puts this
+    projection in a different space from every consumer of it: the clustering
+    engine, the nearest-centroid assignment, and the fallback branch of the
+    WebApp clustering adapter all standardise before they do anything.
+
+    Returns the ``[x, y_coord, classLabel]`` triples and the fraction of variance
+    the two components explain, or ``None`` when there is no projection. The
+    caller should publish that fraction: it drops from an apparent 0.897 to a
+    real 0.383 on Cleveland, and the plot is only honest when read next to it.
     """
     X_numeric = X.select_dtypes(include=[np.number]).fillna(0)
     if X_numeric.shape[1] < 2:
-        return []
+        return [], None
     n_components = min(2, X_numeric.shape[0], X_numeric.shape[1])
+    X_scaled = StandardScaler().fit_transform(X_numeric.values)
     pca = SklearnPCA(n_components=n_components, random_state=42)
-    coords = pca.fit_transform(X_numeric.values)
+    coords = pca.fit_transform(X_scaled)
+    explained = float(pca.explained_variance_ratio_.sum())
     # Pad to 2 columns if dataset has only 1 numeric feature
     if coords.shape[1] < 2:
         coords = np.hstack([coords, np.zeros((coords.shape[0], 1))])
-    return [[float(row[0]), float(row[1]), int(label)] for row, label in zip(coords, y.values)]
+    triples = [[float(row[0]), float(row[1]), int(label)] for row, label in zip(coords, y.values)]
+    return triples, explained
 
 
 def _compute_feature_type_summary(X: pd.DataFrame) -> dict[str, int]:
@@ -761,7 +776,7 @@ def characterize_dataset(
         )
     )
 
-    pca2d = _compute_pca2d(X, y)
+    pca2d, pca2d_explained_variance = _compute_pca2d(X, y)
 
     missing_percentages = {
         str(column_name): float(np.round(X[column_name].isna().mean() * 100, 2))
@@ -805,7 +820,7 @@ def characterize_dataset(
     feature_columns = [str(col) for col in X.columns]
 
     result: dict[str, Any] = {
-        "schema_version": "1.2",
+        "schema_version": "1.3",
         "jobId": file_id,
         "columns": columns,
         "feature_columns": feature_columns,
@@ -816,6 +831,10 @@ def characterize_dataset(
         "feature_distributions": _build_feature_distributions(df),
         "metrics": metrics,
         "pca2d": pca2d,
+        # Two components rarely carry most of a clinical table. Published so the
+        # scatter can say how much of the data it is actually showing.
+        "pca2d_explained_variance": pca2d_explained_variance,
+        "pca2d_feature_columns": [str(col) for col in X.select_dtypes(include=[np.number]).columns],
         "missing_percentages": missing_percentages,
         "column_n_unique": column_n_unique,
         "top_missing_column": top_missing_col,

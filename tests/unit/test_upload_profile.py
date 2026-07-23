@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import numpy as np
 import pandas as pd
 
 from fairxai.cli.main import main
@@ -246,3 +247,43 @@ def test_characterize_dataset_handles_missing_values(tmp_path, monkeypatch):
     # Missingness reported honestly from the raw data, not the imputed copy.
     assert result["top_missing_column"] == "f0"
     assert result["top_missing_pct"] == 25.0
+
+
+# --- 2-D projection ----------------------------------------------------------
+
+
+def test_pca2d_standardises_so_the_widest_column_cannot_own_an_axis():
+    # cholesterol_like is recorded on a scale ~100x the others. Unstandardised,
+    # PCA maximises raw variance and PC1 becomes that column alone — the plot
+    # stops being a view of the dataset and becomes one feature's axis.
+    rng = np.random.default_rng(0)
+    n = 200
+    X = pd.DataFrame(
+        {
+            "cholesterol_like": rng.normal(240, 52, n),
+            "feat_a": rng.normal(0, 1, n),
+            "feat_b": rng.normal(0, 1, n),
+            "feat_c": rng.normal(0, 1, n),
+        }
+    )
+    y = pd.Series(rng.integers(0, 2, n))
+
+    coords, explained = dc._compute_pca2d(X, y)
+
+    assert len(coords) == n
+    assert explained is not None
+    # Four standardised features, two components: nowhere near everything.
+    assert 0.2 < explained < 0.9
+
+    # The projection must not be a rescaling of the wide column.
+    xs = np.array([point[0] for point in coords])
+    correlation = abs(np.corrcoef(xs, X["cholesterol_like"].to_numpy())[0, 1])
+    assert correlation < 0.95
+
+
+def test_pca2d_returns_no_projection_for_a_single_numeric_column():
+    X = pd.DataFrame({"only": [1.0, 2.0, 3.0], "name": ["a", "b", "c"]})
+    coords, explained = dc._compute_pca2d(X, pd.Series([0, 1, 0]))
+
+    assert coords == []
+    assert explained is None
