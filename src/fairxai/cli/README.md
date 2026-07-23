@@ -10,8 +10,7 @@ loading, run ID handling, latest-run pointers, log setup, and run history.
 | `runner_base.py` | Project root, pipeline config, phase/study logging setup |
 | `runner_utils.py` | Run ID, run roots, latest pointers, run history, archive helpers |
 | `memory_utils.py` | Memory-aware worker/job helpers for larger studies |
-| `characterize.py` | WebApp-compatible characterization CLI |
-| `main.py` | Unified console-script entry point |
+| `main.py` | Unified `fairxai <subcommand>` console-script entry point |
 | `__init__.py` | Public exports |
 
 ## Public API
@@ -47,12 +46,28 @@ run_id = resolve_run_id()
 run_root = get_run_root(Path("output/cardiac"), run_id)
 ```
 
+Characterization and triage are separate subcommands. `characterize` writes
+`<output-dir>/<jobId>.json`; `triage` prints the report to stdout and writes
+nothing.
+
 ```bash
-fairxai-characterize \
+fairxai characterize \
   --filename cleveland_standardized.csv \
   --datasets-dir data/raw/cardiac \
-  --output-dir /tmp/fairxai_characterize
+  --output-dir /tmp/fairxai_characterize \
+  --target-column heart_disease
+
+fairxai triage \
+  --filename cleveland_standardized.csv \
+  --datasets-dir data/raw/cardiac \
+  --target-column heart_disease \
+  --sensitive-columns sex
 ```
+
+`triage` rejects free-text columns as targets or sensitive attributes
+(`is_analysis_role_eligible()` in `profiling/domain_characterization.py` is the
+single source of truth); all-unique string identifiers stay valid as index
+columns.
 
 ## Related
 

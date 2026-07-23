@@ -78,7 +78,9 @@ jobs:
         run: python3 -m pip install pytest matplotlib seaborn jenkspy prefect tabulate
 
       - name: CLI help smoke check
-        run: python3 -m fairxai.cli.characterize --help
+        run: |
+          python3 -m fairxai.cli.main characterize --help
+          python3 -m fairxai.cli.main triage --help
 
       - name: Unit tests (skip viz smoke in PR quick CI)
         run: pytest tests/unit/ -q -m "not local_data" --ignore=tests/unit/test_viz_smoke.py

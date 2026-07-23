@@ -65,16 +65,22 @@ Both orchestrators support `--datasets`, `--model-types`, `--resume-from`,
 | 2 | `profile` | Build profiling and complexity artifacts |
 | 3 | `recommend` | Generate pre-model fairness triage |
 | 4 | `preprocess` | Split, scale, bin, and prepare fairness profiles |
-| 5 | `hpo_study` | Run hyperparameter optimization |
-| 6 | `feature_selection_study` | Run sensitive-attribute ablation study |
+| 5 | `tune` | Run hyperparameter optimization |
+| 6 | `select_features` | Run sensitive-attribute ablation study |
 | 7 | `train` | Train baseline models |
 | 8 | `assess` | Assess post-prediction fairness |
-| 9 | `attribute_binning` | Analyze age-binning strategies |
-| 10 | `mitigation` | Compare mitigation techniques |
-| 11 | `combinatorial` | Run full experiment matrix |
+| 9 | `bin_attributes` | Analyze age-binning strategies |
+| 10 | `mitigate` | Compare mitigation techniques |
+| 11 | `sweep` | Run full experiment matrix |
 | 12 | `compare` | Build comparison outputs, grouping evidence, and dissertation figures |
 
-`src/fairxai/pipeline/stages.py` is the source of truth for names, aliases, and checkpoint markers.
+`src/fairxai/pipeline/stages.py` is the source of truth for names, aliases, and
+checkpoint markers, for every domain; the bash pipelines import it through
+`scripts/common/stage_registry.sh` rather than redeclaring stages. The dermatology
+subset omits stages 5–6 and keeps the gap. Pre-rename names (`hpo_study`,
+`feature_selection_study`, `attribute_binning`, `mitigation`, `combinatorial`)
+still resolve as aliases and their old `.done` markers are still accepted on
+resume. See [docs/architecture/pipeline-flow-control.md](docs/architecture/pipeline-flow-control.md).
 
 ## Repository Layout
 

@@ -3,9 +3,15 @@
 # FairXAI HPC bootstrap / update script for the Pleiades cluster (IEETA).
 #
 # Usage (on the HPC login node, university network only):
-#   bash setup_hpc.sh              # full bootstrap: clone/pull + venv + install + dirs
-#   bash setup_hpc.sh --update     # fast path: git pull + reinstall package only
-#   bash setup_hpc.sh --with-cuml  # also install cuml-cu12 (GPU accel; off by default)
+#   bash setup_hpc.sh                    # full bootstrap: clone/pull + venv + install + dirs
+#   bash setup_hpc.sh --update           # fast path: git pull + reinstall package only
+#   bash setup_hpc.sh --with-cuml        # also install cuml-cu12 (GPU accel; off by default)
+#   bash setup_hpc.sh --branch <name>    # clone or switch to that branch (env: FAIRXAI_BRANCH)
+#
+# Without --branch the clone lands on the remote's default branch and an
+# existing checkout is left on whatever it is already on. With --branch, the
+# clone checks that branch out directly and an existing checkout is switched to
+# it before pulling, so `--update` keeps following it on later runs.
 #
 # Idempotent: safe to re-run. Echoes the resolved paths needed for the
 # WebApp .env (HPC_PROJ_ROOT / HPC_DATASETS_DIR / HPC_RESULTS_DIR /
@@ -16,22 +22,31 @@ set -euo pipefail
 PROJ_ROOT="${HPC_PROJ_ROOT:-$HOME/storage}"   # symlink -> /beegfs/.../proj-datalenzai
 FAIRXAI_REPO="${FAIRXAI_REPO:-}"               # git URL; required on first bootstrap
 FAIRXAI_HOME="${FAIRXAI_HOME:-$PROJ_ROOT/FairXAI}"
+FAIRXAI_BRANCH="${FAIRXAI_BRANCH:-}"           # empty = remote default / leave as-is
 HPC_MODULES="${HPC_MODULES:-python/3.11.7 cuda/12.4.0}"
 CUML_VERSION="${CUML_VERSION:-25.2.1}"
 
 UPDATE_ONLY=0
 WITH_CUML=0
-for arg in "$@"; do
-    case "$arg" in
+while [ "$#" -gt 0 ]; do
+    case "$1" in
         --update) UPDATE_ONLY=1 ;;
         --with-cuml) WITH_CUML=1 ;;
+        --branch)
+            [ "$#" -ge 2 ] || { echo "ERROR: --branch needs a branch name." >&2; exit 2; }
+            FAIRXAI_BRANCH="$2"; shift ;;
+        --branch=*) FAIRXAI_BRANCH="${1#--branch=}" ;;
         -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-        *) echo "Unknown arg: $arg" >&2; exit 2 ;;
+        *) echo "Unknown arg: $1" >&2; exit 2 ;;
     esac
+    shift
 done
 
 echo "==> PROJ_ROOT:    $PROJ_ROOT"
 echo "==> FAIRXAI_HOME: $FAIRXAI_HOME"
+if [ -n "$FAIRXAI_BRANCH" ]; then
+    echo "==> BRANCH:       $FAIRXAI_BRANCH"
+fi
 
 # --- load modules -----------------------------------------------------------
 if command -v module >/dev/null 2>&1; then
@@ -44,8 +59,29 @@ fi
 
 # --- clone or pull ----------------------------------------------------------
 if [ -d "$FAIRXAI_HOME/.git" ]; then
-    echo "==> Existing checkout — git pull"
-    git -C "$FAIRXAI_HOME" pull --ff-only
+    # Switch first, then pull, so --update follows the requested branch rather
+    # than whatever the checkout happened to be left on.
+    if [ -n "$FAIRXAI_BRANCH" ]; then
+        current="$(git -C "$FAIRXAI_HOME" rev-parse --abbrev-ref HEAD)"
+        if [ "$current" != "$FAIRXAI_BRANCH" ]; then
+            echo "==> Switching branch: $current -> $FAIRXAI_BRANCH"
+            git -C "$FAIRXAI_HOME" fetch origin "$FAIRXAI_BRANCH"
+            git -C "$FAIRXAI_HOME" checkout "$FAIRXAI_BRANCH"
+        fi
+        # Name the remote branch explicitly. A local branch can be tracking
+        # something else entirely — a bare `git pull` would then quietly update
+        # from whatever that is, not from the branch that was asked for.
+        echo "==> Existing checkout — git pull origin $FAIRXAI_BRANCH"
+        # --ff-only refuses after a rebase or force-push upstream. That is on
+        # purpose: recover with `git reset --hard origin/<branch>` once you have
+        # looked at what diverged, rather than having this script discard work.
+        git -C "$FAIRXAI_HOME" pull --ff-only origin "$FAIRXAI_BRANCH"
+        git -C "$FAIRXAI_HOME" branch --set-upstream-to="origin/$FAIRXAI_BRANCH" \
+            "$FAIRXAI_BRANCH" >/dev/null
+    else
+        echo "==> Existing checkout — git pull"
+        git -C "$FAIRXAI_HOME" pull --ff-only
+    fi
 else
     if [ -z "$FAIRXAI_REPO" ]; then
         echo "ERROR: $FAIRXAI_HOME is not a git checkout and FAIRXAI_REPO is unset." >&2
@@ -54,7 +90,13 @@ else
     fi
     echo "==> Cloning $FAIRXAI_REPO -> $FAIRXAI_HOME"
     mkdir -p "$(dirname "$FAIRXAI_HOME")"
-    git clone "$FAIRXAI_REPO" "$FAIRXAI_HOME"
+    if [ -n "$FAIRXAI_BRANCH" ]; then
+        # Not --single-branch: the other branches cost nothing to fetch and
+        # keep a later `--branch <other>` from needing a fresh clone.
+        git clone --branch "$FAIRXAI_BRANCH" "$FAIRXAI_REPO" "$FAIRXAI_HOME"
+    else
+        git clone "$FAIRXAI_REPO" "$FAIRXAI_HOME"
+    fi
 fi
 
 cd "$FAIRXAI_HOME"
@@ -88,12 +130,15 @@ fi
 # --- smoke test -------------------------------------------------------------
 echo "==> Smoke test"
 python3 -c "from fairxai.profiling import characterize_dataset; print('import OK')"
-fairxai-characterize --help >/dev/null && echo "fairxai-characterize CLI OK"
+fairxai characterize --help >/dev/null && echo "fairxai characterize CLI OK"
+fairxai triage --help >/dev/null && echo "fairxai triage CLI OK"
 
 # --- summary for WebApp .env ------------------------------------------------
 cat <<EOF
 
 ================ FairXAI HPC ready ================
+Checked out: $(git -C "$FAIRXAI_HOME" rev-parse --abbrev-ref HEAD) @ $(git -C "$FAIRXAI_HOME" rev-parse --short HEAD)
+
 Fill these into the WebApp .env (cluster_gateway):
 
   HPC_PROJ_ROOT=$PROJ_ROOT

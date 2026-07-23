@@ -19,8 +19,11 @@
 #          characterize.slurm
 #
 # Required env: DATASET_PATH, RESULTS_DIR
-# Optional env: FAIRXAI_VENV, HPC_MODULES, TARGET_COLUMN, INDEX_COLUMN,
-#               INCLUDE_TRIAGE (0/1), SENSITIVE_COLUMNS (space-separated)
+# Optional env: FAIRXAI_VENV, HPC_MODULES, TARGET_COLUMN, INDEX_COLUMN
+#
+# Characterization only. Triage is a separate job — see analysis.slurm
+# (ANALYSIS_TYPE=triage), submitted independently by the WebApp gateway,
+# which owns triage_status.
 #
 # Output: <RESULTS_DIR>/<stem-of-DATASET_PATH>.json
 set -euo pipefail
@@ -46,21 +49,13 @@ mkdir -p "$RESULTS_DIR"
 DATASETS_DIR="$(dirname "$DATASET_PATH")"
 FILENAME="$(basename "$DATASET_PATH")"
 
-cmd=(fairxai-characterize
+cmd=(fairxai characterize
     --filename "$FILENAME"
     --datasets-dir "$DATASETS_DIR"
     --output-dir "$RESULTS_DIR")
 
 [ -n "${TARGET_COLUMN:-}" ] && cmd+=(--target-column "$TARGET_COLUMN")
 [ -n "${INDEX_COLUMN:-}" ] && cmd+=(--index-column "$INDEX_COLUMN")
-if [ "${INCLUDE_TRIAGE:-0}" = "1" ]; then
-    cmd+=(--include-triage)
-    if [ -n "${SENSITIVE_COLUMNS:-}" ]; then
-        # shellcheck disable=SC2206
-        sensitive=($SENSITIVE_COLUMNS)
-        cmd+=(--sensitive-columns "${sensitive[@]}")
-    fi
-fi
 
 echo "Running: ${cmd[*]}"
 "${cmd[@]}"

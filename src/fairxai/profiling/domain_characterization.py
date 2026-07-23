@@ -14,8 +14,13 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA as SklearnPCA
+from sklearn.preprocessing import StandardScaler
 
 from .complexity import compute_complexity_metrics
+
+# Semantic type reserved for free text.  Columns of this type are excluded from
+# target and sensitive-attribute roles across the CLI and the WebApp contract.
+TEXT_SEMANTIC_TYPE = "text"
 
 EBM_FEATURE_ORDER = [
     "F2Imbalance",
@@ -33,7 +38,7 @@ EBM_FEATURE_ORDER = [
 ]
 
 
-def _resolve_input_csv(filename: str, datasets_dir: str | Path | None = None) -> Path:
+def resolve_input_csv(filename: str, datasets_dir: str | Path | None = None) -> Path:
     input_path = Path(filename)
     if input_path.is_absolute() and input_path.exists():
         return input_path
@@ -153,7 +158,7 @@ def _infer_column_type(series: pd.Series) -> str:
     return "text"
 
 
-def _semantic_type(column_name: str, series: pd.Series, row_count: int, n_unique: int) -> str:
+def infer_semantic_type(column_name: str, series: pd.Series, row_count: int, n_unique: int) -> str:
     non_null = series.dropna()
     if non_null.empty:
         return "unknown"
@@ -173,7 +178,26 @@ def _semantic_type(column_name: str, series: pd.Series, row_count: int, n_unique
         return "continuous"
     if n_unique <= 20:
         return "categorical"
-    return "text"
+    return TEXT_SEMANTIC_TYPE
+
+
+def column_semantic_type(column_name: str, series: pd.Series) -> str:
+    """Infer a column's semantic type from the series alone.
+
+    Convenience wrapper over :func:`infer_semantic_type` for callers that only
+    hold the column and do not already track row/unique counts.
+    """
+    return infer_semantic_type(column_name, series, len(series), int(series.nunique()))
+
+
+def is_analysis_role_eligible(column_name: str, series: pd.Series) -> bool:
+    """Return whether a column may serve as a target or sensitive attribute.
+
+    Free-text columns carry no usable group structure, so they are excluded from
+    both roles.  Index/identifier selection is deliberately *not* covered here —
+    all-unique string identifiers remain valid index columns.
+    """
+    return column_semantic_type(column_name, series) != TEXT_SEMANTIC_TYPE
 
 
 def _recommended_bin_counts(n_unique: int, semantic_type: str) -> list[int]:
@@ -266,7 +290,7 @@ def _build_column_profiles(df: pd.DataFrame) -> list[dict[str, Any]]:
         n_unique = int(series.nunique(dropna=True))
         missing_count = int(series.isna().sum())
         missing_pct = round(float(missing_count / row_count * 100), 2) if row_count else 0.0
-        semantic_type = _semantic_type(str(column_name), series, row_count, n_unique)
+        semantic_type = infer_semantic_type(str(column_name), series, row_count, n_unique)
         is_numeric = pd.api.types.is_numeric_dtype(series)
         binnable, binning_guidance, binning_note = _binning_guidance(
             semantic_type, n_unique, missing_pct, is_numeric
@@ -423,7 +447,7 @@ def _build_feature_distributions(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
         n_unique = int(series.nunique(dropna=True))
         missing_count = int(series.isna().sum())
         missing_pct = round(float(missing_count / row_count * 100), 2) if row_count else 0.0
-        semantic_type = _semantic_type(str(column_name), series, row_count, n_unique)
+        semantic_type = infer_semantic_type(str(column_name), series, row_count, n_unique)
         base: dict[str, Any] = {
             "kind": "other",
             "missing_count": missing_count,
@@ -451,7 +475,7 @@ def profile_dataset(
     datasets_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Return lightweight, flat dataset metadata for upload-time configuration."""
-    csv_path = _resolve_input_csv(filename=filename, datasets_dir=datasets_dir)
+    csv_path = resolve_input_csv(filename=filename, datasets_dir=datasets_dir)
     df = pd.read_csv(csv_path)
     if df.empty:
         raise ValueError(f"Dataset is empty: {csv_path}")
@@ -527,21 +551,35 @@ def _clip_metrics(metrics: dict[str, Any]) -> None:
             metrics[name] = float(np.clip(v, 0.0, 1.0))
 
 
-def _compute_pca2d(X: pd.DataFrame, y: pd.Series) -> list[list[float | int]]:
+def _compute_pca2d(X: pd.DataFrame, y: pd.Series) -> tuple[list[list[float | int]], float | None]:
     """Reduce dataset to 2D via PCA for the frontend scatter plot.
 
-    Returns a list of [x, y_coord, classLabel] triples.
+    Features are standardised first. Without that, PCA maximises *raw* variance,
+    so the projection is decided by whichever column happens to be recorded on
+    the widest numeric scale — on Cleveland, PC1 loads 0.998 on cholesterol and
+    the scatter is a cholesterol axis wearing a PCA label. It also puts this
+    projection in a different space from every consumer of it: the clustering
+    engine, the nearest-centroid assignment, and the fallback branch of the
+    WebApp clustering adapter all standardise before they do anything.
+
+    Returns the ``[x, y_coord, classLabel]`` triples and the fraction of variance
+    the two components explain, or ``None`` when there is no projection. The
+    caller should publish that fraction: it drops from an apparent 0.897 to a
+    real 0.383 on Cleveland, and the plot is only honest when read next to it.
     """
     X_numeric = X.select_dtypes(include=[np.number]).fillna(0)
     if X_numeric.shape[1] < 2:
-        return []
+        return [], None
     n_components = min(2, X_numeric.shape[0], X_numeric.shape[1])
+    X_scaled = StandardScaler().fit_transform(X_numeric.values)
     pca = SklearnPCA(n_components=n_components, random_state=42)
-    coords = pca.fit_transform(X_numeric.values)
+    coords = pca.fit_transform(X_scaled)
+    explained = float(pca.explained_variance_ratio_.sum())
     # Pad to 2 columns if dataset has only 1 numeric feature
     if coords.shape[1] < 2:
         coords = np.hstack([coords, np.zeros((coords.shape[0], 1))])
-    return [[float(row[0]), float(row[1]), int(label)] for row, label in zip(coords, y.values)]
+    triples = [[float(row[0]), float(row[1]), int(label)] for row, label in zip(coords, y.values)]
+    return triples, explained
 
 
 def _compute_feature_type_summary(X: pd.DataFrame) -> dict[str, int]:
@@ -604,7 +642,7 @@ def _resolve_project_root(project_root: str | Path | None = None) -> Path | None
     return None
 
 
-def _build_triage_report(
+def build_triage_report(
     csv_path: Path,
     dataset_name: str,
     target_column: str,
@@ -686,9 +724,6 @@ def characterize_dataset(
     target_column: str | None = None,
     index_column: str | None = None,
     ebm_model_path: str | Path | None = None,
-    include_triage: bool = False,
-    sensitive_columns: list[str] | None = None,
-    triage_project_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Characterize one dataset and write WebApp-compatible JSON output.
 
@@ -707,7 +742,7 @@ def characterize_dataset(
     ebm_model_path : str | Path | None
         Optional EBM model path override.
     """
-    csv_path = _resolve_input_csv(filename=filename, datasets_dir=datasets_dir)
+    csv_path = resolve_input_csv(filename=filename, datasets_dir=datasets_dir)
     file_id = csv_path.stem
 
     df = pd.read_csv(csv_path)
@@ -741,7 +776,7 @@ def characterize_dataset(
         )
     )
 
-    pca2d = _compute_pca2d(X, y)
+    pca2d, pca2d_explained_variance = _compute_pca2d(X, y)
 
     missing_percentages = {
         str(column_name): float(np.round(X[column_name].isna().mean() * 100, 2))
@@ -785,7 +820,7 @@ def characterize_dataset(
     feature_columns = [str(col) for col in X.columns]
 
     result: dict[str, Any] = {
-        "schema_version": "1.2",
+        "schema_version": "1.3",
         "jobId": file_id,
         "columns": columns,
         "feature_columns": feature_columns,
@@ -796,6 +831,10 @@ def characterize_dataset(
         "feature_distributions": _build_feature_distributions(df),
         "metrics": metrics,
         "pca2d": pca2d,
+        # Two components rarely carry most of a clinical table. Published so the
+        # scatter can say how much of the data it is actually showing.
+        "pca2d_explained_variance": pca2d_explained_variance,
+        "pca2d_feature_columns": [str(col) for col in X.select_dtypes(include=[np.number]).columns],
         "missing_percentages": missing_percentages,
         "column_n_unique": column_n_unique,
         "top_missing_column": top_missing_col,
@@ -808,23 +847,6 @@ def characterize_dataset(
         "class_balance_delta": class_balance_delta,
         "feature_type_summary": feature_type_summary,
     }
-
-    result["triage_status"] = "not_requested"
-    if include_triage:
-        try:
-            triage_report, _triage_feature_summary = _build_triage_report(
-                csv_path=csv_path,
-                dataset_name=file_id,
-                target_column=target,
-                index_column=index_column,
-                sensitive_columns=sensitive_columns,
-                project_root=triage_project_root,
-            )
-            result["triage_report"] = triage_report
-            result["triage_status"] = "success"
-        except Exception as exc:  # pragma: no cover - keep characterize resilient
-            result["triage_error"] = str(exc)
-            result["triage_status"] = "failed"
 
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

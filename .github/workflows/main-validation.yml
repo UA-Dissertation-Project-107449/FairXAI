@@ -166,7 +166,7 @@ jobs:
       - name: Characterize smoke run
         run: |
           mkdir -p ci_smoke_out
-          fairxai-characterize \
+          fairxai characterize \
             --filename ci_smoke_dataset.csv \
             --output-dir ci_smoke_out \
             --target-column heart_disease \

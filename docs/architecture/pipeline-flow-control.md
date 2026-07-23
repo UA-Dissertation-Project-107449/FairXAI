@@ -6,22 +6,52 @@ Both the **Prefect flow** (`flows/cardiac_pipeline.py`) and the **bash pipeline*
 
 ## Stages
 
+Stage names, numbers, and aliases come from a single catalog,
+`src/fairxai/pipeline/stages.py`. The bash pipelines load the same catalog via
+`scripts/common/stage_registry.sh` — never redeclare stages in shell.
+
+### Cardiac (1–12)
+
 | # | Name           | Aliases                        | Description                              |
 |---|----------------|--------------------------------|------------------------------------------|
 | 1 | `load`         | —                              | Load & standardize raw datasets          |
 | 2 | `profile`      | `profiling`                    | Profile datasets (complexity + fairness) |
 | 3 | `recommend`    | `recommendations`, `triage`    | Generate fairness triage recommendations |
 | 4 | `preprocess`   | `preprocessing`                | Split, scale, generate fairness profiles |
-| 5 | `hpo_study`    | `hpo`                          | Hyperparameter optimisation study        |
-| 6 | `feature_selection_study` | `feature_selection`, `fs_study` | Feature-selection ablation study |
+| 5 | `tune`         | `hpo_study`, `hpo`             | Hyperparameter optimisation study        |
+| 6 | `select_features` | `feature_selection_study`, `feature_selection`, `fs_study` | Feature-selection ablation study |
 | 7 | `train`        | `baseline`, `training`         | Train baseline model(s)                  |
 | 8 | `assess`       | `fairness`, `assessment`       | Assess post-prediction fairness          |
-| 9 | `attribute_binning`  | `age_binning`             | Attribute binning strategy analysis      |
-| 10 | `mitigation`  | —                              | Mitigation technique comparison          |
-| 11 | `combinatorial`| `combo`                       | Combinatorial experiments                |
+| 9 | `bin_attributes` | `attribute_binning`, `age_binning` | Attribute binning strategy analysis  |
+| 10 | `mitigate`    | `mitigation`                   | Mitigation technique comparison          |
+| 11 | `sweep`       | `combinatorial`, `combo`       | Combinatorial experiments                |
 | 12| `compare`      | `comparison`                   | Experiment comparison & reporting        |
 
-Stages can be referenced by **name**, **alias**, or **number** (e.g., `profile`, `profiling`, `2`, `phase2` all resolve to stage 2).
+### Dermatology (numbering has gaps)
+
+Stages 5 and 6 do not apply to image pipelines; their numbers stay unused rather
+than being reassigned, so shared stage names carry different numbers per domain.
+
+| # | Name           | Aliases                        | Description                              |
+|---|----------------|--------------------------------|------------------------------------------|
+| 1 | `load`         | —                              | Load & standardize raw datasets          |
+| 2 | `profile`      | `profiling`                    | Profile datasets                         |
+| 3 | `recommend`    | `recommendations`, `triage`    | Generate fairness triage recommendations |
+| 4 | `preprocess`   | `preprocessing`                | Split and transform images               |
+| 7 | `train`        | `baseline`, `training`         | Train baseline model(s)                  |
+| 8 | `assess`       | `fairness`, `assessment`       | Assess post-prediction fairness          |
+| 9 | `compare`      | `comparison`                   | Experiment comparison & reporting        |
+| 10 | `explain`     | `explainability`, `xai`        | Explainability analysis                  |
+| 11 | `mitigate`    | `mitigation`                   | Mitigation technique comparison          |
+
+Stages can be referenced by **name**, **alias**, or **number** (e.g., `profile`,
+`profiling`, `2`, `phase2` all resolve to stage 2). The pre-rename names
+(`hpo_study`, `feature_selection_study`, `attribute_binning`, `mitigation`,
+`combinatorial`) remain valid aliases, and checkpoint markers written under those
+old names are still accepted on resume. Only canonical names are written.
+
+> The stage alias `triage` is unrelated to the `fairxai triage` CLI subcommand —
+> different namespaces.
 
 ### Stage Dependencies
 
@@ -30,14 +60,14 @@ load (1)
   └─ profile (2)
         ├─ recommend (3)                  [independent branch]
         └─ preprocess (4)
-              └─ hpo_study (5) and feature_selection_study (6) [optional; may run in parallel]
+              └─ tune (5) and select_features (6) [optional; may run in parallel]
                           └─ selector_contract (internal wiring helper)
                                 └─ train (7)
                                       └─ assess (8)
-                                            ├─ attribute_binning (9) [optional]
-                                            ├─ mitigation (10)       [optional]
-                                            ├─ combinatorial (11)    [optional]
-                                            └─ compare (12)          [optional; waits for active experiment stages]
+                                            ├─ bin_attributes (9) [optional]
+                                            ├─ mitigate (10)      [optional]
+                                            ├─ sweep (11)         [optional]
+                                            └─ compare (12)       [optional; waits for active experiment stages]
 ```
 
 ---
@@ -71,7 +101,7 @@ No environment-variable override layer is used for dataset/model scope.
 
 ### Selector contract wiring (studies -> execution)
 
-When stage 7 (`train`) or stage 11 (`combinatorial`) is active, the orchestrators build a run-scoped selector contract at:
+When stage 7 (`train`) or stage 11 (`sweep`) is active, the orchestrators build a run-scoped selector contract at:
 
 `output/<pipeline>/runs/<run_id>/recommendations/selector_contract.json`
 
@@ -191,15 +221,20 @@ Example after a full run:
 ├── 2_profile.done
 ├── 3_recommend.done
 ├── 4_preprocess.done
-├── 5_hpo_study.done
-├── 6_feature_selection_study.done
+├── 5_tune.done
+├── 6_select_features.done
 ├── 7_train.done
 ├── 8_assess.done
-├── 9_attribute_binning.done
-├── 10_mitigation.done
-├── 11_combinatorial.done
+├── 9_bin_attributes.done
+├── 10_mitigate.done
+├── 11_sweep.done
 └── 12_compare.done
 ```
+
+Markers are always **written** under the canonical name. Markers left by older
+runs under a legacy name (`9_attribute_binning.done` and friends) are still
+**accepted** on resume, so a run checkpointed before the rename stays resumable,
+and runs are interchangeable between the bash and Prefect orchestrators.
 
 Each `.done` file is JSON with a timestamp and hostname:
 

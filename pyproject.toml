@@ -94,7 +94,6 @@ full = [
 ]
 
 [project.scripts]
-fairxai-characterize = "fairxai.cli.characterize:main"  # kept — backwards compat
 fairxai              = "fairxai.cli.main:main"           # unified subcommand CLI
 
 [project.urls]

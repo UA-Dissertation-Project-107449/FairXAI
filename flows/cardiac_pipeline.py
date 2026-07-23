@@ -27,7 +27,7 @@ from fairxai.cli.runner_utils import (  # noqa: E402
     update_log_latest_pointer,
 )
 from fairxai.pipeline.stages import (  # noqa: E402
-    STAGES,
+    CARDIAC_STAGE_BY_NUMBER,
     get_stage_range,
     mark_stage_complete,
     resolve_stage,
@@ -619,7 +619,7 @@ def cardiac_pipeline(
         resolved_fs_jobs = 1
 
     # --- Resolve stage range ------------------------------------------------
-    active_stages = get_stage_range(resume_from, go_until)
+    active_stages = get_stage_range(resume_from, go_until, domain="cardiac")
     active_nums = {s.number for s in active_stages}
 
     def _should_run(stage_number: int) -> bool:
@@ -653,8 +653,8 @@ def cardiac_pipeline(
 
     # --- Validate prior stages on resume ------------------------------------
     if resume_from:
-        first_stage = resolve_stage(resume_from)
-        validate_prior_stages(run_root, first_stage, ROOT_DIR)
+        first_stage = resolve_stage(resume_from, domain="cardiac")
+        validate_prior_stages(run_root, first_stage, ROOT_DIR, domain="cardiac")
         logger.info(
             f"Resume validation passed - prior stages through "
             f"{first_stage.number - 1} are complete."
@@ -701,11 +701,11 @@ def cardiac_pipeline(
     def _checkpoint(stage_num: int, future):
         """Wait for a task future, then write a checkpoint marker."""
         future.result()  # raises on failure
-        mark_stage_complete(run_root, STAGES[stage_num - 1])
+        mark_stage_complete(run_root, CARDIAC_STAGE_BY_NUMBER[stage_num])
 
     def _mark_skipped(stage_num: int, reason: str) -> None:
         """Write a checkpoint marker for an intentionally skipped stage."""
-        stage = STAGES[stage_num - 1]
+        stage = CARDIAC_STAGE_BY_NUMBER[stage_num]
         logger.info(f"[{stage_num}/12] {stage.name} - checkpointed as skipped ({reason})")
         mark_stage_complete(run_root, stage)
 

@@ -59,15 +59,22 @@ Both scripts are parametrized entirely by env vars (passed via
 script re-runs `module load` and activates the venv itself.
 
 `characterize.slurm` — required: `DATASET_PATH`, `RESULTS_DIR`.
-Optional: `FAIRXAI_VENV`, `HPC_MODULES`, `TARGET_COLUMN`, `INDEX_COLUMN`,
-`INCLUDE_TRIAGE` (0/1), `SENSITIVE_COLUMNS` (space-separated).
-Writes `<RESULTS_DIR>/<dataset-stem>.json`.
+Optional: `FAIRXAI_VENV`, `HPC_MODULES`, `TARGET_COLUMN`, `INDEX_COLUMN`.
+Writes `<RESULTS_DIR>/<dataset-stem>.json`. Characterization only — triage
+is submitted separately as `analysis.slurm` with `ANALYSIS_TYPE=triage`.
 
 `analysis.slurm` — required: `ANALYSIS_TYPE` (`binning|clustering|triage`),
 `DATASET_PATH`, `RESULT_FILE`, `TARGET_COLUMN`.
 `binning` also needs `ATTRIBUTE`, `STRATEGY`; `clustering` also needs
-`METHOD` (optional `PCA2D_FILE`); `triage` accepts `INDEX_COLUMN`,
-`SENSITIVE_COLUMNS`. Writes a single JSON file to `RESULT_FILE`.
+`METHOD` (optional `PCA2D_FILE`); `clustering` and `triage` both accept
+`INDEX_COLUMN` and `SENSITIVE_COLUMNS_JSON`. Writes a single JSON file to
+`RESULT_FILE`.
+
+`SENSITIVE_COLUMNS_JSON` is a JSON array, not a space-separated list — a column
+named `race group` has to survive as one argument. `PCA2D_FILE` holds
+`{"points": [...], "feature_columns": [...]}`; the column list is what lets
+FairXAI decide whether the stored projection covers the features it clustered
+on, and a bare coordinate list reads as "unknown" and is recomputed.
 
 ## Resources
 
