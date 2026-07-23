@@ -47,11 +47,44 @@ def _engine_config_for_method(method: str) -> dict[str, Any] | None:
     return {method: {}}
 
 
+def resolve_feature_columns(
+    df: pd.DataFrame,
+    target_column: str,
+    index_column: str | None = None,
+    sensitive_columns: list[str] | None = None,
+) -> list[str]:
+    """Numeric columns to cluster on, given the roles the user assigned.
+
+    The engine's own default exclude list is a cardiac-research artefact — it
+    drops columns literally named ``sex`` or ``ethnicity`` and nothing else, so
+    on an arbitrary upload it removes the wrong columns and keeps a numeric
+    record ID as a clustering feature. The WebApp knows which column is the
+    index and which are sensitive, so it decides here and hands the engine an
+    explicit list.
+
+    Sensitive attributes are excluded on purpose: clusters are compared against
+    them afterwards, and a cluster built *from* ``sex`` disparate on ``sex`` is
+    a tautology, not a finding.
+    """
+    excluded = {target_column, "group_cluster"}
+    if index_column:
+        excluded.add(index_column)
+    excluded.update(column for column in (sensitive_columns or []) if column)
+    return [
+        str(col)
+        for col in df.select_dtypes(include=[np.number]).columns
+        if str(col) not in excluded
+    ]
+
+
 def run_clustering(
     csv_path: str | Path,
     target_column: str,
     pca2d: list[list] | None = None,
     method: str = DEFAULT_CLUSTERING_METHOD,
+    index_column: str | None = None,
+    sensitive_columns: list[str] | None = None,
+    pca2d_feature_columns: list[str] | None = None,
 ) -> dict[str, Any]:
     """Discover subgroups via unsupervised clustering and compute per-cluster statistics.
 
@@ -63,9 +96,17 @@ def run_clustering(
         csv_path: Absolute path to the dataset CSV file.
         target_column: Name of the binary target column.
         pca2d: Optional existing PCA 2D coords ``[[x, y, class_label], ...]``
-            from a prior characterization run.  When supplied, cluster labels are
-            overlaid on these coords so PCA is not recomputed.
+            from a prior characterization run.  Reused only when
+            *pca2d_feature_columns* says it was built from the same columns
+            we clustered on.
         method: ``auto`` or one method supported by :class:`ClusteringEngine`.
+        index_column: Record identifier, excluded from the feature set.
+        sensitive_columns: Attributes the user nominated, excluded from the
+            feature set so cluster-vs-attribute disparity stays a real finding.
+        pca2d_feature_columns: Columns characterization projected, as published
+            in its ``pca2d_feature_columns``.  Absent means unknown, and unknown
+            means recompute — reusing coordinates built from a different feature
+            set places points by features the clustering never saw.
 
     Returns:
         JSON-serializable dict with cluster profiles and recommendations.
@@ -81,14 +122,22 @@ def run_clustering(
     df[target_column] = pd.to_numeric(df[target_column], errors="coerce")
     df = df.dropna(subset=[target_column])
 
+    feature_cols = resolve_feature_columns(df, target_column, index_column, sensitive_columns)
+    if not feature_cols:
+        raise ValueError(
+            "No numeric feature columns left to cluster on after excluding the "
+            "target, index, and sensitive columns."
+        )
+
     engine = ClusteringEngine(
         config=_engine_config_for_method(requested_method),
-        feature_exclude=[target_column],
         # Stability floor on by default for WebApp: rejects flimsy clusterings so a
         # weak DBSCAN can't be surfaced. Validated on the evidence_cleanup branch.
         min_silhouette=_DEFAULT_MIN_SILHOUETTE,
     )
-    result = engine.fit(df, feature_cols=None)
+    # Explicit columns, not feature_exclude: the exclude list is additive to the
+    # engine's hardcoded defaults, whereas an explicit list replaces them.
+    result = engine.fit(df, feature_cols=feature_cols)
 
     df["group_cluster"] = result.group_cluster.values
 
@@ -96,7 +145,7 @@ def run_clustering(
     report = profiler.compute(df, cluster_col="group_cluster", feature_cols=result.feature_cols)
 
     clusters = _build_cluster_list(result, report, df, target_column)
-    pca2d_clusters = _build_pca_clusters(df, result, pca2d)
+    pca2d_clusters, pca2d_explained = _build_pca_clusters(df, result, pca2d, pca2d_feature_columns)
     recommendations = _generate_recommendations(clusters)
 
     return {
@@ -105,7 +154,13 @@ def run_clustering(
         "n_clusters": result.n_clusters,
         "silhouette": round(result.silhouette, 4),
         "clusters": clusters,
+        # What the clustering actually ran on, so the reader can tell that the
+        # index and the sensitive attributes were kept out of it.
+        "feature_columns": list(result.feature_cols),
         "pca2d_clusters": pca2d_clusters,
+        # None means the coordinates are characterization's — read its
+        # pca2d_explained_variance instead of showing nothing.
+        "pca2d_explained_variance": pca2d_explained,
         "recommendations": recommendations,
     }
 
@@ -175,23 +230,57 @@ def _build_pca_clusters(
     df: pd.DataFrame,
     result: Any,
     pca2d: list[list] | None,
-) -> list[list]:
+    pca2d_feature_columns: list[str] | None,
+) -> tuple[list[list], float | None]:
+    """Return the cluster scatter coords, and how much variance they explain.
+
+    The explained-variance figure is ``None`` when the stored projection is
+    reused: the coordinates are then characterization's, and so is its published
+    ``pca2d_explained_variance``.
+    """
     cluster_labels = df["group_cluster"].values
 
-    if pca2d is not None and len(pca2d) == len(df):
-        # Reuse existing PCA coords, replace class label with cluster id
-        return [[float(pt[0]), float(pt[1]), int(cid)] for pt, cid in zip(pca2d, cluster_labels)]
+    # Reuse is only sound when the stored projection was built from the same
+    # columns the engine clustered on, and the only authority on that is the
+    # projection's own published column list. Inferring it from the CSV guesses
+    # at what characterization excluded and gets the index column wrong. When
+    # the sets differ, reusing places each point using features the clustering
+    # never saw, which is what makes clean clusters look interleaved.
+    if pca2d is None or len(pca2d) != len(df):
+        stored_columns = None
+    else:
+        stored_columns = None if pca2d_feature_columns is None else set(pca2d_feature_columns)
 
-    # Recompute PCA from numeric features
+    if stored_columns is not None and stored_columns == set(result.feature_cols):
+        # Reuse existing PCA coords, replace class label with cluster id
+        reused = [[float(pt[0]), float(pt[1]), int(cid)] for pt, cid in zip(pca2d, cluster_labels)]
+        return reused, None
+
+    if pca2d is not None and len(pca2d) == len(df):
+        logger.info(
+            "Recomputing PCA for the cluster overlay: the stored projection %s "
+            "(clustering used %d features).",
+            (
+                "does not say which columns it covers"
+                if stored_columns is None
+                else f"covers {len(stored_columns)} different columns"
+            ),
+            len(result.feature_cols),
+        )
+
+    # Recompute PCA from the columns the engine actually clustered on.
     numeric_cols = df[result.feature_cols].select_dtypes(include=[np.number])
     if numeric_cols.shape[1] < 2:
-        return []
+        return [], None
     X = StandardScaler().fit_transform(numeric_cols.fillna(0).values)
     n_components = min(2, X.shape[0], X.shape[1])
-    coords = SklearnPCA(n_components=n_components, random_state=42).fit_transform(X)
+    pca = SklearnPCA(n_components=n_components, random_state=42)
+    coords = pca.fit_transform(X)
+    explained = float(pca.explained_variance_ratio_.sum())
     if coords.shape[1] < 2:
         coords = np.hstack([coords, np.zeros((coords.shape[0], 1))])
-    return [[float(row[0]), float(row[1]), int(cid)] for row, cid in zip(coords, cluster_labels)]
+    points = [[float(row[0]), float(row[1]), int(cid)] for row, cid in zip(coords, cluster_labels)]
+    return points, explained
 
 
 def _generate_recommendations(clusters: list[dict[str, Any]]) -> list[dict[str, Any]]:

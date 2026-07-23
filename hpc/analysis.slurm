@@ -20,7 +20,10 @@
 #               RESULT_FILE, TARGET_COLUMN
 # binning   also needs: ATTRIBUTE, STRATEGY
 # clustering also needs: METHOD;  optional: PCA2D_FILE
-# Optional env: FAIRXAI_VENV, HPC_MODULES, INDEX_COLUMN, SENSITIVE_COLUMNS
+# Optional env: FAIRXAI_VENV, HPC_MODULES, INDEX_COLUMN, SENSITIVE_COLUMNS_JSON
+#
+# SENSITIVE_COLUMNS_JSON is a JSON array, not a space-separated list: a column
+# named "race group" is one argument and word-splitting would make it two.
 set -euo pipefail
 
 : "${ANALYSIS_TYPE:?ANALYSIS_TYPE is required}"
@@ -42,6 +45,20 @@ fi
 
 mkdir -p "$(dirname "$RESULT_FILE")"
 
+# Decode SENSITIVE_COLUMNS_JSON into the `sensitive` array. NUL-delimited so a
+# column name may contain spaces, newlines, or quotes and still stay one word.
+read_sensitive_columns() {
+    sensitive=()
+    [ -n "${SENSITIVE_COLUMNS_JSON:-}" ] || return 0
+    while IFS= read -r -d '' column; do
+        sensitive+=("$column")
+    done < <(python3 -c '
+import json, os, sys
+for column in json.loads(os.environ["SENSITIVE_COLUMNS_JSON"]):
+    sys.stdout.write(column + "\0")
+')
+}
+
 case "$ANALYSIS_TYPE" in
     binning)
         : "${ATTRIBUTE:?ATTRIBUTE is required for binning}"
@@ -59,6 +76,9 @@ case "$ANALYSIS_TYPE" in
             --target-column "$TARGET_COLUMN"
             --method "$METHOD")
         [ -n "${PCA2D_FILE:-}" ] && cmd+=(--pca2d-file "$PCA2D_FILE")
+        [ -n "${INDEX_COLUMN:-}" ] && cmd+=(--index-column "$INDEX_COLUMN")
+        read_sensitive_columns
+        [ "${#sensitive[@]}" -gt 0 ] && cmd+=(--sensitive-columns "${sensitive[@]}")
         "${cmd[@]}" >"$RESULT_FILE"
         ;;
     triage)
@@ -69,11 +89,8 @@ case "$ANALYSIS_TYPE" in
             --datasets-dir "$DATASETS_DIR"
             --target-column "$TARGET_COLUMN")
         [ -n "${INDEX_COLUMN:-}" ] && cmd+=(--index-column "$INDEX_COLUMN")
-        if [ -n "${SENSITIVE_COLUMNS:-}" ]; then
-            # shellcheck disable=SC2206
-            sensitive=($SENSITIVE_COLUMNS)
-            cmd+=(--sensitive-columns "${sensitive[@]}")
-        fi
+        read_sensitive_columns
+        [ "${#sensitive[@]}" -gt 0 ] && cmd+=(--sensitive-columns "${sensitive[@]}")
         "${cmd[@]}" >"$RESULT_FILE"
         ;;
     *)
