@@ -259,20 +259,68 @@ def test_pca_clusters_recompute_when_the_projection_does_not_name_its_columns():
 # --- feature-set selection ---------------------------------------------------
 
 
-def test_feature_columns_exclude_target_index_and_sensitive():
-    df = _frame().assign(patient_id=[1, 2, 3, 4])
+def test_feature_columns_keep_sensitive_columns_and_report_the_rest():
+    # Sensitive attributes are features now. Excluding them used to leave narrow
+    # datasets with a single column, and clustering one column is not clustering.
+    df = _frame().assign(patient_id=[1, 2, 3, 4], notes=["a", "b", "c", "d"])
 
-    cols = clustering_module.resolve_feature_columns(
+    cols, excluded = clustering_module.resolve_feature_columns(
         df, target_column="target", index_column="patient_id", sensitive_columns=["sex"]
     )
 
-    assert cols == ["feat_a", "feat_b"]
+    assert cols == ["feat_a", "feat_b", "sex"]
+    assert excluded == [
+        {"column": "target", "reason": "target"},
+        {"column": "group_cluster", "reason": "engine_output"},
+        {"column": "patient_id", "reason": "index"},
+        {"column": "notes", "reason": "non_numeric"},
+    ]
 
 
 def test_feature_columns_keep_a_column_named_sex_when_it_was_not_nominated():
     # The engine's own default list drops "sex" by name. On an arbitrary upload
     # that is the wrong call: the WebApp asks the user which columns are
     # sensitive, and a column nobody nominated is just a feature.
-    cols = clustering_module.resolve_feature_columns(_frame(), target_column="target")
+    cols, _ = clustering_module.resolve_feature_columns(_frame(), target_column="target")
 
     assert cols == ["feat_a", "feat_b", "sex"]
+
+
+def test_feature_columns_drop_an_undeclared_integer_identifier():
+    df = _frame().assign(record_no=[10, 11, 12, 13])
+
+    cols, excluded = clustering_module.resolve_feature_columns(df, target_column="target")
+
+    assert "record_no" not in cols
+    assert {"column": "record_no", "reason": "identifier"} in excluded
+
+
+def test_feature_columns_keep_an_all_distinct_float_measurement():
+    # The trap this guards: `nunique == len(df)` alone. A continuous measurement
+    # over few rows is routinely all-distinct, and dropping it would be a worse
+    # and quieter bug than the one the identifier rule exists to prevent.
+    df = _frame().assign(cholesterol=[210.4, 233.1, 188.7, 265.2])
+
+    cols, excluded = clustering_module.resolve_feature_columns(df, target_column="target")
+
+    assert "cholesterol" in cols
+    assert all(item["column"] != "cholesterol" for item in excluded)
+
+
+def test_run_clustering_refuses_a_single_feature_column(tmp_path):
+    # dataset26: three features, one declared as index, one as sensitive. The
+    # engine used to run and report a silhouette of 1.0 — what partitioning a
+    # line always gives — and only the PCA overlay noticed, by returning nothing.
+    csv_path = tmp_path / "narrow.csv"
+    pd.DataFrame(
+        {
+            "feature_0": [1, 2, 3, 4],
+            "feature_1": [0.0, 0.1, 4.9, 5.0],
+            "target_variable": [0, 0, 1, 1],
+        }
+    ).to_csv(csv_path, index=False)
+
+    with pytest.raises(ValueError, match="at least 2 numeric feature columns"):
+        clustering_module.run_clustering(
+            csv_path, "target_variable", index_column="feature_0", sensitive_columns=["feature_1"]
+        )

@@ -21,6 +21,9 @@ _DISPARITY_P1_THRESHOLD = 1.5
 _TOP_N_DOMINANT_FEATURES = 3
 _RETURN_ALL_FEATURES_THRESHOLD = 6
 _DEVIATION_EPSILON = 1e-9
+# Two features is the floor: one feature is a line, and partitioning a line
+# scores a silhouette of 1.0 no matter where the cuts fall. See run_clustering.
+_MIN_FEATURE_COLUMNS = 2
 DEFAULT_CLUSTERING_METHOD = "auto"
 CLUSTERING_METHODS = (
     DEFAULT_CLUSTERING_METHOD,
@@ -47,34 +50,78 @@ def _engine_config_for_method(method: str) -> dict[str, Any] | None:
     return {method: {}}
 
 
+def _is_undeclared_identifier(series: pd.Series, n_rows: int) -> bool:
+    """True for a numeric column that is almost certainly a record ID.
+
+    ``nunique == len(df)`` alone is not enough: a continuous clinical
+    measurement over 100 rows is very often 100 distinct floats, and dropping it
+    would be a worse — and quieter — bug than the one this rule exists to
+    prevent. Requiring an integer dtype as well is nearly always a real ID and
+    almost never a real measurement.
+    """
+    if n_rows < 2 or not pd.api.types.is_integer_dtype(series):
+        return False
+    return int(series.nunique(dropna=False)) == n_rows
+
+
 def resolve_feature_columns(
     df: pd.DataFrame,
     target_column: str,
     index_column: str | None = None,
     sensitive_columns: list[str] | None = None,
-) -> list[str]:
-    """Numeric columns to cluster on, given the roles the user assigned.
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Columns to cluster on, plus what was dropped and why.
 
     The engine's own default exclude list is a cardiac-research artefact — it
     drops columns literally named ``sex`` or ``ethnicity`` and nothing else, so
     on an arbitrary upload it removes the wrong columns and keeps a numeric
     record ID as a clustering feature. The WebApp knows which column is the
-    index and which are sensitive, so it decides here and hands the engine an
-    explicit list.
+    index, so it decides here and hands the engine an explicit list.
 
-    Sensitive attributes are excluded on purpose: clusters are compared against
-    them afterwards, and a cluster built *from* ``sex`` disparate on ``sex`` is
-    a tautology, not a finding.
+    Everything is a feature except what cannot or must not be one: the label,
+    the engine's own output column, the declared index, anything non-numeric,
+    and undeclared identifiers. **Sensitive attributes are features.** They used
+    to be excluded so that cluster-vs-attribute disparity stayed independent
+    evidence, but on a narrow dataset that silently left one usable column, and
+    clustering one column is not clustering. The tautology is real and is now
+    handled by disclosure — ``run_clustering`` reports which sensitive columns
+    ended up in the feature set so the caller can caveat the disparity — rather
+    than by dropping data.
+
+    Args:
+        df: The dataset, already filtered to rows with a usable target.
+        target_column: The label. Never a feature.
+        index_column: User-declared record identifier, if any.
+        sensitive_columns: Nominated attributes. Kept as features; accepted here
+            only so the exclusion report can stay the single place that explains
+            the feature set.
+
+    Returns:
+        ``(feature_columns, excluded_columns)``, where each exclusion is
+        ``{"column": ..., "reason": ...}`` with *reason* one of ``target``,
+        ``engine_output``, ``index``, ``non_numeric``, ``identifier``.
     """
-    excluded = {target_column, "group_cluster"}
-    if index_column:
-        excluded.add(index_column)
-    excluded.update(column for column in (sensitive_columns or []) if column)
-    return [
-        str(col)
-        for col in df.select_dtypes(include=[np.number]).columns
-        if str(col) not in excluded
-    ]
+    del sensitive_columns  # kept as features; see docstring
+    n_rows = len(df)
+    features: list[str] = []
+    excluded: list[dict[str, str]] = []
+    for raw_col in df.columns:
+        column = str(raw_col)
+        if column == target_column:
+            reason = "target"
+        elif column == "group_cluster":
+            reason = "engine_output"
+        elif index_column and column == index_column:
+            reason = "index"
+        elif not pd.api.types.is_numeric_dtype(df[raw_col]):
+            reason = "non_numeric"
+        elif _is_undeclared_identifier(df[raw_col], n_rows):
+            reason = "identifier"
+        else:
+            features.append(column)
+            continue
+        excluded.append({"column": column, "reason": reason})
+    return features, excluded
 
 
 def run_clustering(
@@ -101,8 +148,9 @@ def run_clustering(
             we clustered on.
         method: ``auto`` or one method supported by :class:`ClusteringEngine`.
         index_column: Record identifier, excluded from the feature set.
-        sensitive_columns: Attributes the user nominated, excluded from the
-            feature set so cluster-vs-attribute disparity stays a real finding.
+        sensitive_columns: Attributes the user nominated. Clustered on like any
+            other column; reported back in ``sensitive_features_included`` so
+            the caller can caveat cluster-vs-attribute disparity.
         pca2d_feature_columns: Columns characterization projected, as published
             in its ``pca2d_feature_columns``.  Absent means unknown, and unknown
             means recompute — reusing coordinates built from a different feature
@@ -122,11 +170,19 @@ def run_clustering(
     df[target_column] = pd.to_numeric(df[target_column], errors="coerce")
     df = df.dropna(subset=[target_column])
 
-    feature_cols = resolve_feature_columns(df, target_column, index_column, sensitive_columns)
-    if not feature_cols:
+    feature_cols, excluded_columns = resolve_feature_columns(
+        df, target_column, index_column, sensitive_columns
+    )
+    # Refuse a degenerate feature set here rather than downstream. The engine
+    # will happily "cluster" a single column and report a silhouette of 1.0 —
+    # which is what partitioning a line always gives — and the only thing that
+    # notices is the PCA overlay, which silently returns no points. That reads
+    # as a broken chart on a successful run.
+    if len(feature_cols) < _MIN_FEATURE_COLUMNS:
+        dropped = ", ".join(f"{item['column']} ({item['reason']})" for item in excluded_columns)
         raise ValueError(
-            "No numeric feature columns left to cluster on after excluding the "
-            "target, index, and sensitive columns."
+            f"Clustering needs at least {_MIN_FEATURE_COLUMNS} numeric feature columns, "
+            f"but only {len(feature_cols)} remained. Excluded: {dropped or 'nothing'}."
         )
 
     engine = ClusteringEngine(
@@ -148,15 +204,25 @@ def run_clustering(
     pca2d_clusters, pca2d_explained = _build_pca_clusters(df, result, pca2d, pca2d_feature_columns)
     recommendations = _generate_recommendations(clusters)
 
+    kept = set(result.feature_cols)
     return {
         "requested_method": requested_method,
         "method": result.method,
         "n_clusters": result.n_clusters,
         "silhouette": round(result.silhouette, 4),
         "clusters": clusters,
-        # What the clustering actually ran on, so the reader can tell that the
-        # index and the sensitive attributes were kept out of it.
+        # What the clustering actually ran on.
         "feature_columns": list(result.feature_cols),
+        # And what it did not, with the reason. Without this the user cannot
+        # tell an intentional exclusion from a column the engine quietly failed
+        # to parse, which is half of what makes a clustering result trustworthy.
+        "excluded_columns": excluded_columns,
+        # Sensitive attributes are clustered on, so a cluster that is disparate
+        # on one of these is partly disparate by construction. The caller shows
+        # this as a caveat next to the disparity recommendations.
+        "sensitive_features_included": [
+            column for column in (sensitive_columns or []) if column and column in kept
+        ],
         "pca2d_clusters": pca2d_clusters,
         # None means the coordinates are characterization's — read its
         # pca2d_explained_variance instead of showing nothing.
