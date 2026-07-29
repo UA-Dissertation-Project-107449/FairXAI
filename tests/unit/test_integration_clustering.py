@@ -324,3 +324,126 @@ def test_run_clustering_refuses_a_single_feature_column(tmp_path):
         clustering_module.run_clustering(
             csv_path, "target_variable", index_column="feature_0", sensitive_columns=["feature_1"]
         )
+
+
+def test_dbscan_eps_grid_scales_with_the_column_count():
+    # Thirteen standardised columns put typical neighbour distances well past
+    # the engine's 1.0 default ceiling, at which every point is noise.
+    rng = pd.DataFrame(
+        {f"col_{index}": [(row * 7 + index * 3) % 11 for row in range(60)] for index in range(13)}
+    )
+
+    grid = clustering_module._dbscan_eps_grid(rng, list(rng.columns))
+
+    assert len(grid) >= 1
+    assert min(grid) > 1.0
+
+
+def test_dbscan_eps_grid_measures_boolean_columns_too():
+    # The engine scales and clusters booleans like any other column, so a grid
+    # built without them is sized for fewer dimensions than DBSCAN is handed.
+    numeric = pd.DataFrame(
+        {f"col_{index}": [(row * 5 + index) % 7 for row in range(40)] for index in range(3)}
+    )
+    with_flags = numeric.assign(
+        **{f"flag_{index}": [(row + index) % 2 == 0 for row in range(40)] for index in range(6)}
+    )
+
+    numeric_grid = clustering_module._dbscan_eps_grid(numeric, list(numeric.columns))
+    flag_grid = clustering_module._dbscan_eps_grid(with_flags, list(with_flags.columns))
+
+    assert max(flag_grid) > max(numeric_grid)
+
+
+def test_dbscan_eps_grid_falls_back_when_there_is_nothing_to_measure():
+    frame = pd.DataFrame({"only_row": [1.0]})
+
+    assert clustering_module._dbscan_eps_grid(frame, ["only_row"]) == list(
+        clustering_module._DBSCAN_DEFAULT_EPS_GRID
+    )
+
+
+def test_engine_config_carries_the_eps_grid_for_dbscan_only():
+    frame = pd.DataFrame({"a": [0.0, 1.0, 2.0, 9.0], "b": [1.0, 0.0, 3.0, 8.0]})
+
+    dbscan_config = clustering_module._engine_config_for_method("dbscan", frame, ["a", "b"])
+    kmeans_config = clustering_module._engine_config_for_method("kmeans", frame, ["a", "b"])
+
+    assert dbscan_config["dbscan"]["parameters"]["eps"]
+    assert kmeans_config == {"kmeans": {}}
+    assert clustering_module._engine_config_for_method("auto", frame, ["a", "b"]) is None
+
+
+def test_clustering_failure_reports_why_the_attempts_were_rejected():
+    # "No valid solution" names no cause, so the UI can only say "failed".
+    from fairxai.clustering.engine import ClusteringError
+    from fairxai.clustering.models import ClusterDiagnostics
+
+    error = ClusteringError(
+        "No clustering method produced a valid solution",
+        diagnostics=[
+            ClusterDiagnostics(
+                method="dbscan",
+                params={"eps": 2.7, "min_samples": 5},
+                n_clusters=3,
+                silhouette=0.19,
+                note="rejected: noise_fraction=56.0% > max_noise_fraction=30.0%",
+            ),
+            ClusterDiagnostics(
+                method="dbscan",
+                params={"eps": 1.0, "min_samples": 5},
+                n_clusters=0,
+                silhouette=None,
+                note="only 0 cluster(s) + 297 noise",
+            ),
+        ],
+    )
+
+    message = clustering_module._describe_clustering_failure(error, "dbscan")
+
+    assert "eps=2.7" in message
+    assert "noise_fraction=56.0%" in message
+
+
+def test_run_clustering_keeps_the_diagnostics_when_it_rewrites_the_message(tmp_path, monkeypatch):
+    # The message is rewritten for the UI; the structured attempts behind it are
+    # the only machine-readable record of why, so they must survive the rewrite.
+    from fairxai.clustering.engine import ClusteringError
+    from fairxai.clustering.models import ClusterDiagnostics
+
+    diagnostics = [
+        ClusterDiagnostics(
+            method="dbscan",
+            params={"eps": 2.7, "min_samples": 5},
+            n_clusters=3,
+            silhouette=0.19,
+            note="rejected: noise_fraction=56.0% > max_noise_fraction=30.0%",
+        )
+    ]
+
+    class FailingEngine:
+        def __init__(self, **kwargs):
+            pass
+
+        def fit(self, df, feature_cols=None):
+            raise ClusteringError(
+                "No clustering method produced a valid solution", diagnostics=diagnostics
+            )
+
+    monkeypatch.setattr(clustering_module, "ClusteringEngine", FailingEngine)
+
+    with pytest.raises(ClusteringError) as excinfo:
+        clustering_module.run_clustering(
+            _write_csv(tmp_path), target_column="target", method="dbscan"
+        )
+
+    assert excinfo.value.diagnostics == diagnostics
+    assert "noise_fraction=56.0%" in str(excinfo.value)
+
+
+def test_clustering_failure_keeps_the_original_message_without_diagnostics():
+    from fairxai.clustering.engine import ClusteringError
+
+    error = ClusteringError("No clustering method produced a valid solution")
+
+    assert clustering_module._describe_clustering_failure(error, "dbscan") == str(error)
