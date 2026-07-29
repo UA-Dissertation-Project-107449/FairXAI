@@ -9,9 +9,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA as SklearnPCA
+from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
 
-from fairxai.clustering.engine import _DEFAULT_MIN_SILHOUETTE, ClusteringEngine
+from fairxai.clustering.engine import _DEFAULT_MIN_SILHOUETTE, ClusteringEngine, ClusteringError
 from fairxai.clustering.profiles import ClusterProfiler
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,10 @@ _DEVIATION_EPSILON = 1e-9
 # Two features is the floor: one feature is a line, and partitioning a line
 # scores a silhouette of 1.0 no matter where the cuts fall. See run_clustering.
 _MIN_FEATURE_COLUMNS = 2
+# Neighbour rank and percentiles the adapter's DBSCAN eps grid is drawn from.
+_DBSCAN_EPS_NEIGHBOURS = 5
+_DBSCAN_EPS_PERCENTILES = (25, 50, 75)
+_DBSCAN_DEFAULT_EPS_GRID = (0.3, 0.5, 0.7, 1.0)
 DEFAULT_CLUSTERING_METHOD = "auto"
 CLUSTERING_METHODS = (
     DEFAULT_CLUSTERING_METHOD,
@@ -44,10 +49,59 @@ def normalize_clustering_method(method: str | None) -> str:
     return resolved
 
 
-def _engine_config_for_method(method: str) -> dict[str, Any] | None:
+def _dbscan_eps_grid(df: pd.DataFrame, feature_cols: list[str]) -> list[float]:
+    """Candidate eps values scaled to this dataset's own point spacing.
+
+    The engine's default grid tops out at 1.0, which is a sensible neighbourhood
+    radius for two or three standardised columns and far too small for a dozen:
+    distances grow with dimension, so on a 13-column upload every point is noise
+    at eps<=1 and DBSCAN reports "no valid solution" on every dataset it is ever
+    given. Anchoring the grid to the k-th nearest-neighbour distance keeps the
+    radius meaningful whatever the column count.
+
+    Only the WebApp adapter uses this. The engine default is left alone so
+    pipeline runs, whose configs pin their own grids, keep their results.
+    """
+    # Booleans included on purpose: the engine scales and clusters them like any
+    # other column, so measuring spacing without them would size the radius for
+    # fewer dimensions than DBSCAN is actually handed.
+    frame = df[feature_cols].select_dtypes(include=["number", "bool"]).astype(float).fillna(0)
+    n_rows = len(frame)
+    if n_rows < 2 or frame.shape[1] == 0:
+        return list(_DBSCAN_DEFAULT_EPS_GRID)
+    k = min(_DBSCAN_EPS_NEIGHBOURS, n_rows - 1)
+    scaled = StandardScaler().fit_transform(frame.values)
+    distances, _ = NearestNeighbors(n_neighbors=k + 1).fit(scaled).kneighbors(scaled)
+    kth = distances[:, -1]
+    grid = sorted({round(float(value), 3) for value in np.percentile(kth, _DBSCAN_EPS_PERCENTILES)})
+    return [eps for eps in grid if eps > 0] or list(_DBSCAN_DEFAULT_EPS_GRID)
+
+
+def _engine_config_for_method(
+    method: str,
+    df: pd.DataFrame | None = None,
+    feature_cols: list[str] | None = None,
+) -> dict[str, Any] | None:
     if method == DEFAULT_CLUSTERING_METHOD:
         return None
+    if method == "dbscan" and df is not None and feature_cols:
+        return {method: {"parameters": {"eps": _dbscan_eps_grid(df, feature_cols)}}}
     return {method: {}}
+
+
+def _describe_clustering_failure(error: ClusteringError, method: str) -> str:
+    """Turn "no valid solution" into the reason the attempts were rejected.
+
+    A method that finds nothing is a normal outcome, but the bare message names
+    no cause, so the UI can only say it failed. The diagnostics already hold the
+    reason for every parameter combination — surface the best-scoring one.
+    """
+    attempts = [diag for diag in error.diagnostics if diag.method == method and diag.note]
+    if not attempts:
+        return str(error)
+    best = max(attempts, key=lambda diag: (diag.silhouette is not None, diag.silhouette or 0.0))
+    params = ", ".join(f"{key}={value}" for key, value in best.params.items())
+    return f"{method} found no usable grouping. Closest attempt ({params}): {best.note}."
 
 
 def _is_undeclared_identifier(series: pd.Series, n_rows: int) -> bool:
@@ -186,14 +240,20 @@ def run_clustering(
         )
 
     engine = ClusteringEngine(
-        config=_engine_config_for_method(requested_method),
+        config=_engine_config_for_method(requested_method, df, feature_cols),
         # Stability floor on by default for WebApp: rejects flimsy clusterings so a
         # weak DBSCAN can't be surfaced. Validated on the evidence_cleanup branch.
         min_silhouette=_DEFAULT_MIN_SILHOUETTE,
     )
     # Explicit columns, not feature_exclude: the exclude list is additive to the
     # engine's hardcoded defaults, whereas an explicit list replaces them.
-    result = engine.fit(df, feature_cols=feature_cols)
+    try:
+        result = engine.fit(df, feature_cols=feature_cols)
+    except ClusteringError as exc:
+        raise ClusteringError(
+            _describe_clustering_failure(exc, requested_method),
+            diagnostics=exc.diagnostics,
+        ) from exc
 
     df["group_cluster"] = result.group_cluster.values
 
