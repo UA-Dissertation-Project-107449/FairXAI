@@ -36,7 +36,7 @@ set -euo pipefail
 # `python/3.11.7` default died in the 2026 Spack rebuild. 
 # Set HPC_MODULES only if a job needs something the venv lacks.
 HPC_MODULES="${HPC_MODULES:-}"
-if [ -n "${HPC_MODULES// /}" ] && command -v module >/dev/null 2>&1; then
+if [ -n "${HPC_MODULES//[[:space:]]/}" ] && command -v module >/dev/null 2>&1; then
     # shellcheck disable=SC2086
     module load $HPC_MODULES
 fi

@@ -44,18 +44,20 @@ Later updates:
 bash ~/storage/FairXAI/hpc/setup_hpc.sh --update
 ```
 
-`setup_hpc.sh` uses the single repo-root `.venv` (per CLAUDE.md),
-`module load python/3.11.14-cyf54tg`, and `pip install -e ".[experiment]"`.
+`setup_hpc.sh` builds the single repo-root `.venv` (per CLAUDE.md) from the
+system `python3` and runs `pip install -e ".[experiment]"`. No module is
+loaded: Ubuntu 24.04 ships 3.12, which satisfies `requires-python >=3.11`, and
+the Spack tree is not dependable — module names carry a hash that changes on
+every cluster rebuild, and after the 2026 one `python/3.11.14-cyf54tg` resolves
+while its own dependencies (`libxcrypt`, `util-linux-uuid`) do not.
 
-Pleiades module names carry a Spack hash and do not survive a cluster rebuild:
-the 2026 move to Ubuntu 24.04 retired `python/3.11.7` and `cuda/12.4.0`. When
-that happens, run `module spider python`, set `HPC_MODULES`, and re-run this
-script — the venv's interpreter is a symlink into the old module's prefix, so
-it dies with the module and has to be rebuilt, not just re-pointed.
+If a venv's interpreter ever disappears anyway, the script notices and rebuilds
+it; `source activate` on a dead venv otherwise succeeds and fails on every
+command after it.
 
 **cuML is off by default**: there is no rapids/cuml module on Pleiades and
-FairXAI falls back to CPU without it. For GPU, pass `--with-cuml` with
-`cuda/12.8.1-kzpbyf7` in `HPC_MODULES`.
+FairXAI falls back to CPU without it. For GPU, pass `--with-cuml` with a working
+cuda module in `HPC_MODULES` (`module spider cuda` for the current name).
 
 The script prints the exact `HPC_*` values to copy into the WebApp `.env`.
 

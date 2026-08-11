@@ -5,7 +5,7 @@
 # Usage (on the HPC login node, university network only):
 #   bash setup_hpc.sh                    # full bootstrap: clone/pull + venv + install + dirs
 #   bash setup_hpc.sh --update           # fast path: git pull + reinstall package only
-#   bash setup_hpc.sh --with-cuml        # also install cuml-cu12 (GPU accel; off by default)
+#   bash setup_hpc.sh --with-cuml        # also install cuml-cu12 (needs HPC_MODULES=<cuda module>)
 #   bash setup_hpc.sh --branch <name>    # clone or switch to that branch (env: FAIRXAI_BRANCH)
 #
 # Without --branch the clone lands on the remote's default branch and an
@@ -23,10 +23,11 @@ PROJ_ROOT="${HPC_PROJ_ROOT:-$HOME/storage}"   # symlink -> /beegfs/.../proj-data
 FAIRXAI_REPO="${FAIRXAI_REPO:-}"               # git URL; required on first bootstrap
 FAIRXAI_HOME="${FAIRXAI_HOME:-$PROJ_ROOT/FairXAI}"
 FAIRXAI_BRANCH="${FAIRXAI_BRANCH:-}"           # empty = remote default / leave as-is
-# Needs a real module, unlike the SLURM scripts: this is what builds the venv.
-# Pleiades names carry a Spack hash and change on cluster rebuilds, so run
-# `module spider python` if it stops resolving. For --with-cuml add cuda/12.8.1-kzpbyf7.
-HPC_MODULES="${HPC_MODULES:-python/3.11.14-cyf54tg}"
+# Empty: the system python3 on Pleiades satisfies requires-python >=3.11, and the
+# Spack tree is not dependable — names carry a hash that changes on every cluster
+# rebuild, and after the 2026 one `python/3.11.14-cyf54tg` resolves but its own
+# dependencies do not. Set this only for --with-cuml, which needs a cuda module.
+HPC_MODULES="${HPC_MODULES:-}"
 CUML_VERSION="${CUML_VERSION:-25.2.1}"
 
 UPDATE_ONLY=0
@@ -49,17 +50,6 @@ echo "==> PROJ_ROOT:    $PROJ_ROOT"
 echo "==> FAIRXAI_HOME: $FAIRXAI_HOME"
 if [ -n "$FAIRXAI_BRANCH" ]; then
     echo "==> BRANCH:       $FAIRXAI_BRANCH"
-fi
-
-# --- load modules -----------------------------------------------------------
-if [ -z "${HPC_MODULES// /}" ]; then
-    echo "==> HPC_MODULES empty — using whatever python is on PATH"
-elif command -v module >/dev/null 2>&1; then
-    echo "==> module load $HPC_MODULES"
-    # shellcheck disable=SC2086
-    module load $HPC_MODULES
-else
-    echo "WARNING: 'module' not found — skipping module load (mock/local env?)" >&2
 fi
 
 # --- clone or pull ----------------------------------------------------------
@@ -106,10 +96,43 @@ fi
 
 cd "$FAIRXAI_HOME"
 
+# --- load modules -----------------------------------------------------------
+# After the pull, never before: a module that stops resolving must not be able to
+# block the update that removes it. That is exactly how the 2026 rebuild left this
+# script unable to fix itself.
+if [ -z "${HPC_MODULES//[[:space:]]/}" ]; then
+    echo "==> No modules requested — using the python3 on PATH"
+elif ! command -v module >/dev/null 2>&1; then
+    echo "WARNING: 'module' not found — skipping module load (mock/local env?)" >&2
+else
+    echo "==> module load $HPC_MODULES"
+    # Not fatal. The venv usually builds fine without whatever failed, and the
+    # interpreter check below catches it if it does not.
+    # shellcheck disable=SC2086
+    module load $HPC_MODULES || {
+        echo "WARNING: module load failed. Run 'module spider <name>' and set" >&2
+        echo "         HPC_MODULES, or leave it empty to use the system python." >&2
+    }
+fi
+
 # --- venv (single repo-root .venv, per CLAUDE.md) ---------------------------
 VENV_PATH="$FAIRXAI_HOME/.venv"
-if [ "$UPDATE_ONLY" -eq 0 ] && [ ! -d "$VENV_PATH" ]; then
-    echo "==> Creating venv at $VENV_PATH"
+# A venv's bin/python3 is a symlink into whatever built it. When that interpreter
+# goes away — a retired module, an OS upgrade — activate still succeeds and every
+# command after it fails. Rebuild instead, on --update too.
+if [ -d "$VENV_PATH" ] && ! "$VENV_PATH/bin/python3" -V >/dev/null 2>&1; then
+    echo "==> Venv at $VENV_PATH has no working interpreter — rebuilding"
+    rm -rf "$VENV_PATH"
+fi
+if [ ! -d "$VENV_PATH" ]; then
+    # requires-python is >=3.11. Checked here because the alternative is a
+    # confusing pip resolution failure several minutes into the install.
+    if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'; then
+        echo "ERROR: python3 is $(python3 -V 2>&1), FairXAI needs >= 3.11." >&2
+        echo "       Set HPC_MODULES to a working python module and re-run." >&2
+        exit 1
+    fi
+    echo "==> Creating venv at $VENV_PATH ($(python3 -V 2>&1))"
     python3 -m venv "$VENV_PATH"
 fi
 # shellcheck disable=SC1091
