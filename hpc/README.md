@@ -44,16 +44,27 @@ Later updates:
 bash ~/storage/FairXAI/hpc/setup_hpc.sh --update
 ```
 
-`setup_hpc.sh` builds the single repo-root `.venv` (per CLAUDE.md) from the
-system `python3` and runs `pip install -e ".[experiment]"`. No module is
-loaded: Ubuntu 24.04 ships 3.12, which satisfies `requires-python >=3.11`, and
-the Spack tree is not dependable — module names carry a hash that changes on
-every cluster rebuild, and after the 2026 one `python/3.11.14-cyf54tg` resolves
-while its own dependencies (`libxcrypt`, `util-linux-uuid`) do not.
+`setup_hpc.sh` builds the single repo-root `.venv` (per CLAUDE.md) and runs
+`pip install -e ".[experiment]"`.
 
-If a venv's interpreter ever disappears anyway, the script notices and rebuilds
-it; `source activate` on a dead venv otherwise succeeds and fails on every
-command after it.
+The interpreter is **probed, not hardcoded**, because neither source on
+Pleiades is dependable. The system `python3` is Ubuntu's, which splits
+`ensurepip` into a `python3.12-venv` package that is not installed and needs
+root; the Spack module names carry a hash that changes on every cluster rebuild
+and some are broken — after the 2026 one `python/3.11.14-cyf54tg` resolves
+while its own dependencies (`libxcrypt`, `util-linux-uuid`) do not. The script
+tries the `python3` on PATH, then every module from `module spider python`
+oldest-first, and falls back to `venv --without-pip` plus a `get-pip.py`
+bootstrap. It prints which one it settled on.
+
+If the venv ends up owned by a module, that module has to be loaded for the
+jobs too — the venv's `bin/python3` is a symlink into the Spack prefix. The
+summary prints the `HPC_MODULES` value to use; leave it blank if it prints
+blank.
+
+If a venv's interpreter later disappears, the script notices and rebuilds it;
+`source activate` on a dead venv otherwise succeeds and fails on every command
+after it.
 
 **cuML is off by default**: there is no rapids/cuml module on Pleiades and
 FairXAI falls back to CPU without it. For GPU, pass `--with-cuml` with a working
