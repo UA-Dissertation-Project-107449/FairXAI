@@ -45,10 +45,17 @@ bash ~/storage/FairXAI/hpc/setup_hpc.sh --update
 ```
 
 `setup_hpc.sh` uses the single repo-root `.venv` (per CLAUDE.md),
-`module load python/3.11.7 cuda/12.4.0`, and `pip install -e
-".[experiment]"`. **cuML is not installed by default** — there is no
-rapids/cuml module on Pleiades and FairXAI falls back to CPU when it is
-absent. Pass `--with-cuml` to enable GPU acceleration.
+`module load python/3.11.14-cyf54tg`, and `pip install -e ".[experiment]"`.
+
+Pleiades module names carry a Spack hash and do not survive a cluster rebuild:
+the 2026 move to Ubuntu 24.04 retired `python/3.11.7` and `cuda/12.4.0`. When
+that happens, run `module spider python`, set `HPC_MODULES`, and re-run this
+script — the venv's interpreter is a symlink into the old module's prefix, so
+it dies with the module and has to be rebuilt, not just re-pointed.
+
+**cuML is off by default**: there is no rapids/cuml module on Pleiades and
+FairXAI falls back to CPU without it. For GPU, pass `--with-cuml` with
+`cuda/12.8.1-kzpbyf7` in `HPC_MODULES`.
 
 The script prints the exact `HPC_*` values to copy into the WebApp `.env`.
 
@@ -56,7 +63,8 @@ The script prints the exact `HPC_*` values to copy into the WebApp `.env`.
 
 Both scripts are parametrized entirely by env vars (passed via
 `sbatch --export=ALL,VAR=...`). SLURM jobs start a fresh shell, so each
-script re-runs `module load` and activates the venv itself.
+script activates the venv itself. Neither loads a module unless `HPC_MODULES`
+is set; the venv carries its own interpreter.
 
 `characterize.slurm` — required: `DATASET_PATH`, `RESULTS_DIR`.
 Optional: `FAIRXAI_VENV`, `HPC_MODULES`, `TARGET_COLUMN`, `INDEX_COLUMN`.

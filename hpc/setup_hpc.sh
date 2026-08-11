@@ -23,7 +23,10 @@ PROJ_ROOT="${HPC_PROJ_ROOT:-$HOME/storage}"   # symlink -> /beegfs/.../proj-data
 FAIRXAI_REPO="${FAIRXAI_REPO:-}"               # git URL; required on first bootstrap
 FAIRXAI_HOME="${FAIRXAI_HOME:-$PROJ_ROOT/FairXAI}"
 FAIRXAI_BRANCH="${FAIRXAI_BRANCH:-}"           # empty = remote default / leave as-is
-HPC_MODULES="${HPC_MODULES:-python/3.11.7 cuda/12.4.0}"
+# Needs a real module, unlike the SLURM scripts: this is what builds the venv.
+# Pleiades names carry a Spack hash and change on cluster rebuilds, so run
+# `module spider python` if it stops resolving. For --with-cuml add cuda/12.8.1-kzpbyf7.
+HPC_MODULES="${HPC_MODULES:-python/3.11.14-cyf54tg}"
 CUML_VERSION="${CUML_VERSION:-25.2.1}"
 
 UPDATE_ONLY=0
@@ -49,7 +52,9 @@ if [ -n "$FAIRXAI_BRANCH" ]; then
 fi
 
 # --- load modules -----------------------------------------------------------
-if command -v module >/dev/null 2>&1; then
+if [ -z "${HPC_MODULES// /}" ]; then
+    echo "==> HPC_MODULES empty — using whatever python is on PATH"
+elif command -v module >/dev/null 2>&1; then
     echo "==> module load $HPC_MODULES"
     # shellcheck disable=SC2086
     module load $HPC_MODULES

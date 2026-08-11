@@ -31,9 +31,12 @@ set -euo pipefail
 : "${DATASET_PATH:?DATASET_PATH is required}"
 : "${RESULTS_DIR:?RESULTS_DIR is required}"
 
-# SLURM jobs start a fresh shell — load modules + venv here, not just at setup.
-HPC_MODULES="${HPC_MODULES:-python/3.11.7}"
-if command -v module >/dev/null 2>&1; then
+# SLURM jobs start a fresh shell, so the venv is activated here, not just at setup.
+# No module by default: the venv brings its own interpreter, and the old
+# `python/3.11.7` default died in the 2026 Spack rebuild. 
+# Set HPC_MODULES only if a job needs something the venv lacks.
+HPC_MODULES="${HPC_MODULES:-}"
+if [ -n "${HPC_MODULES// /}" ] && command -v module >/dev/null 2>&1; then
     # shellcheck disable=SC2086
     module load $HPC_MODULES
 fi
