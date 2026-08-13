@@ -31,8 +31,9 @@ set -euo pipefail
 : "${RESULT_FILE:?RESULT_FILE is required}"
 : "${TARGET_COLUMN:?TARGET_COLUMN is required}"
 
-HPC_MODULES="${HPC_MODULES:-python/3.11.7}"
-if command -v module >/dev/null 2>&1; then
+# No module by default; the venv brings its own interpreter. See characterize.slurm.
+HPC_MODULES="${HPC_MODULES:-}"
+if [ -n "${HPC_MODULES//[[:space:]]/}" ] && command -v module >/dev/null 2>&1; then
     # shellcheck disable=SC2086
     module load $HPC_MODULES
 fi
