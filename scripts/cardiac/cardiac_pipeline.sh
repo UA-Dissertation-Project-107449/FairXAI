@@ -728,7 +728,7 @@ if should_run 9 && should_run 10 && should_run 11 && [[ "$RUN_ATTRIBUTE_BINNING"
     AGE_PID=$!
 
     EXPERIMENT_RUN_MODE=full ARCHIVE_PREVIOUS=$ARCHIVE_EXPERIMENTS python3 "$ROOT_DIR/scripts/cardiac/mitigation.py" \
-        --config "$MITIGATION_CONFIG" --run-id "$RUN_ID" "${DATASET_ARGS[@]}" $VERBOSE_FLAG &
+        --config "$MITIGATION_CONFIG" --run-id "$RUN_ID" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $VERBOSE_FLAG &
     MIT_PID=$!
 
     python3 "$ROOT_DIR/scripts/cardiac/combinatorial.py" \
@@ -784,7 +784,7 @@ if should_run 10; then
     elif [[ "$RUN_MITIGATION" == "true" ]]; then
         echo "[PHASE 10/12] Mitigation techniques comparison"
         EXPERIMENT_RUN_MODE=full ARCHIVE_PREVIOUS=$ARCHIVE_EXPERIMENTS python3 "$ROOT_DIR/scripts/cardiac/mitigation.py" \
-            --config "$MITIGATION_CONFIG" --run-id "$RUN_ID" "${DATASET_ARGS[@]}" $VERBOSE_FLAG
+            --config "$MITIGATION_CONFIG" --run-id "$RUN_ID" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $VERBOSE_FLAG
         ARCHIVE_EXPERIMENTS=false
         mark_done 10
         echo ""
