@@ -63,8 +63,10 @@ STAGE_MAP = {
     "threshold_optimizer": "post-processing",
 }
 
-# Mitigation engine currently assumes logistic baseline for pre/in/post mitigation.
-# This set is now config-driven (mitigation_supported_model_types in combinatorial.yaml).
+# The mitigation engine builds whichever family the row asks for, so this set is
+# a compute budget rather than a capability limit: families listed here pay for
+# the full technique grid, the rest run baseline-only arms.
+# Config-driven (mitigation_supported_model_types in combinatorial.yaml).
 # The module-level default is kept as a fallback when the config key is absent.
 _DEFAULT_MITIGATION_SUPPORTED_MODEL_TYPES = {"logistic_regression"}
 
@@ -369,6 +371,20 @@ def _build_postprocessing_base_model(model_type, model_params=None):
     """
     model_class = get_model_class(model_type or "logistic_regression")
     return model_class(**(model_params or {}))
+
+
+def _build_mitigation_engine(config: Dict[str, Any]) -> MitigationEngine:
+    """Engine for one experiment row, bound to that row's model family.
+
+    The row's own ``model_params`` are handed over too, so an HPO-tuned
+    random forest is mitigated with the same hyperparameters it was tuned
+    with rather than the wrapper defaults.
+    """
+    return MitigationEngine(
+        random_state=config.get("random_seed", 42),
+        model_type=config.get("model_type", "logistic_regression"),
+        model_params=config.get("model_params", {}) or {},
+    )
 
 
 def _resolve_model_variants(
@@ -1000,7 +1016,7 @@ def run_single_split_experiment(
     xai_enabled = _is_xai_enabled_for_phase(xai_cfg)
 
     # Initialize mitigation engine
-    engine = MitigationEngine()
+    engine = _build_mitigation_engine(config)
 
     # Apply mitigation technique
     mitigation = config["mitigation_technique"]
@@ -1259,7 +1275,7 @@ def run_cv_experiment(
         if combo_chain is None and stage is None:
             raise ValueError(f"Unknown mitigation technique for CV: {mitigation}")
 
-        engine = MitigationEngine()
+        engine = _build_mitigation_engine(config)
         folds = cv_trainer.create_stratified_folds(X_full_raw, y_full, sensitive_full)
         fold_results = []
         all_predictions = []

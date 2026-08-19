@@ -115,3 +115,52 @@ def test_postprocessing_base_model_follows_model_type():
         model_params={"n_estimators": 10, "max_depth": 3},
     )
     assert isinstance(built, RandomForestModel)
+
+
+def _load_runner_module():
+    """Load the runner as a standalone module so its globals can be patched."""
+    import importlib.util
+
+    root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location(
+        "combi_runner", root / "scripts" / "experiments" / "run_combinatorial_experiments.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_sweep_engine_uses_the_row_model_family(monkeypatch):
+    """Stage 11 rows must mitigate the family the row actually trains."""
+    module = _load_runner_module()
+
+    seen = {}
+
+    class _SpyEngine:
+        def __init__(self, *args, **kwargs):
+            seen.update(kwargs)
+
+    monkeypatch.setattr(module, "MitigationEngine", _SpyEngine)
+    module._build_mitigation_engine(
+        {"model_type": "xgboost", "model_params": {"max_depth": 3}, "random_seed": 42}
+    )
+    assert seen["model_type"] == "xgboost"
+    assert seen["model_params"] == {"max_depth": 3}
+    assert seen["random_state"] == 42
+
+
+def test_sweep_engine_defaults_to_logistic_regression(monkeypatch):
+    """A row without a family keeps the historical logistic-regression engine."""
+    module = _load_runner_module()
+
+    seen = {}
+
+    class _SpyEngine:
+        def __init__(self, *args, **kwargs):
+            seen.update(kwargs)
+
+    monkeypatch.setattr(module, "MitigationEngine", _SpyEngine)
+    module._build_mitigation_engine({})
+    assert seen["model_type"] == "logistic_regression"
+    assert seen["model_params"] == {}
+    assert seen["random_state"] == 42
