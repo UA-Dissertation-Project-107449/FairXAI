@@ -567,3 +567,32 @@ class TestClusterEvidencePlots:
         assert save_cluster_fairness_heatmap(fairness_df, heatmap) is None
         assert not profile.exists()
         assert not heatmap.exists()
+
+
+def test_mitigated_families_lists_only_families_with_mitigation_rows():
+    """Radar captions must describe the run, not a remembered LR-only world."""
+    import pandas as pd
+
+    from fairxai.viz.fairness_comparison import _mitigated_families
+
+    df = pd.DataFrame(
+        {
+            "model_type": [
+                "logistic_regression",
+                "logistic_regression",
+                "random_forest",
+                "svm",
+            ],
+            "mitigation_technique": ["baseline", "smote", "smote", "baseline"],
+        }
+    )
+    assert _mitigated_families(df) == ["logistic_regression", "random_forest"]
+
+
+def test_mitigated_families_empty_without_model_column():
+    import pandas as pd
+
+    from fairxai.viz.fairness_comparison import _mitigated_families
+
+    assert _mitigated_families(pd.DataFrame({"mitigation_technique": ["smote"]})) == []
+    assert _mitigated_families(None) == []

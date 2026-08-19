@@ -227,11 +227,12 @@ def _generate_transformation_plots(
     run_dir: Path,
     full_df: pd.DataFrame | None,
     out_dir: Path,
+    comparison_config: dict | None = None,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     _phase("transformation plots")
 
-    # 4. Transformation impact - best LR mitigation vs baseline (from full_comparison.csv)
+    # 4. Transformation impact - best mitigation vs baseline (from full_comparison.csv)
     if full_df is not None:
         baseline_rows = full_df[full_df["mitigation_technique"] == "baseline"]
         non_baseline = full_df[full_df["mitigation_technique"] != "baseline"]
@@ -273,7 +274,9 @@ def _generate_transformation_plots(
 
     # 5. Before/after distributions - look for train prediction CSVs (pre- and post-SMOTE split)
     results_dir = run_dir / "baseline" / "results" / "predictions"
-    pred_csvs = sorted(results_dir.glob("*_logistic_regression_train.csv"))
+    selection_cfg = (comparison_config or {}).get("selection", {})
+    primary_model = selection_cfg.get("primary_model_type", "logistic_regression")
+    pred_csvs = sorted(results_dir.glob(f"*_{primary_model}_train.csv"))
     if pred_csvs:
         pred_df = pd.read_csv(pred_csvs[0])
         feature_cols = [c for c in _FEATURE_COLS if c in pred_df.columns]
@@ -834,7 +837,9 @@ def main() -> None:
     )
 
     _generate_fairness_plots(full_df, run_dir, out_base / "fairness", comparison_config)
-    _generate_transformation_plots(run_dir, full_df, out_base / "transformations")
+    _generate_transformation_plots(
+        run_dir, full_df, out_base / "transformations", comparison_config
+    )
     _generate_cross_model_plots(
         fairness_comparison_group_df, out_base / "cross_model", comparison_config
     )
