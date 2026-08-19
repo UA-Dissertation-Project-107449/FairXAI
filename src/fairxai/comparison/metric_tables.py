@@ -139,6 +139,12 @@ def build_experiment_index(full_df: pd.DataFrame) -> pd.DataFrame:
     for _, row in full_df.iterrows():
         baseline, source = find_matching_baseline(row, exact, no_variant)
         is_baseline = str(row.get("mitigation_technique")) == "baseline"
+        # False means the estimator rejected sample_weight and was fitted without
+        # it (the cuML random forest), so the row is a baseline wearing a
+        # mitigation label. None means the run predates the flag, or the
+        # technique never weights samples; neither is a degradation.
+        weights_applied = row.get("sample_weight_applied")
+        weights_applied = None if pd.isna(weights_applied) else weights_applied
         rows.append(
             {
                 **_identity(row),
@@ -148,6 +154,8 @@ def build_experiment_index(full_df: pd.DataFrame) -> pd.DataFrame:
                     baseline.get("experiment_id") if baseline is not None else None
                 ),
                 "baseline_source": "self" if is_baseline else source,
+                "sample_weight_applied": weights_applied,
+                "mitigation_degraded": (not is_baseline) and weights_applied is False,
             }
         )
     return pd.DataFrame(rows)
@@ -427,6 +435,29 @@ def build_fairness_evidence_summary_by_model(
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
+def _degraded_mitigation_warnings(experiment_index: pd.DataFrame) -> list[str]:
+    """Name the families whose mitigation rows are baselines in disguise.
+
+    A cuML-backed estimator accepts no ``sample_weight``, so reweighting there
+    fits an unweighted model and produces a plausible-looking row. The engine
+    warns at fit time, but nobody is reading the log by the time these tables
+    are compared, so the warning has to travel with the evidence.
+    """
+    if experiment_index is None or experiment_index.empty:
+        return []
+    if "mitigation_degraded" not in experiment_index.columns:
+        return []
+    degraded = experiment_index[experiment_index["mitigation_degraded"].fillna(False).astype(bool)]
+    if degraded.empty:
+        return []
+    families = sorted(degraded["model_type"].astype(str).unique())
+    return [
+        f"{len(degraded)} mitigation row(s) were fitted without sample weights "
+        f"(estimator rejected them) and are effectively baselines: "
+        f"{', '.join(families)}. See experiment_index.mitigation_degraded."
+    ]
+
+
 def write_canonical_comparison_outputs(
     full_df: pd.DataFrame,
     per_group_df: pd.DataFrame | None,
@@ -516,7 +547,7 @@ def write_canonical_comparison_outputs(
             ],
             "demographic_parity_group": "improvement = reduced distance to overall rate",
         },
-        "warnings": [],
+        "warnings": _degraded_mitigation_warnings(experiment_index),
     }
     with (output_dir / "comparison_manifest.json").open("w") as f:
         json.dump(manifest, f, indent=2)
