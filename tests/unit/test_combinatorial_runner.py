@@ -209,3 +209,66 @@ def test_combinatorial_config_lists_combo_families():
     # svm is an RBF kernel, O(n^2) in rows, and resampling techniques add rows.
     assert "svm" not in supported
     assert set(combos).issubset(set(supported))
+
+
+def _tiny_splits(seed=11, n=120):
+    """Synthetic single split with one binary sensitive column."""
+    import pandas as pd
+
+    rng = np.random.default_rng(seed)
+    X = pd.DataFrame(
+        {
+            "f1": rng.normal(size=n),
+            "f2": rng.normal(size=n),
+            "f3": rng.normal(size=n),
+        }
+    )
+    y = pd.Series((X["f1"] + rng.normal(scale=0.5, size=n) > 0).astype(int), name="heart_disease")
+    sensitive = pd.DataFrame({"sex": rng.integers(0, 2, size=n)})
+    half = n // 2
+    return {
+        "X_train": X.iloc[:half].reset_index(drop=True),
+        "y_train": y.iloc[:half].reset_index(drop=True),
+        "X_test": X.iloc[half:].reset_index(drop=True),
+        "y_test": y.iloc[half:].reset_index(drop=True),
+        "X_train_raw": X.iloc[:half].reset_index(drop=True),
+        "sensitive_train": sensitive.iloc[:half].reset_index(drop=True),
+        "sensitive_test": sensitive.iloc[half:].reset_index(drop=True),
+        "sensitive_cols": ["sex"],
+    }
+
+
+def test_single_split_result_carries_mitigation_metadata(tmp_path):
+    """Whether reweighting actually weighted anything must survive to disk.
+
+    The cuML forest silently ignores sample weights, so a row can be labelled
+    "reweighting" while being a plain baseline; the log line that says so is
+    gone by the time anyone reads the results.
+    """
+    import logging
+
+    from fairxai.experiments.versioning import ExperimentVersioning
+
+    module = _load_runner_module()
+    versioning = ExperimentVersioning(base_results_dir=tmp_path)
+
+    result = module.run_single_split_experiment(
+        "exp_test",
+        {
+            "dataset": "synthetic",
+            "binning_strategy": "fixed_10yr",
+            "mitigation_technique": "reweighting",
+            "training_method": "single_split",
+            "random_seed": 42,
+            "model_type": "logistic_regression",
+            "model_params": {},
+            "sensitive_attributes": ["sex"],
+            "xai": {"enabled": False, "mode": "disabled"},
+        },
+        _tiny_splits(),
+        versioning,
+        logging.getLogger("test"),
+    )
+
+    assert result["mitigation_metadata"]["sample_weight_applied"] is True
+    assert result["mitigation_metadata"]["model_type"] == "logistic_regression"

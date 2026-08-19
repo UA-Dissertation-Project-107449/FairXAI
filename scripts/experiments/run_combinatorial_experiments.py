@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sys
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -997,7 +998,10 @@ def run_single_experiment(
         return results
 
     except Exception as e:
+        # str(e) alone is useless for the shape errors these experiments hit
+        # (a bare "(slice(None, None, None), 1)" says nothing about where).
         logger.error(f"Experiment {exp_id} failed: {str(e)}")
+        logger.debug("Traceback for %s:\n%s", exp_id, traceback.format_exc())
         duration = (datetime.now() - start_time).total_seconds()
 
         return {
@@ -1176,6 +1180,10 @@ def run_single_split_experiment(
         "configuration": config,
         "test_metrics": result["test_metrics"],
         "fairness_metrics": fairness_results,
+        # Carries sample_weight_applied: a row can say "reweighting" while the
+        # estimator silently ignored the weights (cuML forest). Only the engine
+        # knows, and the warning it logs is long gone by comparison time.
+        "mitigation_metadata": result.get("metadata", {}),
         "training_method": "single_split",
         "n_folds": 1,
     }
@@ -1259,6 +1267,7 @@ def run_cv_experiment(
             len(X_full), size=min(lime_n, len(X_full)), replace=False
         ).tolist()
 
+    mitigation_metadata: Dict[str, Any] = {}
     if mitigation == "baseline":
         model_type = config.get("model_type", "logistic_regression")
         model_class = get_model_class(model_type)
@@ -1393,6 +1402,7 @@ def run_cv_experiment(
                         f"[XAI] fold={fold_idx + 1}/{n_folds} skipped=model_type_not_xai_compatible"
                     )
 
+            mitigation_metadata = result.get("metadata", {})
             fold_results.append(fold_result_entry)
 
             y_pred = _coerce_label_vector(result["predictions"]["y_pred"])
@@ -1462,6 +1472,9 @@ def run_cv_experiment(
         "cv_results": cv_results["aggregated_metrics"],
         "fold_results": cv_results["fold_results"],
         "fairness_metrics": fairness_results,
+        # Last fold's engine metadata; the flags it carries (model_type,
+        # sample_weight_applied) are properties of the family, not the fold.
+        "mitigation_metadata": mitigation_metadata,
         "training_method": "kfold_cv",
         "n_folds": n_folds,
     }
