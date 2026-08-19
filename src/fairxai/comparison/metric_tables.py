@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -394,6 +395,38 @@ def build_fairness_evidence_summary(
     return pd.DataFrame(rows)
 
 
+def build_fairness_evidence_summary_by_model(
+    full_df: pd.DataFrame,
+    group_metric_deltas: pd.DataFrame | None,
+    config: dict[str, Any],
+) -> pd.DataFrame:
+    """Run the primary-model evidence selection once per model family.
+
+    The dissertation's headline evidence stays the primary model
+    (``selection.primary_model_type``) and that table must not change shape;
+    this is the cross-model appendix view. Every other selection rule — the
+    dataset filter, the recall floor, ``top_n`` — is left alone, so the only
+    difference between a family's rows here and the headline table is which
+    family was asked for.
+    """
+    if full_df is None or full_df.empty or "model_type" not in full_df.columns:
+        return pd.DataFrame()
+
+    frames = []
+    for model_type in sorted(full_df["model_type"].astype(str).unique()):
+        scoped_config = deepcopy(config)
+        scoped_config["selection"] = {
+            **config.get("selection", {}),
+            "primary_model_type": model_type,
+        }
+        summary = build_fairness_evidence_summary(full_df, group_metric_deltas, scoped_config)
+        if summary is None or summary.empty:
+            continue
+        frames.append(summary)
+
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
 def write_canonical_comparison_outputs(
     full_df: pd.DataFrame,
     per_group_df: pd.DataFrame | None,
@@ -411,6 +444,9 @@ def write_canonical_comparison_outputs(
     group_metric_values = build_group_metric_values(per_group_df)
     group_metric_deltas = build_group_metric_deltas(per_group_df)
     fairness_summary = build_fairness_evidence_summary(full_df, group_metric_deltas, config)
+    fairness_summary_by_model = build_fairness_evidence_summary_by_model(
+        full_df, group_metric_deltas, config
+    )
 
     tables = {
         "experiment_index": experiment_index,
@@ -419,6 +455,7 @@ def write_canonical_comparison_outputs(
         "group_metric_values": group_metric_values,
         "group_metric_deltas": group_metric_deltas,
         "fairness_evidence_summary": fairness_summary,
+        "fairness_evidence_summary_by_model": fairness_summary_by_model,
     }
     for name, df in tables.items():
         df.to_csv(output_dir / f"{name}.csv", index=False)
@@ -435,6 +472,7 @@ def write_canonical_comparison_outputs(
             "group_metric_values.csv",
             "group_metric_deltas.csv",
             "fairness_evidence_summary.csv",
+            "fairness_evidence_summary_by_model.csv",
         ],
         "compatibility_outputs": [
             "full_comparison.csv",
