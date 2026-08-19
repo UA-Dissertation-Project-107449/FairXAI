@@ -194,6 +194,28 @@ def load_mitigation_predictions(
     return out
 
 
+def list_mitigated_model_types(run_root: Path, dataset: str) -> List[str]:
+    """Model families with persisted mitigation predictions for *dataset*.
+
+    Empty when the run predates the multi-model stage 10 and wrote no
+    ``index.json``. That is deliberately not reported as "logistic regression":
+    the caller owns the fallback, and only it knows which family the legacy
+    files belong to.
+    """
+    index_path = run_root / "experiments" / "mitigation" / "predictions" / "index.json"
+    if not index_path.exists():
+        return []
+    with open(index_path) as f:
+        entries = json.load(f)
+    return sorted(
+        {
+            str(entry.get("model_type"))
+            for entry in entries
+            if entry.get("dataset") == dataset and entry.get("model_type")
+        }
+    )
+
+
 def run_age_binning(
     run_root: Path,
     dataset: str,
@@ -211,9 +233,12 @@ def run_age_binning(
 
     * **Axis B** (binning sensitivity) — per baseline model, sweep strategies on
       its predictions → ``out_base/<dataset>/<model>/``.
-    * **Axis A** (mitigation effect) — pair the *baseline_model* baseline preds
-      ("before") against each persisted mitigation set ("after") →
-      ``out_base/<dataset>/before_after/<technique>_<constraint>/``.
+    * **Axis A** (mitigation effect) — for every mitigated family, pair that
+      family's baseline preds ("before") against each of its persisted
+      mitigation sets ("after") →
+      ``out_base/<dataset>/before_after/<model>/<technique>_<constraint>/``.
+      *baseline_model* is only the fallback family for legacy runs that wrote
+      no ``predictions/index.json``.
 
     Returns a summary dict, or ``None`` when no baseline predictions exist.
     """
@@ -258,23 +283,36 @@ def run_age_binning(
         if grid is not None:
             summary["axis_b_models"].append(model)
 
-    # Axis A — before (baseline_model) vs each mitigation set.
-    mitigation = load_mitigation_predictions(run_root, dataset, model_type=baseline_model)
-    before_df = baseline_models.get(baseline_model)
-    if mitigation and before_df is not None:
+    # Axis A — per family, its own baseline ("before") vs each of its mitigation
+    # sets. Pairing across families would measure the family change, not the
+    # mitigation, so a family without baseline predictions is skipped, not
+    # substituted.
+    for model in list_mitigated_model_types(run_root, dataset) or [baseline_model]:
+        mitigation = load_mitigation_predictions(run_root, dataset, model_type=model)
+        if not mitigation:
+            continue
+        before_df = baseline_models.get(model)
+        if before_df is None:
+            logger.warning(
+                "[WARN] age-binning Axis A: %s has mitigation predictions but no baseline "
+                "predictions for %s — skipping its before/after pairs.",
+                model,
+                dataset,
+            )
+            continue
         feats = resolve_feature_cols(before_df, exclude=feature_exclude)
         for regime, after_df in mitigation.items():
             grid = run_age_binning_sensitivity(
                 {"before": before_df, "after": after_df},
                 strategies=strategies,
                 feature_cols=feats,
-                out_dir=out_base / dataset / "before_after" / regime,
+                out_dir=out_base / dataset / "before_after" / model / regime,
                 k=k,
                 min_bin_size=min_bin_size,
                 age_col=age_col,
             )
             if grid is not None:
-                summary["axis_a_regimes"].append(regime)
+                summary["axis_a_regimes"].append(f"{model}/{regime}")
 
     return summary
 
