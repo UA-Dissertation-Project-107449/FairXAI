@@ -46,7 +46,6 @@ from fairxai.explainability.tabular import (
 from fairxai.fairness.metrics import FairnessMetrics
 from fairxai.fairness.mitigation import MitigationEngine
 from fairxai.models import get_model_class
-from fairxai.models.baseline import BaselineLogisticRegression
 from fairxai.models.cv_trainer import CVTrainer
 from fairxai.utils.config import load_yaml_config
 from fairxai.utils.gpu import detect_accelerator
@@ -359,6 +358,17 @@ def _load_model_config(project_root: Path, model_type: str) -> Dict[str, Any]:
     path = project_root / "configs" / "models" / f"{model_type}.yaml"
     cfg = load_yaml_config(str(path))
     return dict(cfg.get("hyperparameters", {}))
+
+
+def _build_postprocessing_base_model(model_type, model_params=None):
+    """Instantiate the model family that post-processing will wrap.
+
+    Post-processing (threshold_optimizer) adjusts an already-trained model's
+    scores, so the base model must be the same family as the experiment row —
+    otherwise a row labelled random_forest would report LR behaviour.
+    """
+    model_class = get_model_class(model_type or "logistic_regression")
+    return model_class(**(model_params or {}))
 
 
 def _resolve_model_variants(
@@ -1049,7 +1059,10 @@ def run_single_split_experiment(
             raise ValueError(f"Unknown mitigation technique: {mitigation}")
 
         if stage == "post-processing":
-            base_model = BaselineLogisticRegression(**config.get("model_params", {}))
+            base_model = _build_postprocessing_base_model(
+                config.get("model_type", "logistic_regression"),
+                config.get("model_params", {}),
+            )
             base_model.train(splits["X_train"], splits["y_train"])
 
         # Apply single mitigation technique
@@ -1294,7 +1307,10 @@ def run_cv_experiment(
             else:
                 base_model = None
                 if stage == "post-processing":
-                    base_model = BaselineLogisticRegression(**config.get("model_params", {}))
+                    base_model = _build_postprocessing_base_model(
+                        config.get("model_type", "logistic_regression"),
+                        config.get("model_params", {}),
+                    )
                     base_model.train(X_train, y_train)
 
                 result = engine.apply_technique(
