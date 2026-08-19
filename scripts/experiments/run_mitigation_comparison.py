@@ -524,6 +524,28 @@ def _write_mitigation_report(df: "pd.DataFrame", report_file: "Path") -> None:
     Path(report_file).write_text("\n".join(lines))
 
 
+def _resolve_model_types(cli_model_types, experiment_cfg):
+    """CLI overrides config; config overrides the historical LR-only default."""
+    if cli_model_types:
+        return [str(m).strip().lower() for m in cli_model_types if str(m).strip()]
+    configured = experiment_cfg.get("model_types") or []
+    resolved = [str(m).strip().lower() for m in configured if str(m).strip()]
+    return resolved or ["logistic_regression"]
+
+
+def _load_model_params(project_root, model_type):
+    """Base hyperparameters for a family, from configs/models/<model_type>.yaml."""
+    cfg_path = Path(project_root) / "configs" / "models" / f"{model_type}.yaml"
+    if not cfg_path.exists():
+        logging.warning(
+            "No model config at %s - falling back to wrapper class defaults for %s",
+            cfg_path,
+            model_type,
+        )
+        return {}
+    return dict(load_yaml_config(str(cfg_path)).get("hyperparameters", {}))
+
+
 def run_analysis(
     config_path: str,
     datasets: list = None,
@@ -534,6 +556,7 @@ def run_analysis(
     run_id: str = None,
     output_root: str = None,
     verbose: int = 0,
+    model_types: list = None,
 ):
     """
     Runs the mitigation comparison experiment.
@@ -548,10 +571,10 @@ def run_analysis(
     with open(schema_path, "r") as f:
         schema_cfg = json.load(f)
 
-    _lr_cfg = load_yaml_config(
-        str(project_root / "configs" / "models" / "logistic_regression.yaml")
-    )
-    model_params = dict(_lr_cfg.get("hyperparameters", {}))
+    model_types = _resolve_model_types(model_types, experiment_cfg)
+    logging.info("Mitigation model families: %s", model_types)
+    # Single-family params until the per-family loop lands (Task B2.2).
+    model_params = _load_model_params(project_root, model_types[0])
 
     target_col = experiment_cfg.get("data", {}).get("target", "heart_disease")
 
@@ -791,6 +814,13 @@ def main():
         "--datasets", type=str, nargs="+", help="Datasets to process (default: from config)"
     )
     parser.add_argument(
+        "--model-types",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Model families to mitigate (default: model_types in config, else logistic_regression)",
+    )
+    parser.add_argument(
         "--output-dir",
         type=str,
         help="Output directory (default: from config or output/{pipeline}/experiments/{run_mode}/latest_run/mitigation)",
@@ -835,6 +865,7 @@ def main():
         run_id=args.run_id,
         output_root=args.output_root,
         verbose=args.verbose,
+        model_types=args.model_types,
     )
 
 
