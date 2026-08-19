@@ -175,3 +175,16 @@ def test_manifest_warns_when_a_mitigation_row_was_degraded(tmp_path):
     warning = " ".join(manifest["warnings"])
     assert "sample weight" in warning.lower()
     assert "random_forest" in warning
+
+
+def test_by_model_summary_carries_the_degradation_flag():
+    """The appendix table is read on its own; it has to say when a row is hollow."""
+    df = _full_df()
+    df["sample_weight_applied"] = [
+        False if (m == "random_forest" and t == "reweighting") else None
+        for m, t in zip(df["model_type"], df["mitigation_technique"])
+    ]
+    out = build_fairness_evidence_summary_by_model(df, None, DEFAULT_COMPARISON_CONFIG)
+    degraded = out[out["mitigation_degraded"]]
+    assert list(degraded["model_type"]) == ["random_forest"]
+    assert list(degraded["mitigation_technique"]) == ["reweighting"]

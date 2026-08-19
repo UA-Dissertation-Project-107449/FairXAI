@@ -432,7 +432,39 @@ def build_fairness_evidence_summary_by_model(
             continue
         frames.append(summary)
 
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    if not frames:
+        return pd.DataFrame()
+    return _attach_degradation_flag(pd.concat(frames, ignore_index=True), full_df)
+
+
+def _attach_degradation_flag(summary: pd.DataFrame, full_df: pd.DataFrame) -> pd.DataFrame:
+    """Mark summary rows whose estimator dropped the sample weights.
+
+    The appendix table gets read on its own, away from experiment_index.csv and
+    the manifest, and a degraded row is indistinguishable from a technique that
+    simply did not help: both show a delta of zero.
+    """
+    summary = summary.copy()
+    if "experiment_id" not in summary.columns or "sample_weight_applied" not in full_df.columns:
+        summary["mitigation_degraded"] = False
+        return summary
+
+    applied = (
+        full_df.set_index(full_df["experiment_id"].astype(str))["sample_weight_applied"]
+        .groupby(level=0)
+        .first()
+    )
+    mapped = summary["experiment_id"].astype(str).map(applied)
+    # Only an explicit False is a degradation. Missing means "unknown" (a run
+    # from before the flag) and None means "the technique never weights rows".
+    summary["mitigation_degraded"] = mapped.apply(_is_explicit_false)
+    return summary
+
+
+def _is_explicit_false(value: Any) -> bool:
+    if value is None or pd.isna(value):
+        return False
+    return bool(value) is False
 
 
 def _degraded_mitigation_warnings(experiment_index: pd.DataFrame) -> list[str]:
