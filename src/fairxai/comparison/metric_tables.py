@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -138,6 +139,12 @@ def build_experiment_index(full_df: pd.DataFrame) -> pd.DataFrame:
     for _, row in full_df.iterrows():
         baseline, source = find_matching_baseline(row, exact, no_variant)
         is_baseline = str(row.get("mitigation_technique")) == "baseline"
+        # False means the estimator rejected sample_weight and was fitted without
+        # it (the cuML random forest), so the row is a baseline wearing a
+        # mitigation label. None means the run predates the flag, or the
+        # technique never weights samples; neither is a degradation.
+        weights_applied = row.get("sample_weight_applied")
+        weights_applied = None if pd.isna(weights_applied) else weights_applied
         rows.append(
             {
                 **_identity(row),
@@ -147,6 +154,8 @@ def build_experiment_index(full_df: pd.DataFrame) -> pd.DataFrame:
                     baseline.get("experiment_id") if baseline is not None else None
                 ),
                 "baseline_source": "self" if is_baseline else source,
+                "sample_weight_applied": weights_applied,
+                "mitigation_degraded": (not is_baseline) and weights_applied is False,
             }
         )
     return pd.DataFrame(rows)
@@ -394,6 +403,93 @@ def build_fairness_evidence_summary(
     return pd.DataFrame(rows)
 
 
+def build_fairness_evidence_summary_by_model(
+    full_df: pd.DataFrame,
+    group_metric_deltas: pd.DataFrame | None,
+    config: dict[str, Any],
+) -> pd.DataFrame:
+    """Run the primary-model evidence selection once per model family.
+
+    The dissertation's headline evidence stays the primary model
+    (``selection.primary_model_type``) and that table must not change shape;
+    this is the cross-model appendix view. Every other selection rule — the
+    dataset filter, the recall floor, ``top_n`` — is left alone, so the only
+    difference between a family's rows here and the headline table is which
+    family was asked for.
+    """
+    if full_df is None or full_df.empty or "model_type" not in full_df.columns:
+        return pd.DataFrame()
+
+    frames = []
+    for model_type in sorted(full_df["model_type"].astype(str).unique()):
+        scoped_config = deepcopy(config)
+        scoped_config["selection"] = {
+            **config.get("selection", {}),
+            "primary_model_type": model_type,
+        }
+        summary = build_fairness_evidence_summary(full_df, group_metric_deltas, scoped_config)
+        if summary is None or summary.empty:
+            continue
+        frames.append(summary)
+
+    if not frames:
+        return pd.DataFrame()
+    return _attach_degradation_flag(pd.concat(frames, ignore_index=True), full_df)
+
+
+def _attach_degradation_flag(summary: pd.DataFrame, full_df: pd.DataFrame) -> pd.DataFrame:
+    """Mark summary rows whose estimator dropped the sample weights.
+
+    The appendix table gets read on its own, away from experiment_index.csv and
+    the manifest, and a degraded row is indistinguishable from a technique that
+    simply did not help: both show a delta of zero.
+    """
+    summary = summary.copy()
+    if "experiment_id" not in summary.columns or "sample_weight_applied" not in full_df.columns:
+        summary["mitigation_degraded"] = False
+        return summary
+
+    applied = (
+        full_df.set_index(full_df["experiment_id"].astype(str))["sample_weight_applied"]
+        .groupby(level=0)
+        .first()
+    )
+    mapped = summary["experiment_id"].astype(str).map(applied)
+    # Only an explicit False is a degradation. Missing means "unknown" (a run
+    # from before the flag) and None means "the technique never weights rows".
+    summary["mitigation_degraded"] = mapped.apply(_is_explicit_false)
+    return summary
+
+
+def _is_explicit_false(value: Any) -> bool:
+    if value is None or pd.isna(value):
+        return False
+    return bool(value) is False
+
+
+def _degraded_mitigation_warnings(experiment_index: pd.DataFrame) -> list[str]:
+    """Name the families whose mitigation rows are baselines in disguise.
+
+    A cuML-backed estimator accepts no ``sample_weight``, so reweighting there
+    fits an unweighted model and produces a plausible-looking row. The engine
+    warns at fit time, but nobody is reading the log by the time these tables
+    are compared, so the warning has to travel with the evidence.
+    """
+    if experiment_index is None or experiment_index.empty:
+        return []
+    if "mitigation_degraded" not in experiment_index.columns:
+        return []
+    degraded = experiment_index[experiment_index["mitigation_degraded"].fillna(False).astype(bool)]
+    if degraded.empty:
+        return []
+    families = sorted(degraded["model_type"].astype(str).unique())
+    return [
+        f"{len(degraded)} mitigation row(s) were fitted without sample weights "
+        f"(estimator rejected them) and are effectively baselines: "
+        f"{', '.join(families)}. See experiment_index.mitigation_degraded."
+    ]
+
+
 def write_canonical_comparison_outputs(
     full_df: pd.DataFrame,
     per_group_df: pd.DataFrame | None,
@@ -411,6 +507,9 @@ def write_canonical_comparison_outputs(
     group_metric_values = build_group_metric_values(per_group_df)
     group_metric_deltas = build_group_metric_deltas(per_group_df)
     fairness_summary = build_fairness_evidence_summary(full_df, group_metric_deltas, config)
+    fairness_summary_by_model = build_fairness_evidence_summary_by_model(
+        full_df, group_metric_deltas, config
+    )
 
     tables = {
         "experiment_index": experiment_index,
@@ -419,6 +518,7 @@ def write_canonical_comparison_outputs(
         "group_metric_values": group_metric_values,
         "group_metric_deltas": group_metric_deltas,
         "fairness_evidence_summary": fairness_summary,
+        "fairness_evidence_summary_by_model": fairness_summary_by_model,
     }
     for name, df in tables.items():
         df.to_csv(output_dir / f"{name}.csv", index=False)
@@ -435,6 +535,7 @@ def write_canonical_comparison_outputs(
             "group_metric_values.csv",
             "group_metric_deltas.csv",
             "fairness_evidence_summary.csv",
+            "fairness_evidence_summary_by_model.csv",
         ],
         "compatibility_outputs": [
             "full_comparison.csv",
@@ -478,7 +579,7 @@ def write_canonical_comparison_outputs(
             ],
             "demographic_parity_group": "improvement = reduced distance to overall rate",
         },
-        "warnings": [],
+        "warnings": _degraded_mitigation_warnings(experiment_index),
     }
     with (output_dir / "comparison_manifest.json").open("w") as f:
         json.dump(manifest, f, indent=2)

@@ -156,6 +156,11 @@ def load_all_results(versioning: ExperimentVersioning) -> pd.DataFrame:
                 "model_variant": config.get("model_variant", "default"),
                 "status": results["execution"]["status"],
                 "error": results["execution"].get("error"),
+                # Whether reweighting actually weighted anything. False makes the
+                # row a baseline wearing a mitigation label; only the engine knew.
+                "sample_weight_applied": (results.get("mitigation_metadata") or {}).get(
+                    "sample_weight_applied"
+                ),
             }
 
             # Add performance metrics

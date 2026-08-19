@@ -631,6 +631,21 @@ def _best_rows_by_model(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _mitigated_families(full_df) -> list:
+    """Model families with at least one non-baseline row in this run.
+
+    Radar captions used to name logistic regression outright. Stages 10 and 11
+    now mitigate whichever families the config lists, so a hardcoded caption
+    can contradict the figure it sits under.
+    """
+    if full_df is None or len(full_df) == 0 or "model_type" not in full_df.columns:
+        return []
+    if "mitigation_technique" not in full_df.columns:
+        return []
+    mitigated = full_df[full_df["mitigation_technique"].astype(str) != "baseline"]
+    return sorted(mitigated["model_type"].astype(str).unique())
+
+
 def save_cross_model_baseline_radar(full_df: pd.DataFrame, output_file):
     """Baseline-only radar across model families."""
     if full_df is None or full_df.empty or "mitigation_technique" not in full_df.columns:
@@ -643,23 +658,29 @@ def save_cross_model_baseline_radar(full_df: pd.DataFrame, output_file):
         rows_df,
         output_file,
         "Cross-Model Baseline Radar",
-        note="Baseline-only comparison; mitigated LR configs are excluded.",
+        note="Baseline-only comparison; mitigated configurations are excluded.",
     )
 
 
 def save_cross_model_best_available_radar(full_df: pd.DataFrame, output_file):
-    """Appendix radar: best available row per model; LR may include mitigation."""
+    """Appendix radar: best available row per model; mitigated families may win."""
     if full_df is None or full_df.empty or "model_type" not in full_df.columns:
         return None
     rows_df = _best_rows_by_model(full_df.copy())
+    families = _mitigated_families(full_df)
+    if families:
+        note = (
+            "Appendix only: best available row per model. Mitigation candidates exist for "
+            + ", ".join(families)
+            + "; remaining families are baseline-only in this run."
+        )
+    else:
+        note = "Appendix only: best available row per model. No mitigation rows in this run."
     return _save_model_radar(
         rows_df,
         output_file,
         "Cross-Model Best Available Radar",
-        note=(
-            "Appendix only: logistic regression has mitigation candidates; "
-            "other models are baseline-only in current runs."
-        ),
+        note=note,
     )
 
 
