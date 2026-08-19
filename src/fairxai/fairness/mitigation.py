@@ -260,6 +260,7 @@ class InProcessingMitigation:
         max_iter: int = 50,
         random_state: int = 42,
         base_model_params: Optional[Dict[str, Any]] = None,
+        base_estimator=None,
     ):
         """
         Apply Exponentiated Gradient reduction for fairness.
@@ -275,7 +276,11 @@ class InProcessingMitigation:
             eps: Tolerance for constraint violation
             max_iter: Maximum iterations
             random_state: Random seed
-            base_model_params: Optional LogisticRegression kwargs override
+            base_model_params: LogisticRegression kwargs, used only when
+                ``base_estimator`` is None (the historical default path)
+            base_estimator: Pre-built sklearn-compatible estimator to constrain.
+                Must support ``fit(X, y, sample_weight=...)`` — every model in
+                MODEL_REGISTRY does.
 
         Returns:
             Trained fairness-aware model
@@ -291,11 +296,13 @@ class InProcessingMitigation:
         else:
             raise ValueError(f"Unknown constraint type: {constraint_type}")
 
-        # Base estimator
-        base_params = dict(base_model_params or {})
-        base_params.setdefault("max_iter", 1000)
-        base_params.setdefault("random_state", random_state)
-        base_model = LogisticRegression(**base_params)
+        # Base estimator: caller-supplied family, else the historical LR default.
+        if base_estimator is None:
+            base_params = dict(base_model_params or {})
+            base_params.setdefault("max_iter", 1000)
+            base_params.setdefault("random_state", random_state)
+            base_estimator = LogisticRegression(**base_params)
+        base_model = base_estimator
 
         # Fairness-aware model
         mitigator = ExponentiatedGradient(
@@ -319,6 +326,7 @@ class InProcessingMitigation:
         grid_size: int = 20,
         random_state: int = 42,
         base_model_params: Optional[Dict[str, Any]] = None,
+        base_estimator=None,
     ):
         """
         Apply Grid Search reduction for fairness.
@@ -333,6 +341,11 @@ class InProcessingMitigation:
             constraint_type: 'demographic_parity' or 'equalized_odds'
             grid_size: Number of lambda values to try
             random_state: Random seed
+            base_model_params: LogisticRegression kwargs, used only when
+                ``base_estimator`` is None (the historical default path)
+            base_estimator: Pre-built sklearn-compatible estimator to constrain.
+                Must support ``fit(X, y, sample_weight=...)`` — every model in
+                MODEL_REGISTRY does.
 
         Returns:
             Trained fairness-aware model
@@ -348,11 +361,13 @@ class InProcessingMitigation:
         else:
             raise ValueError(f"Unknown constraint type: {constraint_type}")
 
-        # Base estimator
-        base_params = dict(base_model_params or {})
-        base_params.setdefault("max_iter", 1000)
-        base_params.setdefault("random_state", random_state)
-        base_model = LogisticRegression(**base_params)
+        # Base estimator: caller-supplied family, else the historical LR default.
+        if base_estimator is None:
+            base_params = dict(base_model_params or {})
+            base_params.setdefault("max_iter", 1000)
+            base_params.setdefault("random_state", random_state)
+            base_estimator = LogisticRegression(**base_params)
+        base_model = base_estimator
 
         # Fairness-aware model
         mitigator = GridSearch(base_model, constraints=constraint, grid_size=grid_size)
@@ -934,6 +949,13 @@ class MitigationEngine:
     ) -> Dict:
         """Apply in-processing technique."""
         base_model_params = kwargs.pop("base_model_params", None)
+        # fairlearn reductions need the raw sklearn estimator, not our wrapper.
+        # Left as None for logistic regression so the historical base_model_params
+        # path stays byte-identical and published LR results still reproduce.
+        base_estimator = None
+        if self.model_type != "logistic_regression":
+            base_estimator = self._new_model().model
+
         if technique_name == "exponentiated_gradient":
             model = self.inprocessing.apply_exponentiated_gradient(
                 X_train,
@@ -942,6 +964,7 @@ class MitigationEngine:
                 sensitive_attr,
                 random_state=self.random_state,
                 base_model_params=base_model_params,
+                base_estimator=base_estimator,
                 **kwargs,
             )
         elif technique_name == "grid_search":
@@ -952,6 +975,7 @@ class MitigationEngine:
                 sensitive_attr,
                 random_state=self.random_state,
                 base_model_params=base_model_params,
+                base_estimator=base_estimator,
                 **kwargs,
             )
         else:
@@ -973,6 +997,7 @@ class MitigationEngine:
             "metadata": {
                 "technique": technique_name,
                 "stage": "in-processing",
+                "model_type": self.model_type,
                 "n_predictors": len(model.predictors_) if hasattr(model, "predictors_") else 1,
             },
         }

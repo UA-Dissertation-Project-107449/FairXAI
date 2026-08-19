@@ -77,3 +77,46 @@ def test_unknown_model_type_raises(tiny_split):
     engine = MitigationEngine(model_type="not_a_model")
     with pytest.raises(ValueError, match="Unknown model_type"):
         engine._new_model()
+
+
+def test_inprocessing_wraps_the_requested_family(tiny_split):
+    from sklearn.ensemble import RandomForestClassifier
+
+    X, y, sensitive = tiny_split
+    engine = MitigationEngine(
+        model_type="random_forest", model_params={"n_estimators": 5, "max_depth": 2}
+    )
+    result = engine.apply_technique(
+        technique_name="exponentiated_gradient",
+        stage="in-processing",
+        X_train=X,
+        y_train=y,
+        X_test=X,
+        y_test=y,
+        sensitive_train=sensitive,
+        sensitive_test=sensitive,
+        sensitive_attr="sex",
+        max_iter=2,
+    )
+    assert isinstance(result["model"].estimator, RandomForestClassifier)
+    assert result["metadata"]["model_type"] == "random_forest"
+
+
+def test_inprocessing_default_is_still_logistic_regression(tiny_split):
+    from sklearn.linear_model import LogisticRegression
+
+    X, y, sensitive = tiny_split
+    engine = MitigationEngine()
+    result = engine.apply_technique(
+        technique_name="exponentiated_gradient",
+        stage="in-processing",
+        X_train=X,
+        y_train=y,
+        X_test=X,
+        y_test=y,
+        sensitive_train=sensitive,
+        sensitive_test=sensitive,
+        sensitive_attr="sex",
+        max_iter=2,
+    )
+    assert isinstance(result["model"].estimator, LogisticRegression)
