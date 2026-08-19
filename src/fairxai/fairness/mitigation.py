@@ -744,8 +744,8 @@ class MitigationEngine:
         sensitive_attr:
             Which sensitive attribute column to use for fairness constraints.
         base_model_params:
-            Optional hyperparameters for the base logistic regression model
-            used by in/post-processing steps.
+            Optional hyperparameters for the fairlearn in-processing base
+            estimator. Ignored when the engine's own model family is used.
 
         Returns
         -------
@@ -818,19 +818,14 @@ class MitigationEngine:
             )
             trained_model = result["model"]
         else:
-            # Train a baseline LR model on the pre-processed data (needed for post-processing)
-            logger.info("  [baseline] training logistic regression on pre-processed data")
-            from fairxai.models.baseline import BaselineLogisticRegression
-
-            _blr_params = {
-                k: v for k, v in (base_model_params or {}).items() if k != "random_state"
-            }
-            trained_model = BaselineLogisticRegression(
-                random_state=self.random_state,
-                **_blr_params,
-            )
+            # Train the configured family on the pre-processed data
+            # (needed as the base model for any post-processing step).
+            logger.info("  [baseline] training %s on pre-processed data", self.model_type)
+            trained_model = self._new_model()
             if sample_weights is not None:
-                trained_model.model.fit(X_curr, y_curr, sample_weight=sample_weights)
+                trained_model = _fit_with_sample_weight(
+                    trained_model, X_curr, y_curr, sample_weights
+                )
             else:
                 trained_model.train(X_curr, y_curr)
 
@@ -867,6 +862,7 @@ class MitigationEngine:
         result["metadata"] = {
             "technique": "+".join(techniques),
             "stage": "combo",
+            "model_type": self.model_type,
             "combo_chain": techniques,
             "pre_steps": pre_steps,
             "in_step": in_step,
@@ -1038,6 +1034,7 @@ class MitigationEngine:
                     "metadata": {
                         "technique": technique_name,
                         "stage": "post-processing",
+                        "model_type": self.model_type,
                         "base_model": type(base_model).__name__,
                         "skipped": True,
                         "skip_reason": "degenerate_labels",
@@ -1080,6 +1077,7 @@ class MitigationEngine:
             "metadata": {
                 "technique": technique_name,
                 "stage": "post-processing",
+                "model_type": self.model_type,
                 "base_model": type(base_model).__name__,
             },
         }

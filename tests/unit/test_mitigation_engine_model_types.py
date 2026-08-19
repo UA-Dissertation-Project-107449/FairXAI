@@ -120,3 +120,43 @@ def test_inprocessing_default_is_still_logistic_regression(tiny_split):
         max_iter=2,
     )
     assert isinstance(result["model"].estimator, LogisticRegression)
+
+
+def test_combo_trains_the_requested_family(tiny_split):
+    X, y, sensitive = tiny_split
+    engine = MitigationEngine(
+        model_type="random_forest", model_params={"n_estimators": 5, "max_depth": 2}
+    )
+    result = engine.apply_combo(
+        techniques=["smote", "threshold_optimizer"],
+        X_train=X,
+        y_train=y,
+        X_test=X,
+        y_test=y,
+        sensitive_train=sensitive,
+        sensitive_test=sensitive,
+        sensitive_attr="sex",
+    )
+    assert result["metadata"]["model_type"] == "random_forest"
+
+
+def test_postprocessing_records_model_type(tiny_split):
+    X, y, sensitive = tiny_split
+    engine = MitigationEngine(
+        model_type="random_forest", model_params={"n_estimators": 5, "max_depth": 2}
+    )
+    base = engine._new_model()
+    base.train(X, y)
+    result = engine.apply_technique(
+        technique_name="threshold_optimizer",
+        stage="post-processing",
+        X_train=X,
+        y_train=y,
+        X_test=X,
+        y_test=y,
+        sensitive_train=sensitive,
+        sensitive_test=sensitive,
+        sensitive_attr="sex",
+        base_model=base,
+    )
+    assert result["metadata"]["model_type"] == "random_forest"
