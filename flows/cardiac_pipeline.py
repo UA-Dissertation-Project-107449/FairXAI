@@ -370,9 +370,16 @@ def analyze_attribute_binning(run_id: str, datasets: Optional[list[str]] = None,
 
 @task
 def compare_mitigation_techniques(
-    run_id: str, datasets: Optional[list[str]] = None, verbose: int = 0
+    run_id: str,
+    datasets: Optional[list[str]] = None,
+    model_types: Optional[list[str]] = None,
+    verbose: int = 0,
 ):
-    """Compares mitigation techniques."""
+    """Compares mitigation techniques.
+
+    *model_types* narrows the families mitigated; without it the runner falls
+    back to ``model_types`` in ``configs/experiments/mitigation.yaml``.
+    """
     logger = get_run_logger()
     logger.info("[PHASE 10/12] Mitigation techniques comparison")
     script = ROOT_DIR / "scripts" / "cardiac" / "mitigation.py"
@@ -386,6 +393,8 @@ def compare_mitigation_techniques(
     ]
     if datasets:
         args.extend(["--datasets", *datasets])
+    if model_types:
+        args.extend(["--model-types", *model_types])
     args.extend(_verbose_flags(verbose))
     _run_script(script, args, os.environ.copy())
 
@@ -911,7 +920,7 @@ def cardiac_pipeline(
             else:
                 wait = [serial_experiment_anchor] if serial_experiment_anchor else []
             mitigation_task = compare_mitigation_techniques.submit(
-                run_id, datasets, verbose, wait_for=wait
+                run_id, datasets, model_types, verbose, wait_for=wait
             )
             if not resolved_parallel_experiments:
                 serial_experiment_anchor = mitigation_task
@@ -1238,7 +1247,7 @@ Examples:
         "--model-types",
         nargs="+",
         default=None,
-        help="Optional model types override for baseline/combinatorial stages.",
+        help="Optional model-family override for the train, assess, mitigate and sweep stages.",
     )
     p.add_argument(
         "-v", "--verbose", action="count", default=0, help="Verbosity: -v=info, -vv=debug"

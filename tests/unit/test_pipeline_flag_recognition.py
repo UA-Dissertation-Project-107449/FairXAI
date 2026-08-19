@@ -152,3 +152,61 @@ def test_mitigation_stage_receives_model_type_args():
     for idx in invocations:
         block = "\n".join(lines[idx : idx + 3])
         assert "MODEL_TYPE_ARGS" in block, f"missing MODEL_TYPE_ARGS near line {idx + 1}"
+
+
+def _prefect_task_source(name: str) -> str:
+    """The body of one @task, up to whatever is defined next."""
+    source = PREFECT_FLOW.read_text(encoding="utf-8")
+    start = source.index(f"def {name}(")
+    end = source.index("\ndef ", start + 1)
+    return source[start:end]
+
+
+def test_prefect_mitigation_task_forwards_model_types() -> None:
+    """Stage 10's Prefect task must forward --model-types like the bash one does."""
+    task_source = _prefect_task_source("compare_mitigation_techniques")
+
+    assert "model_types: Optional[list[str]] = None," in task_source
+    assert 'args.extend(["--model-types", *model_types])' in task_source
+
+
+def test_prefect_mitigation_call_site_passes_model_types() -> None:
+    """The task takes model_types positionally, so the submit must name it.
+
+    Adding the parameter without touching the call site would silently bind
+    ``verbose`` to ``model_types``.
+    """
+    source = PREFECT_FLOW.read_text(encoding="utf-8")
+    start = source.index("compare_mitigation_techniques.submit(")
+    call = source[start : source.index(")", start)]
+
+    assert "model_types" in call
+
+
+def test_prefect_and_bash_agree_on_which_stages_take_model_types() -> None:
+    """Both orchestrators drive the same scripts; the family scope must match.
+
+    Bash appends ``MODEL_TYPE_ARGS`` to a fixed set of phase runners. Any runner
+    that gets it there must have a ``--model-types`` branch in the flow task that
+    launches the same script, or a flow run silently mitigates a different set of
+    families than the identical bash invocation.
+    """
+    bash = BASH_PIPELINE.read_text(encoding="utf-8").splitlines()
+    scripts_with_model_types = set()
+    for idx, line in enumerate(bash):
+        block = "\n".join(bash[idx : idx + 4])
+        if "MODEL_TYPE_ARGS" not in block:
+            continue
+        for token in block.split():
+            if token.endswith(".py") or token.endswith('.py"'):
+                scripts_with_model_types.add(Path(token.strip('"')).name)
+
+    flow = PREFECT_FLOW.read_text(encoding="utf-8")
+    for name in ("mitigation.py", "combinatorial.py"):
+        assert name in scripts_with_model_types, f"bash stopped scoping {name} by family"
+        start = flow.index(f'"{name.removesuffix(".py")}.py"')
+        task_start = flow.rindex("\ndef ", 0, start)
+        task_end = flow.index("\ndef ", start)
+        assert (
+            'args.extend(["--model-types", *model_types])' in flow[task_start:task_end]
+        ), f"flow task launching {name} does not forward --model-types"
