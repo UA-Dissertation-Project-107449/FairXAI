@@ -24,9 +24,31 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.utils.class_weight import compute_sample_weight
 
 # Local imports
-from ..models.baseline import BaselineLogisticRegression
+from ..models import get_model_class
 
 logger = logging.getLogger(__name__)
+
+
+def _fit_with_sample_weight(model, X_train, y_train, sample_weight):
+    """Fit a wrapper model with per-sample weights.
+
+    Wrapper ``train()`` methods take no ``sample_weight``, so the underlying
+    estimator is fitted directly and the wrapper's bookkeeping is set by hand.
+    Any estimator that rejects weights (e.g. the cuML RandomForest path) falls
+    back to an unweighted fit with a loud warning rather than failing the run.
+    """
+    model.feature_names = list(X_train.columns)
+    try:
+        model.model.fit(X_train, y_train, sample_weight=sample_weight)
+    except Exception as exc:  # noqa: BLE001 - estimator-specific, degrade loudly
+        logger.warning(
+            "[MITIGATION] %s rejected sample_weight (%s); falling back to unweighted fit — "
+            "reweighting has no effect for this model.",
+            type(model).__name__,
+            exc,
+        )
+        model.train(X_train, y_train)
+    return model
 
 
 class PreProcessingMitigation:
@@ -404,17 +426,37 @@ class MitigationEngine:
     VALID_INPROCESSING = ["exponentiated_gradient", "grid_search"]
     VALID_POSTPROCESSING = ["threshold_optimizer"]
 
-    def __init__(self, random_state: int = 42):
+    def __init__(
+        self,
+        random_state: int = 42,
+        model_type: str = "logistic_regression",
+        model_params: Optional[Dict[str, Any]] = None,
+    ):
         """
         Initialize mitigation engine.
 
         Args:
             random_state: Random seed for reproducibility
+            model_type: Model family key from ``fairxai.models.MODEL_REGISTRY``
+                (``logistic_regression``, ``random_forest``, ``svm``, ``xgboost``).
+                Defaults to logistic regression, which is the historical behaviour.
+            model_params: Hyperparameters forwarded to that family's wrapper.
+                Empty means "wrapper class defaults", which is what the LR-only
+                implementation used, so a no-arg engine is unchanged.
         """
         self.random_state = random_state
+        self.model_type = (model_type or "logistic_regression").strip().lower()
+        self.model_params = dict(model_params or {})
         self.preprocessing = PreProcessingMitigation()
         self.inprocessing = InProcessingMitigation()
         self.postprocessing = PostProcessingMitigation()
+
+    def _new_model(self):
+        """Build a fresh, untrained model of the configured family."""
+        model_class = get_model_class(self.model_type)
+        params = dict(self.model_params)
+        params.setdefault("random_state", self.random_state)
+        return model_class(**params)
 
     @staticmethod
     def _positive_class_scores(model, X_test) -> np.ndarray | None:
@@ -835,37 +877,20 @@ class MitigationEngine:
             sample_weights = self.preprocessing.apply_reweighting(
                 X_train, y_train, sensitive_train, sensitive_attr
             )
-            # Train with sample weights
-            model = BaselineLogisticRegression(random_state=self.random_state)
-            model.model.fit(X_train, y_train, sample_weight=sample_weights)
+            model = _fit_with_sample_weight(self._new_model(), X_train, y_train, sample_weights)
             X_train_processed, y_train_processed = X_train, y_train
 
-        elif technique_name == "smote":
-            X_train_processed, y_train_processed = self.preprocessing.apply_smote(
+        elif technique_name in ("smote", "ros", "rus", "adasyn"):
+            resampler = {
+                "smote": self.preprocessing.apply_smote,
+                "ros": self.preprocessing.apply_random_oversampling,
+                "rus": self.preprocessing.apply_random_undersampling,
+                "adasyn": self.preprocessing.apply_adasyn,
+            }[technique_name]
+            X_train_processed, y_train_processed = resampler(
                 X_train, y_train, random_state=self.random_state
             )
-            model = BaselineLogisticRegression(random_state=self.random_state)
-            model.train(X_train_processed, y_train_processed)
-
-        elif technique_name == "ros":
-            X_train_processed, y_train_processed = self.preprocessing.apply_random_oversampling(
-                X_train, y_train, random_state=self.random_state
-            )
-            model = BaselineLogisticRegression(random_state=self.random_state)
-            model.train(X_train_processed, y_train_processed)
-
-        elif technique_name == "rus":
-            X_train_processed, y_train_processed = self.preprocessing.apply_random_undersampling(
-                X_train, y_train, random_state=self.random_state
-            )
-            model = BaselineLogisticRegression(random_state=self.random_state)
-            model.train(X_train_processed, y_train_processed)
-
-        elif technique_name == "adasyn":
-            X_train_processed, y_train_processed = self.preprocessing.apply_adasyn(
-                X_train, y_train, random_state=self.random_state
-            )
-            model = BaselineLogisticRegression(random_state=self.random_state)
+            model = self._new_model()
             model.train(X_train_processed, y_train_processed)
         else:
             raise ValueError(f"Unknown pre-processing technique: {technique_name}")
@@ -873,7 +898,7 @@ class MitigationEngine:
         # Evaluate and get predictions
         test_metrics = model.evaluate(X_test, y_test)
         y_pred = model.predict(X_test)
-        # BaselineLogisticRegression.predict_proba already returns 1D probs for the positive class
+        # Wrapper predict_proba already returns 1D probs for the positive class
         y_proba_raw = model.predict_proba(X_test) if hasattr(model, "predict_proba") else None
         if y_proba_raw is None:
             y_proba = None
@@ -889,6 +914,7 @@ class MitigationEngine:
             "metadata": {
                 "technique": technique_name,
                 "stage": "pre-processing",
+                "model_type": self.model_type,
                 "samples_before": len(X_train),
                 "samples_after": len(X_train_processed),
             },
