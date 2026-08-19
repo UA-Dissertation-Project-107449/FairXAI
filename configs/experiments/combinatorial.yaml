@@ -65,7 +65,8 @@ training_methods:
   - kfold_cv
 
 # Model families to compare.
-# Note: mitigation techniques are only executed with models listed in mitigation_supported_model_types below.
+# Note: mitigation techniques are only executed with models listed in
+# mitigation_supported_model_types below; combos only with mitigation_combo_model_types.
 # Other models run baseline-only experiments.
 # Warning: SVM on cardio70k full 70k rows OOMs on consumer hardware (RBF kernel is O(n²)).
 #          With --max-samples 10000, SVM linear is safe. For full 70k, exclude SVM or use HPC.
@@ -76,9 +77,20 @@ model_types:
   - xgboost
 
 # Models that support fairness mitigation techniques.
-# Non-listed models run baseline-only. Extend this list when mitigation is implemented for RF/SVM/XGB.
+# Non-listed models run baseline-only arms.
+# svm is deliberately absent: the RBF kernel is O(n^2) in rows and the
+# resampling techniques ADD rows. Enable it only on the mini-PC and only for
+# cleveland_uci. See MITIGATION_MULTIMODEL_PLAN.md "Hardware And Runtime Budget".
 mitigation_supported_model_types:
   - logistic_regression
+  - random_forest
+  - xgboost
+
+# Families that also run the sequential combo chains (the most expensive arm:
+# up to three fits chained per row). Must be a subset of the list above.
+mitigation_combo_model_types:
+  - logistic_regression
+  - random_forest
 
 # Model variants: experiment-specific overrides merged onto base hyperparameters.
 # Base params are loaded from configs/models/<model_type>.yaml at runtime.
@@ -174,21 +186,24 @@ n_jobs: 6  # 6 threads; i5-1135G7 has 8 logical cores, leave 2 for OS/other work
 #   D = number of datasets
 #   B = number of binning_strategies
 #   T = number of training_methods
-#   M = number of mitigation_techniques (applies fully to logistic_regression only)
-#   C = number of mitigation_combos (logistic_regression only)
-#   V_lr = number of logistic_regression variants
-#   V_other = sum of variants for non-logistic models in model_types
+#   M = number of mitigation_techniques (baseline included)
+#   C = number of mitigation_combos
+#   V_mit = sum of variants over mitigation_supported_model_types
+#   V_combo = sum of variants over mitigation_combo_model_types
+#   V_base = sum of variants over models in model_types but NOT mitigation-supported
 #
-# Base experiments:
-#   D * B * T * (V_lr * M + V_other)
-# Combo experiments (LR only):
-#   D * B * T * (V_lr * C)
+# Base experiments (mitigated families run every technique, the rest baseline only):
+#   D * B * T * (V_mit * M + V_base)
+# Combo experiments:
+#   D * B * T * (V_combo * C)
 # Total experiments:
-#   D * B * T * (V_lr * (M + C) + V_other)
+#   D * B * T * (V_mit * M + V_base + V_combo * C)
 #
-# Example A (3 datasets, 5 bins, 2 training types, 5 mitigations, 6 combos,
-#            variants: LR=2, RF=2, SVM=1, XGB=1 => V_other=4):
-#   3 * 5 * 2 * (2*(5+6) + 4) = 780
+# Example A (this config: 3 datasets, 5 bins, 2 training types, 7 mitigations
+#            incl. baseline, 6 combos, variants LR=2 RF=2 SVM=1 XGB=1;
+#            mitigated = LR+RF+XGB => V_mit=5, baseline-only = SVM => V_base=1,
+#            combos = LR+RF => V_combo=4):
+#   3 * 5 * 2 * (5*7 + 1 + 4*6) = 1800
 #
-# Example B (same setup but 7 mitigations):
-#   3 * 5 * 2 * (2*(7+6) + 4) = 900
+# Example B (the pre-2026-08 LR-only setup: V_mit=2, V_base=4, V_combo=2):
+#   3 * 5 * 2 * (2*7 + 4 + 2*6) = 900

@@ -20,6 +20,7 @@ from imblearn.over_sampling import ADASYN, SMOTE, RandomOverSampler
 from imblearn.under_sampling import RandomUnderSampler
 
 # Scikit-learn
+from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.linear_model import LogisticRegression
 from sklearn.utils.class_weight import compute_sample_weight
 
@@ -29,6 +30,61 @@ from ..models import get_model_class
 logger = logging.getLogger(__name__)
 
 
+class _TwoColumnProbaAdapter(ClassifierMixin, BaseEstimator):
+    """Present an already-fitted model to fairlearn the way sklearn would.
+
+    fairlearn takes soft predictions with ``predict_proba(X)[:, 1]``, which only
+    works on a two-column NumPy array. Two of our families do not produce one:
+    the cuML RandomForest returns a DataFrame, and the FairXAI wrappers return a
+    1-D positive-class vector. Both raise inside ThresholdOptimizer.fit, so the
+    whole post-processing arm fails for those models rather than degrading.
+
+    The adapter is a no-op for estimators that already return two columns — see
+    :func:`_as_soft_predictor` — so the logistic-regression path is untouched.
+    """
+
+    def __init__(self, estimator):
+        self.estimator = estimator
+        classes = getattr(estimator, "classes_", None)
+        self.classes_ = np.asarray(classes) if classes is not None else np.array([0, 1])
+
+    def __sklearn_is_fitted__(self) -> bool:
+        """Wrapped estimator is always already fitted (ThresholdOptimizer prefit)."""
+        return True
+
+    def fit(self, X, y=None, **kwargs):
+        raise NotImplementedError("_TwoColumnProbaAdapter wraps an already-fitted estimator")
+
+    def predict(self, X):
+        return np.asarray(self.estimator.predict(X)).reshape(-1)
+
+    def predict_proba(self, X):
+        proba = np.asarray(self.estimator.predict_proba(X))
+        if proba.ndim == 2 and proba.shape[1] >= 2:
+            return proba
+        positive = proba.reshape(-1).astype(float)
+        return np.column_stack([1.0 - positive, positive])
+
+
+def _as_soft_predictor(estimator, X_sample):
+    """Return an estimator fairlearn can read two-column probabilities from.
+
+    Probes rather than inspects the class: cuML, XGBoost and the wrappers all
+    disagree on the return type, and the probe is one prediction on one row.
+    """
+    predict_proba = getattr(estimator, "predict_proba", None)
+    if predict_proba is None:
+        return estimator
+    try:
+        proba = predict_proba(X_sample)
+    except Exception as exc:  # noqa: BLE001 - estimator-specific, fall back to adapter
+        logger.debug("Probing predict_proba failed (%s); wrapping estimator anyway", exc)
+        return _TwoColumnProbaAdapter(estimator)
+    if isinstance(proba, np.ndarray) and proba.ndim == 2 and proba.shape[1] >= 2:
+        return estimator
+    return _TwoColumnProbaAdapter(estimator)
+
+
 def _fit_with_sample_weight(model, X_train, y_train, sample_weight):
     """Fit a wrapper model with per-sample weights.
 
@@ -36,6 +92,12 @@ def _fit_with_sample_weight(model, X_train, y_train, sample_weight):
     estimator is fitted directly and the wrapper's bookkeeping is set by hand.
     Any estimator that rejects weights (e.g. the cuML RandomForest path) falls
     back to an unweighted fit with a loud warning rather than failing the run.
+
+    Returns:
+        ``(model, applied)`` — ``applied`` is False when the fallback ran, i.e.
+        when the row is labelled "reweighting" but is really a baseline. The
+        caller puts that in the result metadata: a log line is invisible to
+        whoever reads the comparison table months later.
     """
     model.feature_names = list(X_train.columns)
     try:
@@ -48,7 +110,8 @@ def _fit_with_sample_weight(model, X_train, y_train, sample_weight):
             exc,
         )
         model.train(X_train, y_train)
-    return model
+        return model, False
+    return model, True
 
 
 class PreProcessingMitigation:
@@ -823,7 +886,7 @@ class MitigationEngine:
             logger.info("  [baseline] training %s on pre-processed data", self.model_type)
             trained_model = self._new_model()
             if sample_weights is not None:
-                trained_model = _fit_with_sample_weight(
+                trained_model, _ = _fit_with_sample_weight(
                     trained_model, X_curr, y_curr, sample_weights
                 )
             else:
@@ -884,11 +947,14 @@ class MitigationEngine:
     ) -> Dict:
         """Apply pre-processing technique and train model."""
         # Apply resampling/reweighting
+        sample_weight_applied = None
         if technique_name == "reweighting":
             sample_weights = self.preprocessing.apply_reweighting(
                 X_train, y_train, sensitive_train, sensitive_attr
             )
-            model = _fit_with_sample_weight(self._new_model(), X_train, y_train, sample_weights)
+            model, sample_weight_applied = _fit_with_sample_weight(
+                self._new_model(), X_train, y_train, sample_weights
+            )
             X_train_processed, y_train_processed = X_train, y_train
 
         elif technique_name in ("smote", "ros", "rus", "adasyn"):
@@ -928,6 +994,8 @@ class MitigationEngine:
                 "model_type": self.model_type,
                 "samples_before": len(X_train),
                 "samples_after": len(X_train_processed),
+                # None for resampling techniques, which never weight samples.
+                "sample_weight_applied": sample_weight_applied,
             },
         }
 
@@ -1052,6 +1120,7 @@ class MitigationEngine:
                 )
             else:
                 estimator_for_post = base_model
+            estimator_for_post = _as_soft_predictor(estimator_for_post, X_train.head(1))
             postprocessor = self.postprocessing.apply_threshold_optimizer(
                 estimator_for_post, X_train, y_train, sensitive_train, sensitive_attr, **kwargs
             )

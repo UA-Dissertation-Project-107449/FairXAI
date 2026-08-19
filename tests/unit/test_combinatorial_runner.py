@@ -115,3 +115,160 @@ def test_postprocessing_base_model_follows_model_type():
         model_params={"n_estimators": 10, "max_depth": 3},
     )
     assert isinstance(built, RandomForestModel)
+
+
+def _load_runner_module():
+    """Load the runner as a standalone module so its globals can be patched."""
+    import importlib.util
+
+    root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location(
+        "combi_runner", root / "scripts" / "experiments" / "run_combinatorial_experiments.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_sweep_engine_uses_the_row_model_family(monkeypatch):
+    """Stage 11 rows must mitigate the family the row actually trains."""
+    module = _load_runner_module()
+
+    seen = {}
+
+    class _SpyEngine:
+        def __init__(self, *args, **kwargs):
+            seen.update(kwargs)
+
+    monkeypatch.setattr(module, "MitigationEngine", _SpyEngine)
+    module._build_mitigation_engine(
+        {"model_type": "xgboost", "model_params": {"max_depth": 3}, "random_seed": 42}
+    )
+    assert seen["model_type"] == "xgboost"
+    assert seen["model_params"] == {"max_depth": 3}
+    assert seen["random_state"] == 42
+
+
+def test_sweep_engine_defaults_to_logistic_regression(monkeypatch):
+    """A row without a family keeps the historical logistic-regression engine."""
+    module = _load_runner_module()
+
+    seen = {}
+
+    class _SpyEngine:
+        def __init__(self, *args, **kwargs):
+            seen.update(kwargs)
+
+    monkeypatch.setattr(module, "MitigationEngine", _SpyEngine)
+    module._build_mitigation_engine({})
+    assert seen["model_type"] == "logistic_regression"
+    assert seen["model_params"] == {}
+    assert seen["random_state"] == 42
+
+
+def test_combo_experiments_are_planned_per_supported_family():
+    """Combos default to the mitigation families, but can be narrowed on cost."""
+    module = _load_runner_module()
+
+    families = module._resolve_combo_model_types(
+        {"mitigation_supported_model_types": ["logistic_regression", "random_forest"]}
+    )
+    assert families == ["logistic_regression", "random_forest"]
+
+    families = module._resolve_combo_model_types(
+        {
+            "mitigation_supported_model_types": ["logistic_regression", "random_forest"],
+            "mitigation_combo_model_types": ["logistic_regression"],
+        }
+    )
+    assert families == ["logistic_regression"]
+
+
+def test_combo_model_types_fall_back_to_logistic_regression():
+    """An empty config must not silently plan zero combo experiments."""
+    module = _load_runner_module()
+
+    assert module._resolve_combo_model_types({}) == ["logistic_regression"]
+    assert module._resolve_combo_model_types(
+        {"mitigation_supported_model_types": [], "mitigation_combo_model_types": []}
+    ) == ["logistic_regression"]
+
+
+def test_combinatorial_config_lists_combo_families():
+    """The shipped config must declare both mitigation and combo family lists."""
+    import yaml
+
+    root = Path(__file__).resolve().parents[2]
+    with open(root / "configs" / "experiments" / "combinatorial.yaml") as f:
+        config = yaml.safe_load(f)
+
+    supported = [str(m).strip().lower() for m in config["mitigation_supported_model_types"]]
+    combos = [str(m).strip().lower() for m in config["mitigation_combo_model_types"]]
+
+    assert "random_forest" in supported
+    # svm is an RBF kernel, O(n^2) in rows, and resampling techniques add rows.
+    assert "svm" not in supported
+    assert set(combos).issubset(set(supported))
+
+
+def _tiny_splits(seed=11, n=120):
+    """Synthetic single split with one binary sensitive column."""
+    import pandas as pd
+
+    rng = np.random.default_rng(seed)
+    X = pd.DataFrame(
+        {
+            "f1": rng.normal(size=n),
+            "f2": rng.normal(size=n),
+            "f3": rng.normal(size=n),
+        }
+    )
+    y = pd.Series((X["f1"] + rng.normal(scale=0.5, size=n) > 0).astype(int), name="heart_disease")
+    sensitive = pd.DataFrame({"sex": rng.integers(0, 2, size=n)})
+    half = n // 2
+    return {
+        "X_train": X.iloc[:half].reset_index(drop=True),
+        "y_train": y.iloc[:half].reset_index(drop=True),
+        "X_test": X.iloc[half:].reset_index(drop=True),
+        "y_test": y.iloc[half:].reset_index(drop=True),
+        "X_train_raw": X.iloc[:half].reset_index(drop=True),
+        "sensitive_train": sensitive.iloc[:half].reset_index(drop=True),
+        "sensitive_test": sensitive.iloc[half:].reset_index(drop=True),
+        "sensitive_cols": ["sex"],
+    }
+
+
+def test_single_split_result_carries_mitigation_metadata(tmp_path):
+    """Whether reweighting actually weighted anything must survive to disk.
+
+    The cuML forest silently ignores sample weights, so a row can be labelled
+    "reweighting" while being a plain baseline; the log line that says so is
+    gone by the time anyone reads the results.
+    """
+    import logging
+
+    from fairxai.experiments.versioning import ExperimentVersioning
+
+    module = _load_runner_module()
+    versioning = ExperimentVersioning(base_results_dir=tmp_path)
+
+    result = module.run_single_split_experiment(
+        "exp_test",
+        {
+            "dataset": "synthetic",
+            "binning_strategy": "fixed_10yr",
+            "mitigation_technique": "reweighting",
+            "training_method": "single_split",
+            "random_seed": 42,
+            "model_type": "logistic_regression",
+            "model_params": {},
+            "sensitive_attributes": ["sex"],
+            "xai": {"enabled": False, "mode": "disabled"},
+        },
+        _tiny_splits(),
+        versioning,
+        logging.getLogger("test"),
+    )
+
+    assert result["mitigation_metadata"]["sample_weight_applied"] is True
+    assert result["mitigation_metadata"]["model_type"] == "logistic_regression"

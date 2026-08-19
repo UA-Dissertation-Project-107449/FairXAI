@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sys
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -63,8 +64,10 @@ STAGE_MAP = {
     "threshold_optimizer": "post-processing",
 }
 
-# Mitigation engine currently assumes logistic baseline for pre/in/post mitigation.
-# This set is now config-driven (mitigation_supported_model_types in combinatorial.yaml).
+# The mitigation engine builds whichever family the row asks for, so this set is
+# a compute budget rather than a capability limit: families listed here pay for
+# the full technique grid, the rest run baseline-only arms.
+# Config-driven (mitigation_supported_model_types in combinatorial.yaml).
 # The module-level default is kept as a fallback when the config key is absent.
 _DEFAULT_MITIGATION_SUPPORTED_MODEL_TYPES = {"logistic_regression"}
 
@@ -369,6 +372,32 @@ def _build_postprocessing_base_model(model_type, model_params=None):
     """
     model_class = get_model_class(model_type or "logistic_regression")
     return model_class(**(model_params or {}))
+
+
+def _resolve_combo_model_types(config: Dict[str, Any]) -> List[str]:
+    """Families that run the sequential mitigation combos.
+
+    Combos are the most expensive arm — up to three fits chained per row — so
+    they get their own key: mitigation coverage can widen without every added
+    family also paying for combos. Defaults to the mitigation families.
+    """
+    explicit = config.get("mitigation_combo_model_types")
+    source = explicit if explicit else config.get("mitigation_supported_model_types", [])
+    return [str(m).strip().lower() for m in source if str(m).strip()] or ["logistic_regression"]
+
+
+def _build_mitigation_engine(config: Dict[str, Any]) -> MitigationEngine:
+    """Engine for one experiment row, bound to that row's model family.
+
+    The row's own ``model_params`` are handed over too, so an HPO-tuned
+    random forest is mitigated with the same hyperparameters it was tuned
+    with rather than the wrapper defaults.
+    """
+    return MitigationEngine(
+        random_state=config.get("random_seed", 42),
+        model_type=config.get("model_type", "logistic_regression"),
+        model_params=config.get("model_params", {}) or {},
+    )
 
 
 def _resolve_model_variants(
@@ -969,7 +998,10 @@ def run_single_experiment(
         return results
 
     except Exception as e:
+        # str(e) alone is useless for the shape errors these experiments hit
+        # (a bare "(slice(None, None, None), 1)" says nothing about where).
         logger.error(f"Experiment {exp_id} failed: {str(e)}")
+        logger.debug("Traceback for %s:\n%s", exp_id, traceback.format_exc())
         duration = (datetime.now() - start_time).total_seconds()
 
         return {
@@ -1000,7 +1032,7 @@ def run_single_split_experiment(
     xai_enabled = _is_xai_enabled_for_phase(xai_cfg)
 
     # Initialize mitigation engine
-    engine = MitigationEngine()
+    engine = _build_mitigation_engine(config)
 
     # Apply mitigation technique
     mitigation = config["mitigation_technique"]
@@ -1148,6 +1180,10 @@ def run_single_split_experiment(
         "configuration": config,
         "test_metrics": result["test_metrics"],
         "fairness_metrics": fairness_results,
+        # Carries sample_weight_applied: a row can say "reweighting" while the
+        # estimator silently ignored the weights (cuML forest). Only the engine
+        # knows, and the warning it logs is long gone by comparison time.
+        "mitigation_metadata": result.get("metadata", {}),
         "training_method": "single_split",
         "n_folds": 1,
     }
@@ -1231,6 +1267,7 @@ def run_cv_experiment(
             len(X_full), size=min(lime_n, len(X_full)), replace=False
         ).tolist()
 
+    mitigation_metadata: Dict[str, Any] = {}
     if mitigation == "baseline":
         model_type = config.get("model_type", "logistic_regression")
         model_class = get_model_class(model_type)
@@ -1259,7 +1296,7 @@ def run_cv_experiment(
         if combo_chain is None and stage is None:
             raise ValueError(f"Unknown mitigation technique for CV: {mitigation}")
 
-        engine = MitigationEngine()
+        engine = _build_mitigation_engine(config)
         folds = cv_trainer.create_stratified_folds(X_full_raw, y_full, sensitive_full)
         fold_results = []
         all_predictions = []
@@ -1365,6 +1402,7 @@ def run_cv_experiment(
                         f"[XAI] fold={fold_idx + 1}/{n_folds} skipped=model_type_not_xai_compatible"
                     )
 
+            mitigation_metadata = result.get("metadata", {})
             fold_results.append(fold_result_entry)
 
             y_pred = _coerce_label_vector(result["predictions"]["y_pred"])
@@ -1434,6 +1472,9 @@ def run_cv_experiment(
         "cv_results": cv_results["aggregated_metrics"],
         "fold_results": cv_results["fold_results"],
         "fairness_metrics": fairness_results,
+        # Last fold's engine metadata; the flags it carries (model_type,
+        # sample_weight_applied) are properties of the family, not the fold.
+        "mitigation_metadata": mitigation_metadata,
         "training_method": "kfold_cv",
         "n_folds": n_folds,
     }
@@ -1633,7 +1674,9 @@ def run_combinatorial_analysis(
 
                             experiments.append((exp_id, exp_config))
 
-    # Combo experiments: pre to in to post chains, logistic_regression only.
+    # Combo experiments: pre to in to post chains, per configured family.
+    combo_model_types = _resolve_combo_model_types(config)
+    logger.info(f"Mitigation combo model types: {combo_model_types}")
     for combo in config.get("mitigation_combos", []):
         for dataset in selected_datasets:
             if isinstance(fairness_base_params_cfg, dict) and dataset in fairness_base_params_cfg:
@@ -1644,32 +1687,33 @@ def run_combinatorial_analysis(
                 fairness_base_params = _load_model_config(project_root, "logistic_regression")
             for binning in config["binning_strategies"]:
                 for training_method in config["training_methods"]:
-                    for variant in _resolve_model_variants(
-                        config,
-                        "logistic_regression",
-                        project_root,
-                        xgb_device,
-                        outer_n_jobs=n_jobs,
-                        dataset=dataset,
-                        hpo_dir=hpo_dir,
-                    ):
-                        exp_id = versioning.generate_experiment_id()
-                        exp_config = {
-                            "dataset": dataset,
-                            "binning_strategy": binning,
-                            "mitigation_technique": "+".join(combo),
-                            "mitigation_combo": combo,
-                            "training_method": training_method,
-                            "cv_folds": config.get("cv_folds", 5),
-                            "random_seed": config.get("random_seed", 42),
-                            "model_type": "logistic_regression",
-                            "model_variant": variant["name"],
-                            "model_params": variant["params"],
-                            "fairness_base_model_params": fairness_base_params or None,
-                            "sensitive_attributes": sensitive_attrs,
-                            "xai": config.get("xai", {}),
-                        }
-                        experiments.append((exp_id, exp_config))
+                    for model_type in combo_model_types:
+                        for variant in _resolve_model_variants(
+                            config,
+                            model_type,
+                            project_root,
+                            xgb_device,
+                            outer_n_jobs=n_jobs,
+                            dataset=dataset,
+                            hpo_dir=hpo_dir,
+                        ):
+                            exp_id = versioning.generate_experiment_id()
+                            exp_config = {
+                                "dataset": dataset,
+                                "binning_strategy": binning,
+                                "mitigation_technique": "+".join(combo),
+                                "mitigation_combo": combo,
+                                "training_method": training_method,
+                                "cv_folds": config.get("cv_folds", 5),
+                                "random_seed": config.get("random_seed", 42),
+                                "model_type": model_type,
+                                "model_variant": variant["name"],
+                                "model_params": variant["params"],
+                                "fairness_base_model_params": fairness_base_params or None,
+                                "sensitive_attributes": sensitive_attrs,
+                                "xai": config.get("xai", {}),
+                            }
+                            experiments.append((exp_id, exp_config))
 
     total_experiments = len(experiments)
     logger.info(f"[PLAN] Total experiments: {total_experiments}")
