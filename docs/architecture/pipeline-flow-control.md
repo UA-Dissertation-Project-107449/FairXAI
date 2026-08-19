@@ -80,7 +80,7 @@ load (1)
 | Stop point | `--go-until <stage>` | `GO_UNTIL=<stage>` | Last stage to execute (inclusive). Stages after this are skipped. |
 | Run ID | `--run-id <id>` | `RUN_ID=<id>` | Explicit run ID. On resume without this, defaults to `latest_run` symlink. |
 | Dataset scope | `--datasets <d1> [d2 ...]` | — (CLI only) | Optional dataset override propagated to stages. |
-| Model scope | `--model-types <m1> [m2 ...]` | — (CLI only) | Optional model-type override (baseline/combinatorial stages). |
+| Model scope | `--model-types <m1> [m2 ...]` | — (CLI only) | Optional model-family override (train, assess, mitigate and sweep stages). |
 | Skip HPO study | `--no-hpo-study` | `RUN_HPO_STUDY=false` | Skip stage 5 even if in active range. |
 | Skip feature-selection study | `--no-feature-selection-study` | `RUN_FEATURE_SELECTION_STUDY=false` | Skip stage 6 even if in active range. |
 | Skip attr binning | `--no-attribute-binning` | `RUN_ATTRIBUTE_BINNING=false` | Skip stage 9 even if in active range. |
