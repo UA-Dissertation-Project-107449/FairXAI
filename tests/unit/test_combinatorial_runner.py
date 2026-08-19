@@ -94,3 +94,24 @@ class TestMitigationSupportedModelTypesConfigDriven:
     def test_when_rf_added_to_supported_it_runs_smote(self):
         supported = {"logistic_regression", "random_forest"}
         assert self._filter_mitigation("smote", "random_forest", supported) == "run"
+
+
+def test_postprocessing_base_model_follows_model_type():
+    """Post-processing must post-process the configured family, not always an LR."""
+    import importlib.util
+    from pathlib import Path
+
+    from fairxai.models import RandomForestModel
+
+    root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location(
+        "combi_runner", root / "scripts" / "experiments" / "run_combinatorial_experiments.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    built = module._build_postprocessing_base_model(
+        model_type="random_forest",
+        model_params={"n_estimators": 10, "max_depth": 3},
+    )
+    assert isinstance(built, RandomForestModel)
