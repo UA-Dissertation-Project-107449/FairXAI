@@ -46,7 +46,7 @@ from fairxai.experiments.data_io import (
 )
 from fairxai.fairness.metrics import FairnessMetrics
 from fairxai.fairness.mitigation import MitigationEngine
-from fairxai.models.baseline import BaselineLogisticRegression, generate_predictions_with_metadata
+from fairxai.models import generate_predictions_with_metadata, get_model_class
 from fairxai.utils.config import load_yaml_config
 
 
@@ -171,12 +171,20 @@ def load_dataset(
 
 
 def train_baseline(
-    X_train, y_train, X_test, y_test, sensitive_test, dataset_name, model_params=None
+    X_train,
+    y_train,
+    X_test,
+    y_test,
+    sensitive_test,
+    dataset_name,
+    model_params=None,
+    model_type="logistic_regression",
 ):
-    """Train baseline model without mitigation."""
-    logging.info(f"[BASELINE] Training baseline model for dataset={dataset_name}")
+    """Train baseline model without mitigation, for one model family."""
+    logging.info("[BASELINE] Training baseline model=%s dataset=%s", model_type, dataset_name)
 
-    model = BaselineLogisticRegression(**(model_params or {}))
+    model_class = get_model_class(model_type)
+    model = model_class(**(model_params or {}))
     model.train(X_train, y_train)
     test_metrics = model.evaluate(X_test, y_test)
 
@@ -221,6 +229,9 @@ def apply_mitigation_techniques(
     constraint_attrs="all",
     meta_test=None,
     predictions_dir=None,
+    model_type="logistic_regression",
+    model_params=None,
+    prediction_index=None,
 ):
     """
     Apply all mitigation techniques and collect results.
@@ -240,7 +251,9 @@ def apply_mitigation_techniques(
     Returns:
         List of result dictionaries (one per technique × constraint attr).
     """
-    engine = MitigationEngine(random_state=42)
+    engine = MitigationEngine(
+        random_state=42, model_type=model_type, model_params=dict(model_params or {})
+    )
     results = []
 
     available_attrs = list(sensitive_test.columns)
@@ -332,10 +345,21 @@ def apply_mitigation_techniques(
                 # so the age-binning sensitivity sweep can pair them vs baseline.
                 if predictions_dir is not None:
                     predictions_dir.mkdir(parents=True, exist_ok=True)
-                    pred_path = (
-                        predictions_dir / f"{dataset_name}_{technique_name}_{sensitive_attr}.csv"
-                    )
-                    predictions_df.to_csv(pred_path, index=False)
+                    pred_name = f"{dataset_name}_{model_type}_{technique_name}_{sensitive_attr}.csv"
+                    predictions_df.to_csv(predictions_dir / pred_name, index=False)
+                    # Machine-readable map for the age-binning sweep: the filename
+                    # cannot be parsed back by splitting on "_" because every
+                    # component (dataset, family, technique, attr) contains them.
+                    if prediction_index is not None:
+                        prediction_index.append(
+                            {
+                                "file": pred_name,
+                                "dataset": dataset_name,
+                                "model_type": model_type,
+                                "technique": technique_name,
+                                "constraint_attr": sensitive_attr,
+                            }
+                        )
 
                 # Calculate fairness metrics across ALL sensitive attrs (measurement
                 # is unchanged; only the imposed constraint varies per loop).
@@ -348,6 +372,7 @@ def apply_mitigation_techniques(
                 results.append(
                     {
                         "dataset": dataset_name,
+                        "model_type": model_type,
                         "technique": technique_name,
                         "constraint_attr": sensitive_attr,
                         "stage": stage,
@@ -424,6 +449,7 @@ def create_comparison_table(all_results):
 
         row = {
             "dataset": result["dataset"],
+            "model_type": result.get("model_type", "logistic_regression"),
             "technique": result["technique"],
             "constraint_attr": result.get("constraint_attr", ""),
             "stage": result["stage"],
@@ -475,11 +501,16 @@ def create_comparison_table(all_results):
         if col not in df.columns:
             df[col] = np.nan
     df["fairness_gap"] = df[["dp_max_diff", "eq_odds_max_diff"]].max(axis=1, skipna=True)
-    baseline_rows = df[df["technique"] == "baseline"].set_index("dataset")
+    baseline_rows = df[df["technique"] == "baseline"]
     if baseline_rows.empty:
         df["baseline_fairness_gap"] = np.nan
     else:
-        df["baseline_fairness_gap"] = df["dataset"].map(baseline_rows["fairness_gap"])
+        # Keyed by family too: an RF row must be scored against the RF baseline,
+        # never against whichever family happened to run first.
+        baseline_gap = baseline_rows.set_index(["dataset", "model_type"])["fairness_gap"]
+        df["baseline_fairness_gap"] = pd.MultiIndex.from_frame(df[["dataset", "model_type"]]).map(
+            baseline_gap
+        )
     df["fairness_gain"] = df["baseline_fairness_gap"] - df["fairness_gap"]
     df["fairness_gain_pct"] = df["fairness_gain"] / df["baseline_fairness_gap"]
 
@@ -493,35 +524,68 @@ def _write_mitigation_report(df: "pd.DataFrame", report_file: "Path") -> None:
     lines = ["# Mitigation Comparison Report\n"]
     for dataset in sorted(df["dataset"].unique() if "dataset" in df.columns else []):
         lines.append(f"## {dataset}\n")
-        sub = df[df["dataset"] == dataset] if "dataset" in df.columns else df
-        # Best by accuracy
-        if "accuracy" in sub.columns and not sub["accuracy"].isna().all():
-            best_acc = sub.loc[sub["accuracy"].idxmax()]
-            lines.append(
-                f"**Best accuracy:** `{best_acc.get('technique', '?')}` — "
-                f"{best_acc['accuracy']:.3f}\n"
+        ds_df = df[df["dataset"] == dataset] if "dataset" in df.columns else df
+        # One section per model family: "best accuracy" across families would
+        # just rank the families, not the mitigation techniques.
+        for model_type in sorted(
+            ds_df.get("model_type", pd.Series(["logistic_regression"])).unique()
+        ):
+            lines.append(f"### {model_type}\n")
+            sub = (
+                ds_df[ds_df["model_type"] == model_type] if "model_type" in ds_df.columns else ds_df
             )
-        # Best fairness (lowest fairness gap if column exists)
-        gap_col = next(
-            (c for c in ("fairness_gap", "demographic_parity_gap") if c in sub.columns), None
-        )
-        if gap_col and not sub[gap_col].isna().all():
-            best_idx = sub[gap_col].abs().idxmin()
-            if pd.notna(best_idx):
-                best_fair = sub.loc[best_idx]
+            # Best by accuracy
+            if "accuracy" in sub.columns and not sub["accuracy"].isna().all():
+                best_acc = sub.loc[sub["accuracy"].idxmax()]
                 lines.append(
-                    f"**Best fairness:** `{best_fair.get('technique', '?')}` — "
-                    f"{gap_col}={best_fair[gap_col]:.3f}\n"
+                    f"**Best accuracy:** `{best_acc.get('technique', '?')}` — "
+                    f"{best_acc['accuracy']:.3f}\n"
                 )
-        # Summary table: top 5 by accuracy
-        if "accuracy" in sub.columns:
-            top5 = sub.nlargest(5, "accuracy")
-            show_cols = [
-                c for c in ("technique", "accuracy", "recall", gap_col) if c and c in sub.columns
-            ]
-            lines.append(top5[show_cols].round(3).to_markdown(index=False))
-            lines.append("")
+            # Best fairness (lowest fairness gap if column exists)
+            gap_col = next(
+                (c for c in ("fairness_gap", "demographic_parity_gap") if c in sub.columns), None
+            )
+            if gap_col and not sub[gap_col].isna().all():
+                best_idx = sub[gap_col].abs().idxmin()
+                if pd.notna(best_idx):
+                    best_fair = sub.loc[best_idx]
+                    lines.append(
+                        f"**Best fairness:** `{best_fair.get('technique', '?')}` — "
+                        f"{gap_col}={best_fair[gap_col]:.3f}\n"
+                    )
+            # Summary table: top 5 by accuracy
+            if "accuracy" in sub.columns:
+                top5 = sub.nlargest(5, "accuracy")
+                show_cols = [
+                    c
+                    for c in ("technique", "accuracy", "recall", gap_col)
+                    if c and c in sub.columns
+                ]
+                lines.append(top5[show_cols].round(3).to_markdown(index=False))
+                lines.append("")
     Path(report_file).write_text("\n".join(lines))
+
+
+def _resolve_model_types(cli_model_types, experiment_cfg):
+    """CLI overrides config; config overrides the historical LR-only default."""
+    if cli_model_types:
+        return [str(m).strip().lower() for m in cli_model_types if str(m).strip()]
+    configured = experiment_cfg.get("model_types") or []
+    resolved = [str(m).strip().lower() for m in configured if str(m).strip()]
+    return resolved or ["logistic_regression"]
+
+
+def _load_model_params(project_root, model_type):
+    """Base hyperparameters for a family, from configs/models/<model_type>.yaml."""
+    cfg_path = Path(project_root) / "configs" / "models" / f"{model_type}.yaml"
+    if not cfg_path.exists():
+        logging.warning(
+            "No model config at %s - falling back to wrapper class defaults for %s",
+            cfg_path,
+            model_type,
+        )
+        return {}
+    return dict(load_yaml_config(str(cfg_path)).get("hyperparameters", {}))
 
 
 def run_analysis(
@@ -534,6 +598,7 @@ def run_analysis(
     run_id: str = None,
     output_root: str = None,
     verbose: int = 0,
+    model_types: list = None,
 ):
     """
     Runs the mitigation comparison experiment.
@@ -548,10 +613,8 @@ def run_analysis(
     with open(schema_path, "r") as f:
         schema_cfg = json.load(f)
 
-    _lr_cfg = load_yaml_config(
-        str(project_root / "configs" / "models" / "logistic_regression.yaml")
-    )
-    model_params = dict(_lr_cfg.get("hyperparameters", {}))
+    model_types = _resolve_model_types(model_types, experiment_cfg)
+    logging.info("Mitigation model families: %s", model_types)
 
     target_col = experiment_cfg.get("data", {}).get("target", "heart_disease")
 
@@ -660,6 +723,7 @@ def run_analysis(
     # Process each dataset
     all_results = []
     baseline_results = []
+    prediction_index = []
 
     for dataset_name in datasets:
         logging.info("[DATASET] Processing dataset=%s", dataset_name)
@@ -672,40 +736,56 @@ def run_analysis(
                 load_dataset(dataset_name, dataset_dir, schema_cfg, target_col, sensitive_attrs)
             )
 
-            # Train baseline
-            baseline = train_baseline(
-                X_train, y_train, X_test, y_test, sensitive_test, dataset_name, model_params
-            )
+            for model_type in model_types:
+                model_params = _load_model_params(project_root, model_type)
 
-            baseline_results.append(
-                {
-                    "dataset": dataset_name,
-                    "technique": "baseline",
-                    "stage": "none",
-                    "test_metrics": baseline["test_metrics"],
-                    "fairness": baseline["fairness"],
-                    "metadata": {},
-                }
-            )
+                # Train this family's own baseline. Post-processing wraps it, so
+                # it must be the same family as the rows it will be compared to.
+                baseline = train_baseline(
+                    X_train,
+                    y_train,
+                    X_test,
+                    y_test,
+                    sensitive_test,
+                    dataset_name,
+                    model_params,
+                    model_type=model_type,
+                )
 
-            # Apply mitigation techniques
-            mitigation_results = apply_mitigation_techniques(
-                X_train,
-                y_train,
-                X_test,
-                y_test,
-                sensitive_train,
-                sensitive_test,
-                dataset_name,
-                baseline["model"],
-                implemented,
-                base_model_params=model_params,
-                constraint_attrs=constraint_attrs_cfg,
-                meta_test=meta_test,
-                predictions_dir=output_dir / "predictions",
-            )
+                baseline_results.append(
+                    {
+                        "dataset": dataset_name,
+                        "model_type": model_type,
+                        "technique": "baseline",
+                        "constraint_attr": "",
+                        "stage": "none",
+                        "test_metrics": baseline["test_metrics"],
+                        "fairness": baseline["fairness"],
+                        "metadata": {"model_type": model_type},
+                    }
+                )
 
-            all_results.extend(mitigation_results)
+                # Apply mitigation techniques
+                all_results.extend(
+                    apply_mitigation_techniques(
+                        X_train,
+                        y_train,
+                        X_test,
+                        y_test,
+                        sensitive_train,
+                        sensitive_test,
+                        dataset_name,
+                        baseline["model"],
+                        implemented,
+                        base_model_params=model_params,
+                        constraint_attrs=constraint_attrs_cfg,
+                        meta_test=meta_test,
+                        predictions_dir=output_dir / "predictions",
+                        model_type=model_type,
+                        model_params=model_params,
+                        prediction_index=prediction_index,
+                    )
+                )
 
         except Exception as e:
             logging.error(f"Failed to process {dataset_name}: {e}")
@@ -741,6 +821,13 @@ def run_analysis(
     with open(json_file, "w") as f:
         json.dump(all_results, f, indent=2, default=str)
     logging.info(f"[SUCCESS] Saved JSON: {json_file}")
+
+    if prediction_index:
+        index_path = output_dir / "predictions" / "index.json"
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(index_path, "w") as f:
+            json.dump(prediction_index, f, indent=2)
+        logging.info("[SUCCESS] Saved predictions index: %s", index_path)
 
     # Generate human-readable markdown report
     report_file = output_dir / "report.md"
@@ -791,6 +878,13 @@ def main():
         "--datasets", type=str, nargs="+", help="Datasets to process (default: from config)"
     )
     parser.add_argument(
+        "--model-types",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Model families to mitigate (default: model_types in config, else logistic_regression)",
+    )
+    parser.add_argument(
         "--output-dir",
         type=str,
         help="Output directory (default: from config or output/{pipeline}/experiments/{run_mode}/latest_run/mitigation)",
@@ -835,6 +929,7 @@ def main():
         run_id=args.run_id,
         output_root=args.output_root,
         verbose=args.verbose,
+        model_types=args.model_types,
     )
 
 

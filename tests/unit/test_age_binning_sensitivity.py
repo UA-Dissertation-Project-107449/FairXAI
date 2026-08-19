@@ -131,3 +131,28 @@ def test_run_age_binning_writes_baseline_and_before_after(tmp_path):
     ba = out_base / "cleveland" / "before_after" / "reweighing_sex"
     assert (ba / "age_binning_sensitivity.csv").exists()
     assert (ba / "before_after_deltas.csv").exists()
+
+
+def test_load_mitigation_predictions_filters_by_model_type(tmp_path):
+    """Multi-model stage 10 writes one set per family; Axis A must not mix them."""
+    import json
+
+    mdir = tmp_path / "experiments" / "mitigation" / "predictions"
+    mdir.mkdir(parents=True)
+    index = []
+    for model_type in ("logistic_regression", "random_forest"):
+        name = f"cleveland_{model_type}_reweighting_sex.csv"
+        _pred_df(seed=9).to_csv(mdir / name, index=False)
+        index.append(
+            {
+                "file": name,
+                "dataset": "cleveland",
+                "model_type": model_type,
+                "technique": "reweighting",
+                "constraint_attr": "sex",
+            }
+        )
+    (mdir / "index.json").write_text(json.dumps(index))
+
+    loaded = load_mitigation_predictions(tmp_path, "cleveland", model_type="random_forest")
+    assert list(loaded) == ["reweighting_sex"]

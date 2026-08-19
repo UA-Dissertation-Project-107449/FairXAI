@@ -30,10 +30,19 @@ data:
 # heaviest combos may fall back to a single split — a documented limitation.
 constraint_attrs: all
 
+# Model families that mitigation runs for. Every family gets its own baseline
+# row plus one row per technique x constraint attribute.
+# Base hyperparameters per family come from configs/models/<family>.yaml.
+# WARNING: svm uses an RBF kernel (O(n^2) in rows) and resampling techniques
+# ADD rows - do not enable svm here for four_site_uci or cardio70k on a
+# <=16 GB machine. See MITIGATION_MULTIMODEL_PLAN.md "Hardware And Runtime Budget".
+model_types:
+  - logistic_regression
+  - random_forest
+  - xgboost
+
 baseline:
-  model: "logistic_regression"
-  config: "configs/models/logistic_regression.yaml"
-  no_mitigation: true  # Establish baseline metrics
+  no_mitigation: true  # Establish per-family baseline metrics
 
 mitigation_strategies:
   

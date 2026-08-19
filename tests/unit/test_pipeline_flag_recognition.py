@@ -137,3 +137,18 @@ def test_prefect_preprocess_forwards_max_samples() -> None:
     assert 'args.extend(["--max-samples", str(max_samples)])' in source
     assert "resolved_max_samples," in source
     assert "max_samples=args.max_samples" in source
+
+
+def test_mitigation_stage_receives_model_type_args():
+    """Stage 10 was the only stage not forwarding MODEL_TYPES; it must now."""
+    from pathlib import Path
+
+    script = (
+        Path(__file__).resolve().parents[2] / "scripts" / "cardiac" / "cardiac_pipeline.sh"
+    ).read_text()
+    lines = script.splitlines()
+    invocations = [i for i, line in enumerate(lines) if "cardiac/mitigation.py" in line]
+    assert invocations, "no mitigation.py invocation found"
+    for idx in invocations:
+        block = "\n".join(lines[idx : idx + 3])
+        assert "MODEL_TYPE_ARGS" in block, f"missing MODEL_TYPE_ARGS near line {idx + 1}"
