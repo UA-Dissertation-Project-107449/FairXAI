@@ -153,17 +153,40 @@ def before_after_deltas(
     return wide[["strategy", "bin", before, after, "delta"]]
 
 
-def load_mitigation_predictions(run_root: Path, dataset: str) -> Dict[str, pd.DataFrame]:
+def load_mitigation_predictions(
+    run_root: Path, dataset: str, model_type: Optional[str] = None
+) -> Dict[str, pd.DataFrame]:
     """Load persisted mitigated per-sample predictions for *dataset*.
 
-    Reads ``experiments/mitigation/predictions/<dataset>_<technique>_<constraint>.csv``
-    (written by ``run_mitigation_comparison``). Returns
-    ``{"<technique>_<constraint>": df}`` — each an "after" regime.
+    Reads ``experiments/mitigation/predictions/`` (written by
+    ``run_mitigation_comparison``) and returns ``{"<technique>_<constraint>": df}``
+    — each an "after" regime.
+
+    Since stage 10 runs several model families, that directory also carries an
+    ``index.json`` naming the family behind each file. Pass *model_type* to keep
+    only one family's sets: the filename cannot be parsed back, because every
+    component contains underscores. Without the index (pre-multi-model runs) the
+    legacy ``<dataset>_<technique>_<constraint>.csv`` glob is used unfiltered.
     """
     mdir = run_root / "experiments" / "mitigation" / "predictions"
     out: Dict[str, pd.DataFrame] = {}
     if not mdir.exists():
         return out
+
+    index_path = mdir / "index.json"
+    if index_path.exists():
+        with open(index_path) as f:
+            entries = json.load(f)
+        for entry in entries:
+            if entry.get("dataset") != dataset:
+                continue
+            if model_type is not None and entry.get("model_type") != model_type:
+                continue
+            path = mdir / entry["file"]
+            if path.exists():
+                out[f"{entry['technique']}_{entry['constraint_attr']}"] = pd.read_csv(path)
+        return out
+
     prefix = f"{dataset}_"
     for path in sorted(mdir.glob(f"{dataset}_*.csv")):
         regime = path.stem[len(prefix) :]
@@ -236,7 +259,7 @@ def run_age_binning(
             summary["axis_b_models"].append(model)
 
     # Axis A — before (baseline_model) vs each mitigation set.
-    mitigation = load_mitigation_predictions(run_root, dataset)
+    mitigation = load_mitigation_predictions(run_root, dataset, model_type=baseline_model)
     before_df = baseline_models.get(baseline_model)
     if mitigation and before_df is not None:
         feats = resolve_feature_cols(before_df, exclude=feature_exclude)
