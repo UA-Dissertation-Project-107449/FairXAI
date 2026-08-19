@@ -373,6 +373,18 @@ def _build_postprocessing_base_model(model_type, model_params=None):
     return model_class(**(model_params or {}))
 
 
+def _resolve_combo_model_types(config: Dict[str, Any]) -> List[str]:
+    """Families that run the sequential mitigation combos.
+
+    Combos are the most expensive arm — up to three fits chained per row — so
+    they get their own key: mitigation coverage can widen without every added
+    family also paying for combos. Defaults to the mitigation families.
+    """
+    explicit = config.get("mitigation_combo_model_types")
+    source = explicit if explicit else config.get("mitigation_supported_model_types", [])
+    return [str(m).strip().lower() for m in source if str(m).strip()] or ["logistic_regression"]
+
+
 def _build_mitigation_engine(config: Dict[str, Any]) -> MitigationEngine:
     """Engine for one experiment row, bound to that row's model family.
 
@@ -1649,7 +1661,9 @@ def run_combinatorial_analysis(
 
                             experiments.append((exp_id, exp_config))
 
-    # Combo experiments: pre to in to post chains, logistic_regression only.
+    # Combo experiments: pre to in to post chains, per configured family.
+    combo_model_types = _resolve_combo_model_types(config)
+    logger.info(f"Mitigation combo model types: {combo_model_types}")
     for combo in config.get("mitigation_combos", []):
         for dataset in selected_datasets:
             if isinstance(fairness_base_params_cfg, dict) and dataset in fairness_base_params_cfg:
@@ -1660,32 +1674,33 @@ def run_combinatorial_analysis(
                 fairness_base_params = _load_model_config(project_root, "logistic_regression")
             for binning in config["binning_strategies"]:
                 for training_method in config["training_methods"]:
-                    for variant in _resolve_model_variants(
-                        config,
-                        "logistic_regression",
-                        project_root,
-                        xgb_device,
-                        outer_n_jobs=n_jobs,
-                        dataset=dataset,
-                        hpo_dir=hpo_dir,
-                    ):
-                        exp_id = versioning.generate_experiment_id()
-                        exp_config = {
-                            "dataset": dataset,
-                            "binning_strategy": binning,
-                            "mitigation_technique": "+".join(combo),
-                            "mitigation_combo": combo,
-                            "training_method": training_method,
-                            "cv_folds": config.get("cv_folds", 5),
-                            "random_seed": config.get("random_seed", 42),
-                            "model_type": "logistic_regression",
-                            "model_variant": variant["name"],
-                            "model_params": variant["params"],
-                            "fairness_base_model_params": fairness_base_params or None,
-                            "sensitive_attributes": sensitive_attrs,
-                            "xai": config.get("xai", {}),
-                        }
-                        experiments.append((exp_id, exp_config))
+                    for model_type in combo_model_types:
+                        for variant in _resolve_model_variants(
+                            config,
+                            model_type,
+                            project_root,
+                            xgb_device,
+                            outer_n_jobs=n_jobs,
+                            dataset=dataset,
+                            hpo_dir=hpo_dir,
+                        ):
+                            exp_id = versioning.generate_experiment_id()
+                            exp_config = {
+                                "dataset": dataset,
+                                "binning_strategy": binning,
+                                "mitigation_technique": "+".join(combo),
+                                "mitigation_combo": combo,
+                                "training_method": training_method,
+                                "cv_folds": config.get("cv_folds", 5),
+                                "random_seed": config.get("random_seed", 42),
+                                "model_type": model_type,
+                                "model_variant": variant["name"],
+                                "model_params": variant["params"],
+                                "fairness_base_model_params": fairness_base_params or None,
+                                "sensitive_attributes": sensitive_attrs,
+                                "xai": config.get("xai", {}),
+                            }
+                            experiments.append((exp_id, exp_config))
 
     total_experiments = len(experiments)
     logger.info(f"[PLAN] Total experiments: {total_experiments}")

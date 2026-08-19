@@ -164,3 +164,48 @@ def test_sweep_engine_defaults_to_logistic_regression(monkeypatch):
     assert seen["model_type"] == "logistic_regression"
     assert seen["model_params"] == {}
     assert seen["random_state"] == 42
+
+
+def test_combo_experiments_are_planned_per_supported_family():
+    """Combos default to the mitigation families, but can be narrowed on cost."""
+    module = _load_runner_module()
+
+    families = module._resolve_combo_model_types(
+        {"mitigation_supported_model_types": ["logistic_regression", "random_forest"]}
+    )
+    assert families == ["logistic_regression", "random_forest"]
+
+    families = module._resolve_combo_model_types(
+        {
+            "mitigation_supported_model_types": ["logistic_regression", "random_forest"],
+            "mitigation_combo_model_types": ["logistic_regression"],
+        }
+    )
+    assert families == ["logistic_regression"]
+
+
+def test_combo_model_types_fall_back_to_logistic_regression():
+    """An empty config must not silently plan zero combo experiments."""
+    module = _load_runner_module()
+
+    assert module._resolve_combo_model_types({}) == ["logistic_regression"]
+    assert module._resolve_combo_model_types(
+        {"mitigation_supported_model_types": [], "mitigation_combo_model_types": []}
+    ) == ["logistic_regression"]
+
+
+def test_combinatorial_config_lists_combo_families():
+    """The shipped config must declare both mitigation and combo family lists."""
+    import yaml
+
+    root = Path(__file__).resolve().parents[2]
+    with open(root / "configs" / "experiments" / "combinatorial.yaml") as f:
+        config = yaml.safe_load(f)
+
+    supported = [str(m).strip().lower() for m in config["mitigation_supported_model_types"]]
+    combos = [str(m).strip().lower() for m in config["mitigation_combo_model_types"]]
+
+    assert "random_forest" in supported
+    # svm is an RBF kernel, O(n^2) in rows, and resampling techniques add rows.
+    assert "svm" not in supported
+    assert set(combos).issubset(set(supported))
