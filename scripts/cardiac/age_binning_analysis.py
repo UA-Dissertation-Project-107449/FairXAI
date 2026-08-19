@@ -7,7 +7,7 @@ baseline-only when no mitigation predictions are present. For each dataset:
 * **Axis B** — per baseline model, recompute per-age-bin fairness under several
   binning strategies → ``<run>/baseline/age_binning_sensitivity/<dataset>/<model>/``.
 * **Axis A** — pair baseline ("before") vs each mitigated set ("after") per bin →
-  ``<run>/baseline/age_binning_sensitivity/<dataset>/before_after/<regime>/``.
+  ``<run>/baseline/age_binning_sensitivity/<dataset>/before_after/<model>/<regime>/``.
 
 Analysis only — predictions are independent of the age binning, so nothing here
 changes training. See the root design note ``AGE_BINNING_FAIRNESS_SENSITIVITY.md``.

@@ -7,6 +7,7 @@ versioning helpers consumed by experiment scripts.
 from .age_binning_sensitivity import (
     before_after_deltas,
     compute_age_binning_sensitivity,
+    list_mitigated_model_types,
     load_mitigation_predictions,
     run_age_binning,
     run_age_binning_sensitivity,
@@ -39,5 +40,6 @@ __all__ = [
     "run_age_binning",
     "run_age_binning_sensitivity",
     "load_mitigation_predictions",
+    "list_mitigated_model_types",
     "ExperimentVersioning",
 ]

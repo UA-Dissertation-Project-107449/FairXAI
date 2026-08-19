@@ -72,7 +72,7 @@ similarity:
 #   Axis A — mitigation effect (baseline "before" vs mitigated "after"), per bin.
 # Requires age_raw carried into predictions (train_baseline + mitigation do this).
 # Off by default → enable via this flag or env RUN_AGE_BINNING=1. Output under
-# <run>/baseline/age_binning_sensitivity/<dataset>/{<model>,before_after/<regime>}/.
+# <run>/baseline/age_binning_sensitivity/<dataset>/{<model>,before_after/<model>/<regime>}/.
 age_binning_sensitivity:
   enabled: false
   strategies: [quantile_3, fixed_5yr, fixed_10yr, equal_width_4]
