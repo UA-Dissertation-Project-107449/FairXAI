@@ -536,6 +536,16 @@ class MitigationEngine:
         params.setdefault("random_state", self.random_state)
         return model_class(**params)
 
+    def build_model(self):
+        """Public alias for :meth:`_new_model`.
+
+        Callers outside this module need the *same* untrained estimator the
+        engine would train, so an unmitigated baseline arm is comparable to the
+        mitigated ones. Exposed rather than duplicated so the two cannot drift
+        (see ``fairness/image_feature_mitigation.py``).
+        """
+        return self._new_model()
+
     @staticmethod
     def _positive_class_scores(model, X_test) -> np.ndarray | None:
         """Extract usable positive-class scores for AUC, if available."""

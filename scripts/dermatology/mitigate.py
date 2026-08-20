@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""Dermatology phase runner: post-processing fairness mitigation (stage 11).
+"""Dermatology phase runner: fairness mitigation (stage 11).
 
-Reuses the baseline train/test prediction CSVs for the current run and writes a
-before/after mitigation report. No model load, no retraining: group-wise decision
-thresholds are learned per sensitive attribute (in isolation) for every configured
-fairlearn constraint, fit on train predictions and applied to test predictions.
+Two parts, both writing before/after reports for the current run:
+
+1. **Post-processing** — reuses the baseline train/test prediction CSVs. No model
+   load, no retraining: group-wise decision thresholds are learned per sensitive
+   attribute (in isolation) for every configured fairlearn constraint, fit on
+   train predictions and applied to test predictions.
+2. **Feature space** (``mitigation.feature_space``) — rebuilds each model's
+   frozen-backbone feature matrix with one eval-mode forward pass and runs
+   cardiac's pre/in-processing catalog over it through the shared
+   ``MitigationEngine``. Skipped with ``--no-feature-space``.
 
 Invoked by the pipeline with ``RUN_ID`` exported; can also be run standalone:
 
@@ -25,6 +31,10 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT_DIR / "src"))
 
 from fairxai.cli.runner_base import setup_phase_logging  # noqa: E402
+from fairxai.fairness.image_feature_mitigation import (  # noqa: E402
+    DEFAULT_FEATURE_TECHNIQUES,
+    mitigate_run_features,
+)
 from fairxai.fairness.image_mitigation import (  # noqa: E402
     DEFAULT_CONSTRAINTS,
     DEFAULT_MIN_GROUP_SAMPLES,
@@ -66,6 +76,25 @@ def main() -> None:
         dest="figures",
         action="store_false",
         help="Skip before/after PNGs (overrides config).",
+    )
+    parser.add_argument(
+        "--feature-space",
+        dest="feature_space",
+        action="store_true",
+        default=None,
+        help="Run pre/in-processing mitigation on frozen features (overrides config).",
+    )
+    parser.add_argument(
+        "--no-feature-space",
+        dest="feature_space",
+        action="store_false",
+        help="Skip feature-space mitigation; post-processing only (overrides config).",
+    )
+    parser.add_argument(
+        "--techniques",
+        nargs="*",
+        default=None,
+        help=f"Feature-space techniques (default: {' '.join(DEFAULT_FEATURE_TECHNIQUES)}).",
     )
     parser.add_argument("-v", action="store_const", const=1, dest="verbose", default=0)
     parser.add_argument("-vv", action="store_const", const=2, dest="verbose")
@@ -129,17 +158,90 @@ def main() -> None:
     )
 
     if not reports:
+        # Not fatal for the stage: the feature-space pass reads checkpoints, not
+        # prediction CSVs, so it can still produce a report.
         logging.warning("No prediction pairs mitigated for run %s", run_id)
         print("  No prediction pairs mitigated.")
+    else:
+        for key in sorted(reports):
+            n_attrs = len(reports[key].get("sensitive_attributes", {}))
+            print(f"  {key}: mitigated {n_attrs} attribute(s) x {len(constraints)} constraint(s)")
+        out_dir = run_root / "baseline" / "mitigation"
+        logging.info("[SUCCESS] Mitigated %d model(s): %s", len(reports), out_dir)
+        print(f"  Report: {out_dir}")
+        if write_figures:
+            print(f"  Figures: {out_dir / 'figures'}")
+
+    _run_feature_space(cfg, args, run_root, sensitive_attrs, min_group)
+
+
+def _run_feature_space(cfg, args, run_root: Path, sensitive_attrs, min_group: int) -> None:
+    """Stage 11 part 2: pre/in-processing over the frozen-backbone features.
+
+    Unlike the post-processing pass this loads each checkpoint and runs a forward
+    pass, so it is opt-out (``--no-feature-space``) and never fails the stage: a
+    torch/checkpoint problem is logged and the post-processing report still stands.
+    """
+    fs_cfg = (cfg.get("mitigation", {}) or {}).get("feature_space", {}) or {}
+    enabled = (
+        bool(args.feature_space) if args.feature_space is not None else bool(fs_cfg.get("enabled"))
+    )
+    if not enabled:
+        print("[PHASE 11] Feature-space mitigation disabled; skipping.")
+        return
+
+    training_cfg = cfg.get("training", {}) or {}
+    image_cfg = training_cfg.get("image", {}) or {}
+    processed_dir = ROOT_DIR / cfg.get("paths", {}).get(
+        "processed_dir", "data/processed/dermatology"
+    )
+    techniques = args.techniques or fs_cfg.get("techniques", DEFAULT_FEATURE_TECHNIQUES)
+
+    from fairxai.utils.gpu import detect_accelerator
+
+    requested = fs_cfg.get("device", image_cfg.get("device", "auto"))
+    resolved = detect_accelerator(requested)
+    # Only cuda and cpu are torch device strings the extraction path can hand to
+    # torch.device; anything else (rocm on an unsupported build) falls back.
+    device = resolved if resolved in {"cuda", "cpu"} else "cpu"
+
+    logging.info(
+        "[PHASE] Feature-space mitigation run_root=%s techniques=%s device=%s",
+        run_root,
+        techniques,
+        device,
+    )
+    print(f"[PHASE 11] Feature-space mitigation ({len(techniques)} technique(s), device={device})")
+    try:
+        reports = mitigate_run_features(
+            run_root,
+            sensitive_attrs,
+            processed_dir=processed_dir,
+            image_col=image_cfg.get("image_column", "image_path"),
+            target_col=training_cfg.get("target", "skin_cancer"),
+            techniques=techniques,
+            model_type=fs_cfg.get("model_type", "logistic_regression"),
+            min_group_samples=min_group,
+            datasets=args.datasets,
+            model_types=args.model_types,
+            device=device,
+            batch_size=int(fs_cfg.get("batch_size", image_cfg.get("batch_size", 32))),
+            num_workers=int(fs_cfg.get("num_workers", image_cfg.get("num_workers", 0))),
+        )
+    except Exception as exc:  # noqa: BLE001 - post-processing results must survive
+        logging.warning("Feature-space mitigation failed: %s", exc)
+        print(f"  Feature-space mitigation failed: {exc}")
+        return
+
+    if not reports:
+        print("  No checkpoints available for feature-space mitigation.")
         return
     for key in sorted(reports):
         n_attrs = len(reports[key].get("sensitive_attributes", {}))
-        print(f"  {key}: mitigated {n_attrs} attribute(s) x {len(constraints)} constraint(s)")
-    out_dir = run_root / "baseline" / "mitigation"
-    logging.info("[SUCCESS] Mitigated %d model(s): %s", len(reports), out_dir)
-    print(f"  Report: {out_dir}")
-    if write_figures:
-        print(f"  Figures: {out_dir / 'figures'}")
+        print(f"  {key}: {n_attrs} attribute(s) x {len(techniques)} technique(s)")
+    fs_dir = run_root / "baseline" / "mitigation" / "feature_space"
+    logging.info("[SUCCESS] Feature-space mitigated %d model(s): %s", len(reports), fs_dir)
+    print(f"  Report: {fs_dir}")
 
 
 if __name__ == "__main__":
