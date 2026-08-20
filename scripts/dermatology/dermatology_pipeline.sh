@@ -85,6 +85,12 @@ while [[ $# -gt 0 ]]; do
         --no-recommendations)
             RUN_RECOMMENDATIONS=false
             ;;
+        --explain)
+            RUN_EXPLAIN=true
+            ;;
+        --no-explain)
+            RUN_EXPLAIN=false
+            ;;
         -v) VERBOSE=1 ;;
         -vv) VERBOSE=2 ;;
         *)
@@ -173,6 +179,26 @@ EPOCH_ARGS=()
 BATCH_ARGS=()
 [[ -n "$BATCH_SIZE" ]] && BATCH_ARGS=(--batch-size "$BATCH_SIZE")
 
+# Stage 10 (explain) reloads every trained model and renders SHAP/LIME/Grad-CAM
+# overlays. On a cached-frozen-features run it dominates wall-clock while adding
+# nothing to the fairness numbers, so it is skippable without editing the config.
+# Precedence: --explain / --no-explain > RUN_EXPLAIN > xai.enabled in the config.
+XAI_ENABLED=$("$PYTHON" - "$ROOT_DIR" <<'XAI_PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+cfg = yaml.safe_load((Path(sys.argv[1]) / "configs/pipelines/dermatology.yaml").read_text()) or {}
+print("true" if (cfg.get("xai", {}) or {}).get("enabled", False) else "false")
+XAI_PY
+)
+RUN_EXPLAIN=${RUN_EXPLAIN:-$XAI_ENABLED}
+# Normalize truthy values (1/true/yes/on, any case) -> "true".
+shopt -s nocasematch
+[[ "$RUN_EXPLAIN" =~ ^(1|true|yes|on)$ ]] && RUN_EXPLAIN=true || RUN_EXPLAIN=false
+shopt -u nocasematch
+
 echo "======================================================================"
 echo "DERMATOLOGY BASELINE PIPELINE"
 echo "======================================================================"
@@ -182,6 +208,7 @@ echo "Stages:           $START_NUM..$END_NUM"
 echo "Datasets:         ${DATASETS[*]:-config/default}"
 echo "Model types:      ${MODEL_TYPES[*]:-config/default}"
 echo "Device:           ${DEVICE:-config/default}"
+echo "Explain (XAI):    $RUN_EXPLAIN"
 echo ""
 
 if should_run 1; then
@@ -245,8 +272,12 @@ else
 fi
 
 if should_run 10; then
-    echo "[PHASE 10] Explaining baseline models (XAI)"
-    "$PYTHON" "$ROOT_DIR/scripts/dermatology/explain.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $VERBOSE_FLAG
+    if [[ "$RUN_EXPLAIN" == "true" ]]; then
+        echo "[PHASE 10] Explaining baseline models (XAI)"
+        "$PYTHON" "$ROOT_DIR/scripts/dermatology/explain.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $VERBOSE_FLAG
+    else
+        echo "[10] explain - SKIPPED (disabled)"
+    fi
     mark_done 10
 else
     echo "[10] explain - SKIPPED"

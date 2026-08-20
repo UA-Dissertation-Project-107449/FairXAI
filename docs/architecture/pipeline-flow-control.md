@@ -1,6 +1,15 @@
 # Pipeline Flow Control
 
-Both the **Prefect flow** (`flows/cardiac_pipeline.py`) and the **bash pipeline** (`scripts/cardiac/cardiac_pipeline.sh`) share identical flow-control semantics via `--resume-from` / `--go-until` flags.
+Each domain has two interchangeable orchestrators that share identical flow-control
+semantics via `--resume-from` / `--go-until`:
+
+| Domain | Prefect flow | Bash pipeline |
+|--------|--------------|---------------|
+| Cardiac | `flows/cardiac_pipeline.py` | `scripts/cardiac/cardiac_pipeline.sh` |
+| Dermatology | `flows/dermatology_pipeline.py` | `scripts/dermatology/dermatology_pipeline.sh` |
+
+Both orchestrators of a domain write the same checkpoint markers, so a run started
+under one can be resumed under the other.
 
 ---
 
@@ -70,9 +79,30 @@ load (1)
                                             └─ compare (12)       [optional; waits for active experiment stages]
 ```
 
+Dermatology:
+
+```
+load (1)
+  └─ profile (2)
+        ├─ recommend (3)                  [independent branch; optional]
+        └─ preprocess (4)
+              └─ train (7)
+                    └─ assess (8)
+                          └─ compare (9)
+                                └─ explain (10)   [optional]
+                                      └─ mitigate (11)
+```
+
+Stages 9-11 are chained rather than fanned out: `explain` reloads every trained
+model onto the accelerator, so running it beside a sibling stage would put two
+stages on the same device memory. When `explain` is disabled, `mitigate` waits on
+`compare` instead.
+
 ---
 
 ## Flags
+
+### Shared and cardiac flags
 
 | Flag | Prefect CLI | Bash env var | Description |
 |------|-------------|--------------|-------------|
@@ -88,6 +118,31 @@ load (1)
 | Skip combinatorial | `--no-combinatorial` | `RUN_COMBINATORIAL=false` | Skip stage 11 even if in active range. |
 | Skip comparison | `--no-comparison` | `RUN_COMPARISON=false` | Skip stage 12 even if in active range. |
 | Verbose | `-v` / `--verbose` | `VERBOSE=0/1/2` | Verbosity level; bash also accepts legacy `true`/`false`. |
+
+### Dermatology flags
+
+Resume point, stop point, run ID, dataset scope, model scope and verbosity behave
+exactly as above. The image pipeline adds:
+
+| Flag | Prefect CLI | Bash | Description |
+|------|-------------|------|-------------|
+| Skip recommendations | `--no-recommendations` | `--no-recommendations` / `RUN_RECOMMENDATIONS=false` | Skip stage 3 even if in active range. |
+| Explainability | `--explain` / `--no-explain` | `--explain` / `--no-explain` / `RUN_EXPLAIN` | Toggle stage 10. Precedence: CLI > env > `xai.enabled` in the pipeline config. |
+| Device | `--device <dev>` | `--device <dev>` | Torch device override (`cpu`, `cuda`, ...). |
+| Epochs | `--epochs <n>` | `--epochs <n>` | Epoch cap override for training. |
+| Batch size | `--batch-size <n>` | `--batch-size <n>` | Batch size override for training. |
+| Pretrained weights | `--pretrained` / `--no-pretrained` | same | Start from pretrained backbone weights, or train from scratch. |
+| Figures | `--figures` / `--no-figures` | same | Render stage figures (preprocess, assess, compare, mitigate). |
+| Group views | `--group-views` / `--no-group-views` | same | Emit per-sensitive-group views in the fairness assessment. |
+
+Stage 10 is the most expensive stage of a run with `cache_frozen_features`
+enabled and feeds none of the fairness numbers, so `--no-explain` is the flag to
+reach for when only the baseline and mitigation results are wanted. It skips the
+subprocess entirely; `explain.py`'s own `xai.enabled` guard only fires after the
+process has started and imported torch.
+
+Omitting a `--x` / `--no-x` pair leaves the decision to the stage script's config
+value, in both orchestrators.
 
 ### Dataset and model override precedence
 
@@ -203,6 +258,30 @@ RESUME_FROM=recommend GO_UNTIL=recommend bash scripts/cardiac/cardiac_pipeline.s
 python flows/cardiac_pipeline.py --resume-from recommend --go-until recommend
 ```
 
+### Dermatology: full baseline without the saliency stage
+
+```bash
+bash scripts/dermatology/dermatology_pipeline.sh --no-explain
+python3 flows/dermatology_pipeline.py --no-explain
+```
+
+### Dermatology: one model family on CPU, short run
+
+```bash
+bash scripts/dermatology/dermatology_pipeline.sh \
+      --model-types resnet18 --device cpu --epochs 1 --batch-size 8
+
+python3 flows/dermatology_pipeline.py \
+      --model-types resnet18 --device cpu --epochs 1 --batch-size 8
+```
+
+### Dermatology: re-run only explainability over the latest run
+
+```bash
+RESUME_FROM=explain GO_UNTIL=explain bash scripts/dermatology/dermatology_pipeline.sh
+python3 flows/dermatology_pipeline.py --resume-from explain --go-until explain
+```
+
 ---
 
 ## Checkpoints
@@ -210,8 +289,10 @@ python flows/cardiac_pipeline.py --resume-from recommend --go-until recommend
 Each stage writes a completion marker on success to:
 
 ```
-output/cardiac/runs/<run_id>/.checkpoints/<number>_<name>.done
+output/<domain>/runs/<run_id>/.checkpoints/<number>_<name>.done
 ```
+
+`<domain>` is `cardiac` or `dermatology`.
 
 Example after a full run:
 

@@ -43,6 +43,10 @@ bash scripts/cardiac/cardiac_pipeline.sh
 # Full Prefect flow
 python3 flows/cardiac_pipeline.py
 
+# Dermatology, either orchestrator
+bash scripts/dermatology/dermatology_pipeline.sh
+python3 flows/dermatology_pipeline.py --no-explain
+
 # Cleveland-only smoke run
 python3 flows/cardiac_pipeline.py --datasets cleveland
 

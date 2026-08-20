@@ -2,8 +2,7 @@
 
 FairXAI is the dissertation research repository for fairness-aware and
 explainable healthcare decision-support experiments. The current complete
-pipeline is cardiac-focused; dermatology is scaffolded but not an active
-end-to-end pipeline.
+pipeline are cardiac and dermatology-focused, with a shared schema and modularized architecture to support future domains.
 
 ## What This Repo Does
 
@@ -52,6 +51,22 @@ bash scripts/cardiac/cardiac_pipeline.sh --go-until recommend
 
 # Resume latest run from training
 bash scripts/cardiac/cardiac_pipeline.sh --resume-from train
+```
+
+## Run The Dermatology Pipeline
+
+```bash
+# Bash orchestrator
+bash scripts/dermatology/dermatology_pipeline.sh
+
+# Prefect orchestrator
+python3 flows/dermatology_pipeline.py
+
+# Skip the saliency stage (most of the wall-clock on a cached-feature run)
+python3 flows/dermatology_pipeline.py --no-explain
+
+# Single model family, short CPU run
+python3 flows/dermatology_pipeline.py --model-types resnet18 --device cpu --epochs 1
 ```
 
 Both orchestrators support `--datasets`, `--model-types`, `--resume-from`,
