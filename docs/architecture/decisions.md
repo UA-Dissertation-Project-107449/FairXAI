@@ -9,7 +9,7 @@ how generated artifacts should be interpreted.
 |------|----------|
 | `src/fairxai/` | Reusable package code. Scripts should call into this layer instead of duplicating logic. |
 | `scripts/` | Operational entry points for pipeline stages, studies, and experiments. |
-| `flows/` | Prefect orchestration around the same scripts used by the bash pipeline. |
+| `flows/` | Prefect orchestration around the same scripts used by the bash pipelines: one flow per domain, each mirroring its bash counterpart stage for stage. |
 | `configs/` | Declarative runtime settings for pipeline, domain, model, profiling, recommendation, and experiment behavior. |
 | `docs/` | Architecture, guides, references, research notes, and planning docs. |
 | `data/` | External/raw/processed datasets. Generated data is not package source. |
