@@ -6,6 +6,7 @@ running full pipeline workloads.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -252,3 +253,105 @@ def test_dermatology_bash_explain_stage_is_gated_on_run_explain() -> None:
     for idx in invocations:
         preceding = "\n".join(lines[max(0, idx - 6) : idx])
         assert "RUN_EXPLAIN" in preceding, f"explain.py at line {idx + 1} is not gated"
+
+
+# --- Dermatology Prefect flow parity -----------------------------------------
+# The dermatology flow and its bash pipeline drive the same phase runners. These
+# tests derive what bash forwards and require the flow to match, so the two
+# orchestrators cannot drift the way the cardiac pair did at stage 10.
+
+DERM_PREFECT_FLOW = ROOT / "flows" / "dermatology_pipeline.py"
+
+# Bash builds one array per optional scope flag; each maps to the literal(s) the
+# equivalent flow task must put on the command line.
+_BASH_ARG_ARRAY_TO_FLAGS = {
+    "DATASET_ARGS": ("--datasets",),
+    "MODEL_TYPE_ARGS": ("--model-types",),
+    "DEVICE_ARGS": ("--device",),
+    "EPOCH_ARGS": ("--epochs",),
+    "BATCH_ARGS": ("--batch-size",),
+    "PRETRAINED_ARGS": ("--pretrained", "--no-pretrained"),
+    "FIGURE_ARGS": ("--figures", "--no-figures"),
+    "GROUP_VIEW_ARGS": ("--group-views", "--no-group-views"),
+}
+
+
+def _derm_bash_invocations() -> dict[str, set[str]]:
+    """Map each dermatology phase runner to the bash arg arrays it receives."""
+    invocations: dict[str, set[str]] = {}
+    for line in DERM_BASH_PIPELINE.read_text(encoding="utf-8").splitlines():
+        match = re.search(r"dermatology/([a-z_]+)\.py", line)
+        if not match:
+            continue
+        arrays = set(re.findall(r"\$\{([A-Z_]+)\[@\]\}", line))
+        invocations[f"{match.group(1)}.py"] = arrays
+    return invocations
+
+
+def _flow_task_body(flow_source: str, script_name: str) -> str:
+    """The @task body that launches *script_name*, up to whatever follows it."""
+    marker = f'"{script_name}"'
+    start = flow_source.index(marker)
+    return flow_source[flow_source.rindex("\ndef ", 0, start) : flow_source.index("\ndef ", start)]
+
+
+def test_dermatology_prefect_help_lists_scope_flags() -> None:
+    result = _run([sys.executable, str(DERM_PREFECT_FLOW), "--help"])
+    assert result.returncode == 0
+    output = (result.stdout or "") + (result.stderr or "")
+    for flag in (
+        "--resume-from",
+        "--go-until",
+        "--run-id",
+        "--datasets",
+        "--model-types",
+        "--device",
+        "--epochs",
+        "--batch-size",
+        "--pretrained",
+        "--no-pretrained",
+        "--figures",
+        "--no-figures",
+        "--group-views",
+        "--no-group-views",
+        "--no-recommendations",
+        "--explain",
+        "--no-explain",
+    ):
+        assert flag in output, f"dermatology flow --help does not list {flag}"
+
+
+def test_dermatology_prefect_runs_every_stage_script_bash_runs() -> None:
+    """A stage bash runs but the flow does not is a silently shorter pipeline."""
+    flow_source = DERM_PREFECT_FLOW.read_text(encoding="utf-8")
+    for script_name in _derm_bash_invocations():
+        assert f'"{script_name}"' in flow_source, f"flow never launches {script_name}"
+
+
+def test_dermatology_prefect_forwards_the_same_flags_as_bash() -> None:
+    """Every scope flag bash hands a phase runner must reach it from the flow too."""
+    flow_source = DERM_PREFECT_FLOW.read_text(encoding="utf-8")
+    for script_name, arrays in _derm_bash_invocations().items():
+        body = _flow_task_body(flow_source, script_name)
+        for array in arrays:
+            for flag in _BASH_ARG_ARRAY_TO_FLAGS[array]:
+                assert flag in body, f"flow task for {script_name} does not forward {flag}"
+
+
+def test_dermatology_prefect_stage_numbers_match_the_catalog() -> None:
+    """Dermatology numbering is sparse (no 5 or 6); the flow must not renumber."""
+    from fairxai.pipeline.stages import DERMATOLOGY_STAGES
+
+    flow_source = DERM_PREFECT_FLOW.read_text(encoding="utf-8")
+    gated = {int(n) for n in re.findall(r"_should_run\((\d+)\)", flow_source)}
+
+    assert gated == {stage.number for stage in DERMATOLOGY_STAGES}
+
+
+def test_dermatology_prefect_explain_stage_is_gated() -> None:
+    """The flow needs the same escape hatch from the heaviest stage bash has."""
+    flow_source = DERM_PREFECT_FLOW.read_text(encoding="utf-8")
+
+    assert "run_explain" in flow_source
+    assert 'os.getenv("RUN_EXPLAIN")' in flow_source, "no RUN_EXPLAIN env fallback"
+    assert '"xai"' in flow_source, "explain toggle does not fall back to xai.enabled"
