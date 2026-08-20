@@ -45,6 +45,39 @@ import pandas as pd
 
 matplotlib.use("Agg")
 
+# Global figure theme for every figure this script produces.
+#
+# This is the one place typography and layout can be changed dataset-wide: the
+# plotting functions in fairxai.viz set their own figsize and colours, but they
+# do not touch fonts, grid, or line weight, so those fall through to rcParams.
+# Changing the dissertation to a serif body face is a one-line edit here.
+#
+# savefig.dpi is a floor, not a ceiling: an explicit dpi= argument at the
+# savefig call site wins, and every fairxai.viz module passes dpi=300. It is
+# pinned to the same value so a figure saved without one matches the rest.
+matplotlib.rcParams.update(
+    {
+        "font.family": "sans-serif",
+        # DejaVu Sans ships with matplotlib, so the stack always resolves.
+        "font.sans-serif": ["DejaVu Sans", "Arial", "Helvetica"],
+        "font.size": 10,
+        "axes.titlesize": 12,
+        "axes.labelsize": 10,
+        "xtick.labelsize": 9,
+        "ytick.labelsize": 9,
+        "legend.fontsize": 9,
+        "figure.titlesize": 13,
+        "axes.grid": True,
+        "grid.alpha": 0.3,
+        "grid.linewidth": 0.6,
+        "lines.linewidth": 1.6,
+        "lines.markersize": 5,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "savefig.dpi": 300,
+    }
+)
+
 # Ensure the project src is importable when running as a script
 _ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_ROOT / "src"))
