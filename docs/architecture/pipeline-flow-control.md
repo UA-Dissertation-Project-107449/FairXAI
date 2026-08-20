@@ -132,6 +132,7 @@ exactly as above. The image pipeline adds:
 | Epochs | `--epochs <n>` | `--epochs <n>` | Epoch cap override for training. |
 | Batch size | `--batch-size <n>` | `--batch-size <n>` | Batch size override for training. |
 | Pretrained weights | `--pretrained` / `--no-pretrained` | same | Start from pretrained backbone weights, or train from scratch. |
+| Augmentation | `--augmentation` / `--no-augmentation` | same | Toggle train-only image augmentation. Enabling it forces the frozen-feature cache off. |
 | Figures | `--figures` / `--no-figures` | same | Render stage figures (preprocess, assess, compare, mitigate). |
 | Group views | `--group-views` / `--no-group-views` | same | Emit per-sensitive-group views in the fairness assessment. |
 
@@ -140,6 +141,15 @@ enabled and feeds none of the fairness numbers, so `--no-explain` is the flag to
 reach for when only the baseline and mitigation results are wanted. It skips the
 subprocess entirely; `explain.py`'s own `xai.enabled` guard only fires after the
 process has started and imported torch.
+
+`--augmentation` is the other flag with a large cost consequence, in the opposite
+direction: augmentation and frozen-feature caching are mutually exclusive, because
+a cached crop is extracted once and has no diversity. With
+`cache_frozen_features: true` in the config, `--no-augmentation` is what actually
+makes the cache usable, and `--augmentation` re-runs pixels -> features every
+epoch. The pipeline config ships with both enabled, so the default run is the
+uncached one. The resolved value is recorded in the training metadata, which is
+what makes an augmentation on/off pair distinguishable from the artifacts alone.
 
 Omitting a `--x` / `--no-x` pair leaves the decision to the stage script's config
 value, in both orchestrators.
