@@ -183,8 +183,21 @@ def _resolve_xgb_device(config: Dict[str, Any]) -> str:
 
     Returns 'cuda' when an NVIDIA GPU is detected (or explicitly requested),
     otherwise 'cpu'. AMD/ROCm is not supported and falls back to 'cpu'.
+
+    XGBoost validates ``device`` against ``cpu``/``cuda``/``cuda:<ordinal>``
+    and raises ``XGBoostError`` for anything else, so every accelerator the
+    detector can report other than 'cuda' has to be clamped here rather than
+    forwarded verbatim.
     """
-    return detect_accelerator(config.get("accelerator", "auto"))
+    detected = detect_accelerator(config.get("accelerator", "auto"))
+    if detected == "cuda":
+        return "cuda"
+    if detected != "cpu":
+        logger.warning(
+            f"Accelerator '{detected}' has no XGBoost backend; using CPU for XGBoost. "
+            "Other models are unaffected."
+        )
+    return "cpu"
 
 
 def _resolve_model_n_jobs(outer_n_jobs: int) -> int:
