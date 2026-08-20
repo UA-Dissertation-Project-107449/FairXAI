@@ -272,3 +272,36 @@ def test_single_split_result_carries_mitigation_metadata(tmp_path):
 
     assert result["mitigation_metadata"]["sample_weight_applied"] is True
     assert result["mitigation_metadata"]["model_type"] == "logistic_regression"
+
+
+class TestResolveXgbDevice:
+    """XGBoost only accepts 'cpu' or 'cuda'; every other accelerator must clamp.
+
+    Passing 'rocm' through raises XGBoostError("Invalid argument for `device`")
+    at fit time, which would kill every XGBoost arm of the sweep on an AMD box.
+    """
+
+    def _resolve(self, monkeypatch, detected):
+        module = _load_runner_module()
+        monkeypatch.setattr(module, "detect_accelerator", lambda requested: detected)
+        return module._resolve_xgb_device({"accelerator": "auto"})
+
+    def test_cuda_is_passed_through(self, monkeypatch):
+        assert self._resolve(monkeypatch, "cuda") == "cuda"
+
+    def test_cpu_is_passed_through(self, monkeypatch):
+        assert self._resolve(monkeypatch, "cpu") == "cpu"
+
+    def test_rocm_falls_back_to_cpu(self, monkeypatch):
+        assert self._resolve(monkeypatch, "rocm") == "cpu"
+
+    def test_unknown_accelerator_falls_back_to_cpu(self, monkeypatch):
+        assert self._resolve(monkeypatch, "mps") == "cpu"
+
+    def test_rocm_fallback_is_logged(self, monkeypatch, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            self._resolve(monkeypatch, "rocm")
+
+        assert any("rocm" in record.message.lower() for record in caplog.records)
