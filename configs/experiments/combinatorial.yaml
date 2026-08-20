@@ -78,19 +78,26 @@ model_types:
 
 # Models that support fairness mitigation techniques.
 # Non-listed models run baseline-only arms.
-# svm is deliberately absent: the RBF kernel is O(n^2) in rows and the
-# resampling techniques ADD rows. Enable it only on the mini-PC and only for
-# cleveland_uci. See MITIGATION_MULTIMODEL_PLAN.md "Hardware And Runtime Budget".
+# svm is included because the datasets below are small (cleveland_uci 303 rows,
+# four_site_uci 918). Its RBF kernel is O(n^2) in rows and the resampling
+# techniques ADD rows, so on cardio70k the SVM arms dominate the wall clock —
+# drop svm from this list before running that dataset, or run it on HPC.
+# See MITIGATION_MULTIMODEL_PLAN.md "Hardware And Runtime Budget".
 mitigation_supported_model_types:
   - logistic_regression
   - random_forest
+  - svm
   - xgboost
 
 # Families that also run the sequential combo chains (the most expensive arm:
 # up to three fits chained per row). Must be a subset of the list above.
+# Same cardio70k caveat as above applies with more force here — three chained
+# fits per row instead of one.
 mitigation_combo_model_types:
   - logistic_regression
   - random_forest
+  - svm
+  - xgboost
 
 # Model variants: experiment-specific overrides merged onto base hyperparameters.
 # Base params are loaded from configs/models/<model_type>.yaml at runtime.
@@ -119,14 +126,17 @@ model_variants:
       params:
         kernel: linear
         C: 1.0
-    # svm_rbf excluded for now: RBF kernel is O(n²) in training.
-    # On cardio70k (70k rows) this would take hours. Re-enable only on
-    # small datasets or with an explicit dataset-size guard in the runner.
-    # - name: svm_rbf
-    #   params:
-    #     kernel: rbf
-    #     C: 1.0
-    #     gamma: scale
+    # svm_rbf is the arm that distinguishes the SVM family from logistic
+    # regression — svm_linear and LR produce near-identical decision
+    # boundaries on this data, so without RBF the family adds little.
+    # The RBF kernel is O(n²) in training: fine at 303/918 rows (a fraction of
+    # a second), hours on cardio70k. Comment this variant back out before
+    # running cardio70k, or gate it on dataset size in the runner.
+    - name: svm_rbf
+      params:
+        kernel: rbf
+        C: 1.0
+        gamma: scale
 
   xgboost:
     - name: xgb_small
@@ -143,7 +153,6 @@ random_seed: 42
 sensitive_attributes:
   - age_group
   - sex
-  - ethnicity
   - group_cluster
 
 # Fairness evaluation thresholds (for filtering results).
@@ -199,11 +208,15 @@ n_jobs: 6  # 6 threads; i5-1135G7 has 8 logical cores, leave 2 for OS/other work
 # Total experiments:
 #   D * B * T * (V_mit * M + V_base + V_combo * C)
 #
-# Example A (this config: 3 datasets, 5 bins, 2 training types, 7 mitigations
-#            incl. baseline, 6 combos, variants LR=2 RF=2 SVM=1 XGB=1;
-#            mitigated = LR+RF+XGB => V_mit=5, baseline-only = SVM => V_base=1,
-#            combos = LR+RF => V_combo=4):
-#   3 * 5 * 2 * (5*7 + 1 + 4*6) = 1800
+# Example A (this config: 2 datasets, 5 bins, 2 training types, 7 mitigations
+#            incl. baseline, 6 combos, variants LR=2 RF=2 SVM=2 XGB=1;
+#            every family is mitigated => V_mit=7, V_base=0, V_combo=7):
+#   2 * 5 * 2 * (7*7 + 0 + 7*6) = 1820
+#
+# Example A' (same config with cardio70k re-enabled, and svm dropped back out
+#             of both mitigation lists as the comments there instruct:
+#             V_mit=5, V_base=2, V_combo=5):
+#   3 * 5 * 2 * (5*7 + 2 + 5*6) = 2010
 #
 # Example B (the pre-2026-08 LR-only setup: V_mit=2, V_base=4, V_combo=2):
 #   3 * 5 * 2 * (2*7 + 4 + 2*6) = 900

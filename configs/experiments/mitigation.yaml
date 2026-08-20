@@ -17,7 +17,6 @@ data:
   sensitive_attributes:
     - sex
     - age_group
-    - ethnicity
     - group_cluster
   preprocessing: "configs/experiments/baseline.yaml"  # Use baseline preprocessing
 
@@ -33,12 +32,15 @@ constraint_attrs: all
 # Model families that mitigation runs for. Every family gets its own baseline
 # row plus one row per technique x constraint attribute.
 # Base hyperparameters per family come from configs/models/<family>.yaml.
-# WARNING: svm uses an RBF kernel (O(n^2) in rows) and resampling techniques
-# ADD rows - do not enable svm here for four_site_uci or cardio70k on a
-# <=16 GB machine. See MITIGATION_MULTIMODEL_PLAN.md "Hardware And Runtime Budget".
+# svm uses an RBF kernel (configs/models/svm.yaml default), which is O(n^2) in
+# rows, and the resampling techniques ADD rows. That is affordable for the two
+# datasets above (cleveland_uci 303 rows, four_site_uci 918) but not for
+# cardio70k on a <=16 GB machine - drop svm from this list before adding that
+# dataset. See MITIGATION_MULTIMODEL_PLAN.md "Hardware And Runtime Budget".
 model_types:
   - logistic_regression
   - random_forest
+  - svm
   - xgboost
 
 baseline:

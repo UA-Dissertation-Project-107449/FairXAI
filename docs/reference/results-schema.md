@@ -56,7 +56,7 @@ Top-level shape:
   "training_method": "single_split",
   "model_type": "logistic_regression",
   "model_variant": "c_1_0",
-  "sensitive_attributes": ["age_group", "sex", "ethnicity", "group_cluster"],
+  "sensitive_attributes": ["age_group", "sex", "group_cluster"],
   "feature_selection_mode": "exclude_sensitive",
   "n_features": 13,
   "n_train": 212,

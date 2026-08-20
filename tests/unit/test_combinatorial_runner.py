@@ -206,9 +206,12 @@ def test_combinatorial_config_lists_combo_families():
     combos = [str(m).strip().lower() for m in config["mitigation_combo_model_types"]]
 
     assert "random_forest" in supported
-    # svm is an RBF kernel, O(n^2) in rows, and resampling techniques add rows.
-    assert "svm" not in supported
+    # All four families are mitigated. The O(n^2) SVM cost that kept it out is a
+    # cardio70k concern; the shipped datasets are cleveland_uci (303 rows) and
+    # four_site_uci (918), where an RBF fit costs a fraction of a second.
+    assert {"logistic_regression", "random_forest", "svm", "xgboost"} == set(supported)
     assert set(combos).issubset(set(supported))
+    assert {"logistic_regression", "random_forest", "svm", "xgboost"} == set(combos)
 
 
 def _tiny_splits(seed=11, n=120):
