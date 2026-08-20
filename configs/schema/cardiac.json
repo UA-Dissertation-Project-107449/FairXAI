@@ -222,7 +222,7 @@
   },
   "unified_schema": {
     "target": "heart_disease",
-    "sensitive_attributes": ["age_group", "sex", "ethnicity", "group_cluster"],
+    "sensitive_attributes": ["age_group", "sex", "group_cluster"],
     "exclude_features": ["_dataset_source", "_dataset_file"],
     "clinical_features_standardized": {
       "chest_pain_type": ["cp", "ChestPainType"],

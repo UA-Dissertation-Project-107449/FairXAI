@@ -32,7 +32,7 @@ training:
   cv_n_jobs: 1
 
 fairness:
-  sensitive_attributes: [age_group, sex, ethnicity, group_cluster]
+  sensitive_attributes: [age_group, sex, group_cluster]
 
 # Optional: discover patient subgroups via clustering BEFORE training and treat
 # them as a sensitive attribute (group_cluster). Off by default → pipeline is
