@@ -273,6 +273,7 @@ _BASH_ARG_ARRAY_TO_FLAGS = {
     "PRETRAINED_ARGS": ("--pretrained", "--no-pretrained"),
     "FIGURE_ARGS": ("--figures", "--no-figures"),
     "GROUP_VIEW_ARGS": ("--group-views", "--no-group-views"),
+    "AUGMENTATION_ARGS": ("--augmentation", "--no-augmentation"),
 }
 
 
@@ -314,6 +315,8 @@ def test_dermatology_prefect_help_lists_scope_flags() -> None:
         "--no-figures",
         "--group-views",
         "--no-group-views",
+        "--augmentation",
+        "--no-augmentation",
         "--no-recommendations",
         "--explain",
         "--no-explain",
@@ -355,3 +358,28 @@ def test_dermatology_prefect_explain_stage_is_gated() -> None:
     assert "run_explain" in flow_source
     assert 'os.getenv("RUN_EXPLAIN")' in flow_source, "no RUN_EXPLAIN env fallback"
     assert '"xai"' in flow_source, "explain toggle does not fall back to xai.enabled"
+
+
+def test_dermatology_bash_parser_accepts_augmentation_toggle() -> None:
+    """Augmentation decides whether the frozen-feature cache is usable at all.
+
+    An aug-on vs aug-off comparison has to be expressible as a flag; if it needs a
+    config edit between runs, the two runs differ by something the run artifacts
+    do not record as a deliberate choice.
+    """
+    for flag in ("--augmentation", "--no-augmentation"):
+        result = _run(["bash", str(DERM_BASH_PIPELINE), flag, "--go-until", "nonexistent_stage"])
+        combined = (result.stdout or "") + (result.stderr or "")
+        assert f"Unknown argument '{flag}'" not in combined, f"bash pipeline rejects {flag}"
+
+
+def test_dermatology_bash_forwards_augmentation_only_to_train() -> None:
+    """Only the train stage consumes augmentation; the other runners would reject it."""
+    invocations = _derm_bash_invocations()
+    assert "AUGMENTATION_ARGS" in invocations["train_baseline.py"]
+    for script_name, arrays in invocations.items():
+        if script_name == "train_baseline.py":
+            continue
+        assert (
+            "AUGMENTATION_ARGS" not in arrays
+        ), f"{script_name} must not receive AUGMENTATION_ARGS"

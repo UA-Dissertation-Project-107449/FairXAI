@@ -145,6 +145,7 @@ def train_baseline_model(
     epochs: Optional[int] = None,
     batch_size: Optional[int] = None,
     pretrained: Optional[bool] = None,
+    augmentation: Optional[bool] = None,
     verbose: int = 0,
 ):
     """Stage 7: train the image baseline for each requested model family."""
@@ -162,6 +163,7 @@ def train_baseline_model(
     if batch_size is not None:
         args.extend(["--batch-size", str(batch_size)])
     args.extend(_toggle_flags(pretrained, "--pretrained", "--no-pretrained"))
+    args.extend(_toggle_flags(augmentation, "--augmentation", "--no-augmentation"))
     args.extend(_verbose_flags(verbose))
     _run_script(SCRIPTS_DIR / "train_baseline.py", args, _stage_env(run_id))
 
@@ -264,6 +266,7 @@ def dermatology_pipeline(
     epochs: Optional[int] = None,
     batch_size: Optional[int] = None,
     pretrained: Optional[bool] = None,
+    augmentation: Optional[bool] = None,
     figures: Optional[bool] = None,
     group_views: Optional[bool] = None,
 ):
@@ -276,6 +279,9 @@ def dermatology_pipeline(
     go_until    : stage name/number to stop after (inclusive).
     run_id_override : explicit run ID; on resume, defaults to latest run.
     run_explain : ``None`` defers to ``RUN_EXPLAIN`` then ``xai.enabled``.
+    augmentation : ``None`` defers to ``training.image.use_augmentation``.
+        Enabling it disables frozen-feature caching, so an augmented run pays
+        the pixels->features cost every epoch.
     """
     flow_logger = get_run_logger()
 
@@ -437,6 +443,7 @@ def dermatology_pipeline(
             epochs=epochs,
             batch_size=batch_size,
             pretrained=pretrained,
+            augmentation=augmentation,
             verbose=verbose,
             wait_for=[preprocess_task] if preprocess_task else [],
         )
@@ -576,6 +583,10 @@ Examples:
 
   # Resume a failed run from training, stop after the fairness assessment
   %(prog)s --resume-from train --go-until assess
+
+  # Augmentation on/off comparison (aug-off keeps the frozen-feature cache)
+  %(prog)s --no-augmentation --run-id derm_aug_off
+  %(prog)s --augmentation --run-id derm_aug_on
 """,
     )
     p.add_argument(
@@ -621,6 +632,20 @@ Examples:
         help="Train the backbone from scratch.",
     )
     p.set_defaults(pretrained=None)
+    augmentation_group = p.add_mutually_exclusive_group()
+    augmentation_group.add_argument(
+        "--augmentation",
+        dest="augmentation",
+        action="store_true",
+        help="Enable train-only image augmentation. Disables frozen-feature caching.",
+    )
+    augmentation_group.add_argument(
+        "--no-augmentation",
+        dest="augmentation",
+        action="store_false",
+        help="Disable image augmentation, keeping the frozen-feature cache usable.",
+    )
+    p.set_defaults(augmentation=None)
     figures_group = p.add_mutually_exclusive_group()
     figures_group.add_argument(
         "--figures",
@@ -687,6 +712,7 @@ if __name__ == "__main__":
         epochs=args.epochs,
         batch_size=args.batch_size,
         pretrained=args.pretrained,
+        augmentation=args.augmentation,
         figures=args.figures,
         group_views=args.group_views,
     )
