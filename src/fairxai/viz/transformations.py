@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
+from fairxai.viz.save_utils import save_figure
+
 logger = logging.getLogger(__name__)
 
 _BEFORE_COLOR = "#AAAAAA"
@@ -77,7 +79,7 @@ def plot_transformation_impact(before_dict, after_dict, output_file):
     ax.legend()
     ax.grid(axis="y", alpha=0.3)
     plt.tight_layout()
-    fig.savefig(output_file, dpi=200)
+    save_figure(fig, output_file, dpi=300)
     plt.close(fig)
     return output_file
 
@@ -145,7 +147,7 @@ def plot_before_after_distributions(X_before, X_after, feature_cols, output_file
 
     fig.suptitle("Feature Distributions: Before vs After Transformation", fontsize=12)
     plt.tight_layout()
-    fig.savefig(output_file, dpi=200)
+    save_figure(fig, output_file, dpi=300)
     plt.close(fig)
     return output_file
 
@@ -193,6 +195,6 @@ def plot_scaling_effects(X_raw, X_scaled, output_file):
     ax.legend(title="Condition")
     ax.grid(axis="y", alpha=0.3)
     plt.tight_layout()
-    fig.savefig(output_file, dpi=200)
+    save_figure(fig, output_file, dpi=300)
     plt.close(fig)
     return output_file

@@ -182,7 +182,7 @@ def plot_group_performance_gaps(before_json, after_json, sensitive_attr, output_
 
     fig.suptitle(f"Per-Group Performance Gaps — {attr_label}", fontsize=12)
     plt.tight_layout()
-    fig.savefig(output_file, dpi=200)
+    save_figure(fig, output_file, dpi=300)
     plt.close(fig)
     return output_file
 
@@ -269,6 +269,6 @@ def plot_bias_amplification_waterfall(stages_dict, output_file):
     ax.legend(fontsize=9)
     ax.grid(axis="y", alpha=0.3)
     plt.tight_layout()
-    fig.savefig(output_file, dpi=200)
+    save_figure(fig, output_file, dpi=300)
     plt.close(fig)
     return output_file
