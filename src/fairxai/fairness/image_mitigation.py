@@ -1,11 +1,15 @@
 """Post-processing fairness mitigation for dermatology image baselines.
 
-Deliberately post-processing only. CNN pre/in-processing mitigation would require
-retraining and is tabular-first in this codebase (see ``mitigation.py``); the
-dermatology contribution is *measurement plus a cheap post-hoc correction*, not
-full bias removal. This module never loads a model: it reuses the saved train/test
-prediction CSVs (``y_true``, ``y_pred``, ``y_proba``, sensitive columns) and learns
-group-specific decision thresholds via fairlearn's ``ThresholdOptimizer``.
+Post-processing only, and cheap by construction: this module never loads a model.
+It reuses the saved train/test prediction CSVs (``y_true``, ``y_pred``,
+``y_proba``, sensitive columns) and learns group-specific decision thresholds via
+fairlearn's ``ThresholdOptimizer``.
+
+The pre/in-processing arms live in
+:mod:`fairxai.fairness.image_feature_mitigation`, which rebuilds the
+frozen-backbone feature matrix and runs cardiac's technique catalog over it. That
+module needs a checkpoint and a forward pass; this one does not, so the two are
+kept separate and can be run independently.
 
 For each sensitive attribute *in isolation* and each requested fairness constraint,
 thresholds are fit on the **train** predictions and applied to the **test**
