@@ -131,12 +131,39 @@ train groups (>= `min_group_samples` and both classes present); fairlearn reject
 degenerate single-class groups (PAD `<20` age, `Unknown` sex/Fitzpatrick), so
 those are excluded from the fit and their test rows keep the baseline prediction.
 An attribute with fewer than two eligible groups is reported with a `note` and no
-threshold tuning. Pre-processing (reweighting/SMOTE) and
-in-processing (ExponentiatedGradient/GridSearch) for CNNs are **explicitly out of
-scope**: they require retraining and are tabular-first. The contribution is
-*measurement plus a cheap post-hoc correction*, not full bias removal — a
-deliberate, documented limitation that keeps stage 11 runnable on a laptop from
-saved predictions.
+threshold tuning.
+
+**Pre/in-processing runs in feature space** (stage 11 part 2,
+`fairness/image_feature_mitigation.py`). It was previously out of scope on the
+grounds that reweighting/SMOTE/ADASYN and the fairlearn reductions are
+tabular-first and would require retraining a CNN. `freeze_backbone: true` makes
+that false: the network is a fixed feature extractor and only the linear head is
+learned, so the learning problem *is* tabular — an `n_rows x n_channels` matrix
+and a binary label, exactly what `MitigationEngine` consumes. The matrix is
+rebuilt per model with one eval-mode, no-grad forward pass over the saved
+checkpoint (training does not persist its cached features, and the augmentation
+path never caches them), standardised with a train-fit `StandardScaler`, then
+run through the **same engine and the same technique catalog as cardiac**
+(`reweighting`, `smote`, `adasyn`, `exponentiated_gradient`, `grid_search`;
+`ros`/`rus` excluded in both domains). Running identical implementations, rather
+than image-specific lookalikes, is what makes the cross-domain comparison a
+comparison.
+
+Two limits are recorded in every report rather than left to be rediscovered.
+First, **the intervention is on the head, not the representation**: bias encoded
+into the frozen features by ImageNet pre-training survives every technique here.
+Learning a fair representation needs the backbone unfrozen — adversarial
+debiasing is inert under a frozen backbone, since the adversary sees fixed
+features and the encoder has no gradient path — and stays out of scope as a
+different, far more expensive experiment. Second, the delta reference is an
+**unmitigated linear head over the same standardised features**, never the CNN's
+own softmax head: those are different classifiers, so measuring against the CNN
+would report a head swap as a mitigation effect. The CNN's metrics travel in the
+report as context only. Unlike the post-processing path, undersized groups are
+not excluded from the *fit* — these techniques train a classifier that scores any
+row, rather than a per-group threshold that cannot exist for a group never fit —
+but they are still dropped from the fairness *metrics*, with
+`group_support_train` recording what each technique actually saw.
 
 ### SCIN Is Profiling-Only With An Approximate Target
 
