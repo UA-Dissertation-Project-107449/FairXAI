@@ -210,3 +210,45 @@ def test_prefect_and_bash_agree_on_which_stages_take_model_types() -> None:
         assert (
             'args.extend(["--model-types", *model_types])' in flow[task_start:task_end]
         ), f"flow task launching {name} does not forward --model-types"
+
+
+def test_dermatology_bash_parser_accepts_explain_toggle() -> None:
+    """Stage 10 (explain) is the run's most expensive stage; it must be skippable.
+
+    With cached frozen features the saliency stage dominates wall-clock, so a
+    baseline-only run needs to turn it off without editing the pipeline config.
+    """
+    for explain_flag in ("--explain", "--no-explain"):
+        result = _run(
+            [
+                "bash",
+                str(DERM_BASH_PIPELINE),
+                explain_flag,
+                "--go-until",
+                "invalid_stage_name",
+            ]
+        )
+
+        combined = (result.stdout or "") + (result.stderr or "")
+        assert result.returncode != 0
+        assert "Unknown stage 'invalid_stage_name'" in combined
+        assert f"Unknown argument '{explain_flag}'" not in combined
+
+
+def test_dermatology_bash_explain_stage_is_gated_on_run_explain() -> None:
+    """The flag has to gate the invocation, not just parse.
+
+    ``explain.py`` already no-ops on ``xai.enabled: false``, but only after
+    importing torch and resolving the run, so gating in the orchestrator is the
+    part that actually saves time.
+    """
+    source = DERM_BASH_PIPELINE.read_text(encoding="utf-8")
+
+    assert "RUN_EXPLAIN=${RUN_EXPLAIN:-" in source, "no RUN_EXPLAIN env/config default"
+
+    lines = source.splitlines()
+    invocations = [i for i, line in enumerate(lines) if "dermatology/explain.py" in line]
+    assert invocations, "no explain.py invocation found"
+    for idx in invocations:
+        preceding = "\n".join(lines[max(0, idx - 6) : idx])
+        assert "RUN_EXPLAIN" in preceding, f"explain.py at line {idx + 1} is not gated"
