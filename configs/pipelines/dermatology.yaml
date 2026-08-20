@@ -102,12 +102,11 @@ xai:
   lime_num_samples: 1000 # LIME perturbations per image (lower = faster, noisier)
 
 mitigation:
-  # Stage 11 (mitigate): post-processing only. Group-wise decision thresholds via
+  # Stage 11 (mitigate), part 1: post-processing. Group-wise decision thresholds via
   # fairlearn ThresholdOptimizer, fit on saved train predictions and applied to
   # test predictions. Per sensitive attribute in isolation, every constraint
-  # reported side-by-side. No retraining; no model load. CNN pre/in-processing
-  # mitigation is deliberately out of scope (would require retraining) — see
-  # docs/DECISIONS.md.
+  # reported side-by-side. No retraining; no model load.
+  # Part 2 (pre/in-processing) lives in the feature_space block below.
   enabled: true
   objective: balanced_accuracy_score
   min_group_samples: 50
@@ -120,6 +119,33 @@ mitigation:
     - equalized_odds
     - true_positive_rate_parity
     - false_positive_rate_parity
+
+  # Stage 11 part 2: pre/in-processing mitigation on the frozen-backbone feature
+  # matrix. freeze_backbone makes training a linear head over a fixed matrix, i.e.
+  # a tabular problem, so the SAME MitigationEngine cardiac uses applies here — the
+  # two domains then run technique-for-technique instead of differently-shaped
+  # selections. Features are rebuilt from each saved checkpoint with one eval-mode
+  # forward pass (they are not persisted by training, and the augmentation path
+  # never caches them), then standardised before any technique runs.
+  # Caveat kept in every report: the intervention is on the HEAD, not on the
+  # representation — backbone bias survives. See docs/architecture/decisions.md.
+  feature_space:
+    enabled: true
+    # Mirrors configs/experiments/combinatorial.yaml. ros/rus stay excluded there
+    # (no fairness guarantee, information loss) and stay excluded here.
+    techniques:
+      - reweighting
+      - smote
+      - adasyn
+      - exponentiated_gradient
+      - grid_search
+    # Head family trained over the features. logistic_regression matches the
+    # linear head the CNN itself uses, so the baseline arm is the closest
+    # comparable classifier rather than a different model class.
+    model_type: logistic_regression
+    batch_size: 32
+    num_workers: 2
+    device: auto      # auto probes cuda -> rocm -> cpu, as training does
 
 studies:
   skip: true
