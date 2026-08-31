@@ -306,13 +306,15 @@ Supporting choices:
 
 `scripts/studies/run_bootstrap_calibration.py` draws cohorts whose predictions
 are independent of every sensitive attribute, so every reported finding is a
-false one. 20 seeds x 400 rows x 1200 replicates, alpha = 0.05:
+false one. 20 seeds x 400 rows x 1200 replicates, alpha = 0.05, re-measured after
+the per-replicate seeding and the pairwise gating (an earlier table circulated with
+5.89% / 0.89%; it predates the seeding change and is not reproducible):
 
 | stratify | unadjusted | BH-adjusted | runs with a false finding | max-gap CI excludes zero |
 |---|---|---|---|---|
-| `group_outcome` (default) | 5.89% | 0.89% | 3/20 | 99.6% |
-| `group` | 4.64% | 0.18% | 1/20 | 100.0% |
-| `none` | 5.00% | 0.00% | 0/20 | 100.0% |
+| `group_outcome` (default) | 5.36% | 0.71% | 3/20 | 99.6% |
+| `group` | 4.64% | 0.00% | 0/20 | 100.0% |
+| `none` | 4.82% | 0.00% | 0/20 | 100.0% |
 
 Readings:
 
@@ -323,7 +325,84 @@ Readings:
   spread between them is within Monte Carlo error at 20 seeds (SE ~0.9pp), so
   the default is kept on the conditioning argument rather than on this ranking.
 - The BH-adjusted rate — the column the `significant` flag actually uses — stays
-  at or below 0.89% everywhere, comfortably inside the 5% it targets.
+  at or below 0.71% everywhere, comfortably inside the 5% it targets.
+- **The gating is inert here**: zero comparisons went untested on any null cohort,
+  because 400 rows over two sex and three age groups leaves every group far above
+  the floor of 10. The floor costs nothing on data large enough to answer the
+  question, which is the behaviour it was meant to have.
+
+### A Pairwise Comparison Is Only Asked When The Data Can Answer It
+
+The first archived run reported one BH-significant "finding" per single split
+that had no evidence behind it at all: an age band holding **one patient** in the
+90-row test split, precision exactly 1.0 against another band's 0.0, an interval
+collapsed to the single point -1.0, and a bootstrap p-value pinned to the
+`2/(B+1)` floor because the difference never varied. The floor is small, so the
+multiplicity correction promoted it to a finding.
+
+`_pairwise_differences` now gates every comparison on three conditions, each
+catching a different way the evidence can be absent:
+
+- **`min_group_size` (default 10).** Below it a rate is one or two patients wide
+  and not estimable. Configurable at `fairness.uncertainty.min_group_size`.
+- **Non-degenerate replicate spread.** A distribution with zero spread supports
+  no percentile interval and no p-value, whatever the group size.
+- **`min_valid_fraction` (default 0.8).** Replicates where the statistic is
+  undefined are dropped, so a comparison surviving in only a fraction of them is
+  conditioned on the group happening to be non-degenerate — which is not the
+  question being asked. The offending row above survived in 2528 of 4000.
+
+Untested rows are **written out anyway**, with `tested = False`, an
+`untested_reason`, and both group sizes. "This could not be tested" is a result;
+dropping the row would hide the small groups instead of flagging them. They are
+excluded from the BH family, which also makes the correction slightly less
+punishing on the comparisons that were real questions, and `significant` requires
+`tested`, so no filter on the shipped tables can resurface them as findings.
+
+Note the asymmetry with subgroup SHAP's floor of 30: that one protects a
+per-feature percentile summary, this one protects a hypothesis test, and they are
+tuned to different things.
+
+### Sensitive Labels Are Never Reassigned By Sort Position
+
+`decode_sensitive_attributes()` named age bands by zipping the observed distinct
+values, **sorted as text**, against a hardcoded canonical list. `<` is 0x3C and
+`7` is 0x37, so `"<40"` sorts *after* `"70+"` and the whole list rotated by one
+position: every age band in the first archived run's fairness report was named
+after a different band's data, and the four-band `clinical` binning was renamed
+wholesale to bands it does not contain.
+
+- **A column that already carries labels passes through unchanged.** The
+  preprocessed splits ship `age_group` as band strings; those labels are the
+  ground truth and nothing may reassign them. This is the fix.
+- **A numeric encoding is only named when every canonical band is present.**
+  Ascending codes are ascending ages, but a shorter observed set cannot be named
+  positionally without naming it wrong; those get `age_band_<i>` instead of a
+  guess.
+- **Ordering goes through `_age_band_sort_key`, never string comparison.**
+  `age_group_cat` is an ordered categorical, so charts and grouped output follow
+  age order rather than ASCII order.
+- **`sex` is passed through when it is already labelled.** It happened to survive
+  the old code because "Female" sorts before "Male"; that is alphabet luck and
+  would not have survived an `M`/`F` or localised coding.
+
+### Clustering Diagnostics Belong To The Run That Used Them
+
+`cluster_subgroups.py` wrote to a flat
+`output/<pipeline>/studies/grouping_pretrain/<dataset>/`, with no run or study id
+in the path — the only study in the tree that did. The next run on the same
+dataset overwrote it, so an archived run silently acquired a clustering it never
+used, and the link between a run and its cluster definitions was a matching file
+mtime.
+
+- **`--run-id` given (both orchestrators always pass it) → the artifacts are
+  written under that run.** The run becomes self-describing.
+- **No `--run-id` → a versioned study directory plus a `latest.txt` pointer**,
+  matching how HPO, feature selection, and the grouping study already behave.
+- **The idempotent skip still writes provenance.** `cluster_and_persist` refuses
+  to re-cluster splits that already carry `group_cluster`, which previously meant
+  a run training on inherited labels archived nothing about them. It now writes
+  `inherited.json` naming the source splits and the label distribution.
 
 ## Related
 
