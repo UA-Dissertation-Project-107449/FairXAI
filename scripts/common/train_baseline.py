@@ -38,6 +38,7 @@ from fairxai.experiments.data_io import (
     resolve_dataset_dir,
     resolve_default_binning,
 )
+from fairxai.explainability.subgroup import DEFAULT_MIN_GROUP_SIZE, summarise_subgroup_shap
 from fairxai.explainability.tabular import (
     build_lime_explainer,
     lime_explain_instance,
@@ -130,6 +131,66 @@ def _build_cv_features(
     return x_full_raw, FoldPreprocessor
 
 
+def _save_subgroup_shap(
+    shap_abs: np.ndarray,
+    feature_names: list,
+    sensitive_global: pd.DataFrame,
+    explained_index: pd.Index,
+    holdout_shap_dir: Path,
+    dataset_name: str,
+    min_group_size: int = DEFAULT_MIN_GROUP_SIZE,
+) -> None:
+    """Write per-sensitive-group SHAP summaries beside the global one.
+
+    ``explained_index`` are the row labels SHAP actually explained (a subsample
+    of ``X_global``); the sensitive frame is realigned onto them by label rather
+    than by position, so a mismatch fails loudly here instead of silently
+    attributing rows to the wrong group.
+    """
+    try:
+        aligned = sensitive_global.loc[explained_index]
+    except KeyError as exc:
+        logging.warning(
+            "Subgroup SHAP skipped for %s: sensitive frame does not cover the "
+            "explained rows (%s)",
+            dataset_name,
+            exc,
+        )
+        return
+
+    summary = summarise_subgroup_shap(
+        shap_abs,
+        feature_names,
+        aligned,
+        min_group_size=min_group_size,
+    )
+    if summary is None:
+        logging.info(
+            "Subgroup SHAP produced nothing for %s: no sensitive attribute keeps "
+            "two or more groups of at least %d rows",
+            dataset_name,
+            min_group_size,
+        )
+        return
+
+    for name, frame in (
+        ("subgroup_summary.csv", summary.per_group),
+        ("subgroup_disparity.csv", summary.disparity),
+        ("subgroup_agreement.csv", summary.agreement),
+    ):
+        path = holdout_shap_dir / name
+        frame.to_csv(path, index=False)
+        logging.info(f"[SUCCESS] Holdout subgroup SHAP saved: {path}")
+
+    for attribute, dropped in summary.skipped.items():
+        logging.info(
+            "  Subgroup SHAP dropped small groups for %s: %s (floor=%d rows)",
+            attribute,
+            dropped,
+            min_group_size,
+        )
+
+
 def save_xai_outputs(
     model: Any,
     model_type: str,
@@ -139,6 +200,7 @@ def save_xai_outputs(
     dataset_name: str,
     X_global: Optional[pd.DataFrame] = None,
     xai_cfg: Optional[dict] = None,
+    sensitive_global: Optional[pd.DataFrame] = None,
 ) -> None:
     """Save holdout-based SHAP and LIME outputs.
 
@@ -149,6 +211,17 @@ def save_xai_outputs(
 
     SHAP global summary includes ``std_abs_shap`` and percentile columns
     (p25, p50, p75) alongside the original ``mean_abs_shap``.
+
+    When ``sensitive_global`` is supplied (row-aligned with ``X_global``), the
+    same SHAP matrix is additionally summarised per sensitive group, writing::
+
+        output_dir/{dataset_name}/holdout/shap/subgroup_summary.csv
+        output_dir/{dataset_name}/holdout/shap/subgroup_disparity.csv
+        output_dir/{dataset_name}/holdout/shap/subgroup_agreement.csv
+
+    No extra SHAP is computed for this: the per-row attribution matrix is
+    already in memory and was previously collapsed to a single cohort-wide
+    summary, which cannot show whether the model explains groups differently.
     """
     if xai_cfg is None:
         xai_cfg = {}
@@ -167,6 +240,8 @@ def save_xai_outputs(
         str(m).strip().lower() for m in xai_cfg.get("skip_shap_model_types", ["svm"])
     }
     shap_enabled = model_type not in shap_skip_models
+    subgroup_enabled = bool(xai_cfg.get("subgroup_shap", True))
+    subgroup_min_size = int(xai_cfg.get("subgroup_min_size", DEFAULT_MIN_GROUP_SIZE))
 
     if not shap_enabled:
         logging.info(f"SHAP skipped for model_type={model_type} via xai.skip_shap_model_types")
@@ -197,6 +272,19 @@ def save_xai_outputs(
             shap_global_file = holdout_shap_dir / "summary.csv"
             shap_global_summary.to_csv(shap_global_file, index=False)
             logging.info(f"[SUCCESS] Holdout SHAP summary saved: {shap_global_file}")
+
+            if subgroup_enabled and sensitive_global is not None:
+                _save_subgroup_shap(
+                    shap_vals_global,
+                    shap_global.feature_names,
+                    sensitive_global,
+                    # SHAP may subsample internally; its returned frame is the
+                    # authoritative record of which rows were explained.
+                    getattr(shap_global, "data", df_global).index,
+                    holdout_shap_dir,
+                    dataset_name,
+                    min_group_size=subgroup_min_size,
+                )
         except Exception as exc:
             logging.warning(f"Global SHAP failed for {dataset_name}: {exc}")
 
@@ -1287,6 +1375,11 @@ def main():
                     xai_dataset_key,
                     X_global=X_train,
                     xai_cfg=xai_cfg,
+                    # Row-aligned with X_train: both are views on train_df and
+                    # keep its index, which is what lets SHAP rows be attributed
+                    # back to a group even under exclude_sensitive, where the
+                    # sensitive columns are not model features at all.
+                    sensitive_global=sensitive_train,
                 )
 
                 if xai_cfg.get("cv_enabled", True) and xai_cfg.get("enabled", True):
