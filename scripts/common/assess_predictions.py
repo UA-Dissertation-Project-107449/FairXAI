@@ -9,12 +9,14 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Dict
 
 import numpy as np
 import pandas as pd
+from pandas.api.types import is_numeric_dtype
 
 # Add src to path
 project_root = Path(__file__).parent.parent.parent
@@ -24,6 +26,8 @@ from fairxai.cli.runner_base import load_pipeline_config, setup_phase_logging
 from fairxai.fairness.metrics import FairnessMetrics, summarize_fairness_results
 from fairxai.fairness.uncertainty import (
     DEFAULT_ALPHA,
+    DEFAULT_MIN_GROUP_SIZE,
+    DEFAULT_MIN_VALID_FRACTION,
     DEFAULT_N_JOBS,
     STRATIFY_GROUP_OUTCOME,
     adaptive_bootstrap_replicates,
@@ -33,8 +37,8 @@ from fairxai.fairness.uncertainty import (
 _KNOWN_MODELS = ["logistic_regression", "random_forest", "svm", "xgboost"]
 
 # Map a config sensitive-attribute name to the decoded column produced by
-# decode_sensitive_attributes(). age_group / sex are decoded from scaled values;
-# ethnicity / group_cluster are categorical and pass through as *_cat strings.
+# decode_sensitive_attributes(). Labelled columns pass through unchanged;
+# only numeric encodings are decoded back to labels.
 _SENSITIVE_DECODE_MAP = {
     "age_group": "age_group_cat",
     "sex": "sex_cat",
@@ -42,6 +46,10 @@ _SENSITIVE_DECODE_MAP = {
     "group_cluster": "group_cluster_cat",
 }
 _DEFAULT_SENSITIVE = ["age_group", "sex"]
+
+# Canonical band names, used only when an age attribute arrives as a numeric
+# encoding with every band present. Labelled columns keep their own names.
+_AGE_BANDS = ["<40", "40-49", "50-59", "60-69", "70+"]
 
 
 def resolve_sensitive_columns(df: pd.DataFrame, configured: list) -> list:
@@ -156,50 +164,85 @@ def _render_fairness_md(nested_results: dict) -> str:
     return "\n".join(lines)
 
 
+def _age_band_sort_key(label: str) -> float:
+    """Order an age-band label by the age it starts at.
+
+    Band labels do not sort correctly as text: ``"<40"`` sorts *after* ``"70+"``
+    because ``<`` is 0x3C and ``7`` is 0x37. Every ordering of an age attribute
+    must go through this key rather than through the default string comparison.
+    """
+    text = str(label)
+    match = re.search(r"\d+", text)
+    start = float(match.group()) if match else float("inf")
+    # "<40" opens the scale: it starts below the number it names.
+    return start - 0.5 if text.lstrip().startswith("<") else start
+
+
+def _ordered_age_categories(values: pd.Series) -> list:
+    """Distinct age-band labels in age order."""
+    return sorted(values.dropna().astype(str).unique(), key=_age_band_sort_key)
+
+
 def decode_sensitive_attributes(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Decode sensitive attributes from scaled numerical values back to categories.
+    Normalise sensitive attributes to labelled categorical columns.
+
+    Two shapes reach this function. A column that already carries its own
+    labels (``age_group`` holds band strings once ``bin_attributes`` has run,
+    and the preprocessed splits ship it that way) is passed through unchanged —
+    the labels in the data are the ground truth and must never be reassigned.
+    A column holding a numeric encoding is decoded back to labels.
 
     Args:
-        df: DataFrame with scaled sensitive attributes
+        df: DataFrame carrying raw or encoded sensitive attributes
 
     Returns:
-        DataFrame with decoded categories
+        DataFrame with ``*_cat`` columns added
     """
     df = df.copy()
 
-    # For scaled values, we need to find the nearest encoding
     if "age_group" in df.columns:
-        # Round to nearest 0.5
-        scaled_ages = df["age_group"].values
-        unique_scaled = np.unique(scaled_ages)
-
-        # Try to infer categories from unique values
-        sorted_unique = sorted(unique_scaled)
-        if len(sorted_unique) <= 5:
-            # Map sorted values to categories
-            categories = ["<40", "40-49", "50-59", "60-69", "70+"]
-            age_decode = {val: categories[i] for i, val in enumerate(sorted_unique)}
-            df["age_group_cat"] = df["age_group"].map(age_decode)
+        col = df["age_group"]
+        if is_numeric_dtype(col):
+            # A numeric encoding: the ordering of the codes is the ordering of
+            # the bands, but their *names* are only recoverable when every
+            # canonical band is present. Zipping a shorter observed set against
+            # the canonical list would silently rename every band (a four-band
+            # binning would report "<40" for what is really "45-54").
+            sorted_unique = sorted(col.dropna().unique())
+            if len(sorted_unique) == len(_AGE_BANDS):
+                decoded = col.map(dict(zip(sorted_unique, _AGE_BANDS)))
+            elif len(sorted_unique) < len(_AGE_BANDS):
+                decoded = col.map({value: f"age_band_{i}" for i, value in enumerate(sorted_unique)})
+            else:
+                decoded = pd.cut(col, bins=len(_AGE_BANDS), labels=_AGE_BANDS).astype(str)
+            df["age_group_cat"] = decoded
         else:
-            # Use numerical binning if too many unique values
-            df["age_group_cat"] = pd.cut(
-                df["age_group"], bins=5, labels=["<40", "40-49", "50-59", "60-69", "70+"]
-            )
+            df["age_group_cat"] = col.astype(str)
 
-    # Decode sex (0=Female, 1=Male typically, or could be scaled)
+        df["age_group_cat"] = pd.Categorical(
+            df["age_group_cat"],
+            categories=_ordered_age_categories(df["age_group_cat"]),
+            ordered=True,
+        )
+
     if "sex" in df.columns:
-        unique_sex = df["sex"].unique()
-        if len(unique_sex) == 2:
-            # Binary encoding
-            sorted_sex = sorted(unique_sex)
-            sex_decode = {sorted_sex[0]: "Female", sorted_sex[1]: "Male"}
-            df["sex_cat"] = df["sex"].map(sex_decode)
+        col = df["sex"]
+        if is_numeric_dtype(col):
+            # Project encoding is 0 = Female, 1 = Male, and scaling preserves
+            # order, so the lower value is Female whatever the scale.
+            unique_sex = sorted(col.dropna().unique())
+            if len(unique_sex) == 2:
+                df["sex_cat"] = col.map({unique_sex[0]: "Female", unique_sex[1]: "Male"})
+            else:
+                df["sex_cat"] = col.apply(lambda x: "Male" if x > 0 else "Female")
         else:
-            # Fallback
-            df["sex_cat"] = df["sex"].apply(lambda x: "Male" if x > 0 else "Female")
+            # Already labelled. Passing it through is what keeps this correct;
+            # deriving labels from sort position happens to work for "Female"
+            # before "Male" and would not survive an "M"/"F" or localised coding.
+            df["sex_cat"] = col.astype(str)
 
-    # Categorical sensitive attrs — no scaled decode, just a string passthrough.
+    # Categorical sensitive attrs — no encoded decode, just a string passthrough.
     if "group_cluster" in df.columns:
         df["group_cluster_cat"] = df["group_cluster"].astype("Int64").astype(str)
     if "ethnicity" in df.columns:
@@ -259,6 +302,8 @@ def _write_uncertainty(
             stratify=str(cfg.get("stratify", STRATIFY_GROUP_OUTCOME)),
             random_state=int(cfg.get("random_state", 42)),
             n_jobs=int(cfg.get("n_jobs", DEFAULT_N_JOBS)),
+            min_group_size=int(cfg.get("min_group_size", DEFAULT_MIN_GROUP_SIZE)),
+            min_valid_fraction=float(cfg.get("min_valid_fraction", DEFAULT_MIN_VALID_FRACTION)),
         )
     except Exception as exc:  # noqa: BLE001 — intervals are additive, never fatal
         logging.warning("Bootstrap failed for %s: %s", file_stem, exc)
@@ -278,9 +323,11 @@ def _write_uncertainty(
 
     findings = result.significant_differences()
     logging.info(
-        "  %d of %d group comparisons survive multiplicity adjustment",
+        "  %d of %d tested group comparisons survive multiplicity adjustment "
+        "(%d comparisons not tested)",
         len(findings),
-        len(result.pairwise),
+        result.metadata.get("n_pairwise_tested", 0),
+        result.metadata.get("n_pairwise_untested", 0),
     )
     for _, row in findings.iterrows():
         logging.info(
