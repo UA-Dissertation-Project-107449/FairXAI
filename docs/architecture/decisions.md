@@ -199,6 +199,105 @@ Key decisions:
   in, it would dominate distance-based complexity metrics. Added to
   `_COMPLEXITY_EXCLUDE_COLS` alongside `year`/`release`.
 
+## Fairness Evidence Decisions
+
+### Subgroup SHAP Is Derived From The Global Matrix, Not A Second Pass
+
+`save_xai_outputs()` computed a full `|SHAP|` matrix and then collapsed it to one
+cohort-wide `summary.csv`, which cannot answer whether the model explains its
+decisions the same way for every group — the question a fairness audit needs.
+`src/fairxai/explainability/subgroup.py` groups that same matrix by each
+sensitive column and writes `subgroup_summary.csv`, `subgroup_disparity.csv`,
+and `subgroup_agreement.csv` beside it.
+
+- **No extra SHAP compute.** The matrix is already in memory; this is a
+  group-by. A second explanation pass per group would have cost as much as the
+  original and produced the same numbers.
+- **Alignment is by index label, not position.** SHAP subsamples above
+  `xai.global_max_samples`, so the sensitive frame is reindexed onto the rows
+  SHAP actually explained. A positional join would silently mislabel groups.
+  This also means the sensitive columns need not be model features — under
+  `exclude_sensitive` they are not.
+- **Two magnitudes, deliberately.** `mean_abs_shap` moves with model confidence,
+  so a uniformly less-confident group looks "less explained" on every feature at
+  once. `share` normalises each group's vector to sum to one, isolating *which*
+  features carry the explanation. A disparity surviving in `share` is structural;
+  one visible only in `mean_abs_shap` is a confidence difference.
+- **Groups below `xai.subgroup_min_size` (30) are dropped and logged.**
+  Per-feature percentiles over a handful of rows are noise, and a disparity
+  driven by a five-person group is not a finding.
+
+Explanation *quality* metrics (fidelity, cross-method agreement, stability)
+remain out of scope; this closes attribution *disparity* only.
+
+### Fairness Intervals: Max-Gap CIs Are Descriptive, Pairwise Differences Are The Test
+
+`src/fairxai/fairness/uncertainty.py` resamples the prediction frame and re-runs
+`calculate_all_metrics` per replicate, so every scalar the assessment reports
+gains an interval and any metric added later inherits one. Written by the assess
+stage as `<dataset>_ci.csv` and `<dataset>_pairwise_ci.csv`.
+
+The load-bearing decision is that **the two tables are not interchangeable**:
+
+- Most parity metrics report `max(rate) - min(rate)` over groups. That statistic
+  is bounded below by zero and biased upward under resampling, so its interval
+  almost never contains zero **even when no disparity exists**. Those intervals
+  are descriptive spread only; a test built on them would fire on every cohort.
+- The `pairwise` table holds the signed difference between two named groups,
+  which is centred at zero under the null. Differences are taken *within* a
+  replicate so the two groups' correlated estimates cancel; differencing two
+  independently summarised intervals would overstate uncertainty and hide real
+  disparities.
+
+Supporting choices:
+
+- **Benjamini-Hochberg, not Bonferroni.** Fairness metrics on one cohort are
+  strongly dependent (`fnr = 1 - tpr`; `tpr` is reported by both equalized odds
+  and equal opportunity), so family-wise control over dozens of near-duplicate
+  comparisons removes real findings with the spurious ones. Bonferroni was also
+  degenerate for a binary attribute — one pair per metric means no correction at
+  all — while the real multiplicity is across metrics and attributes.
+- **p-values rather than adjusted interval endpoints.** An adjusted percentile
+  endpoint is a single extreme order statistic and needs replicate counts nobody
+  can afford at 68k rows; a p-value uses the whole tail. The value is floored at
+  `2/(B+1)` and the run warns when replicates cannot resolve the adjusted
+  threshold.
+- **Stratified by group x outcome by default**, degrading to group and then to
+  i.i.d. when a stratum is too small to resample. Group sizes and per-group
+  prevalence are design facts of the cohort, not quantities being estimated. The
+  scheme that actually ran is recorded in the run metadata.
+- **`fairness.uncertainty.n_bootstrap: auto`** = 1000 replicates, thinned to 200
+  above 10k rows, mirroring `adaptive_shap_sample_cap`.
+- **Individual fairness is never bootstrapped.** Its k-NN consistency is O(n^2),
+  and a resampled cohort contains duplicate rows at distance zero from each
+  other, which would inflate consistency by construction.
+- **Never fatal.** A bootstrap failure is logged and swallowed; intervals are an
+  addition to the assessment and must not cost the point estimates downstream
+  stages consume.
+
+#### Measured null calibration
+
+`scripts/studies/run_bootstrap_calibration.py` draws cohorts whose predictions
+are independent of every sensitive attribute, so every reported finding is a
+false one. 20 seeds x 400 rows x 1200 replicates, alpha = 0.05:
+
+| stratify | unadjusted | BH-adjusted | runs with a false finding | max-gap CI excludes zero |
+|---|---|---|---|---|
+| `group_outcome` (default) | 5.89% | 0.89% | 3/20 | 99.6% |
+| `group` | 4.64% | 0.18% | 1/20 | 100.0% |
+| `none` | 5.00% | 0.00% | 0/20 | 100.0% |
+
+Readings:
+
+- The **max-gap column is the headline**: on cohorts built with no disparity at
+  all, the gap interval excluded zero essentially every time under every scheme.
+  Shipping those intervals as a test would have reported every cohort as unfair.
+- The pairwise unadjusted rate tracks nominal across all three schemes; the
+  spread between them is within Monte Carlo error at 20 seeds (SE ~0.9pp), so
+  the default is kept on the conditioning argument rather than on this ranking.
+- The BH-adjusted rate — the column the `significant` flag actually uses — stays
+  at or below 0.89% everywhere, comfortably inside the 5% it targets.
+
 ## Related
 
 - Module map: [modules.md](modules.md)
