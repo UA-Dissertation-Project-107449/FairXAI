@@ -163,7 +163,16 @@ def cluster_subgroups(
     logger = get_run_logger()
     logger.info("[CLUSTER] Discovering subgroups (train-only) -> group_cluster")
     script = ROOT_DIR / "scripts" / "cardiac" / "cluster_subgroups.py"
-    args = ["--pipeline", "cardiac", "--config", "configs/experiments/clustering.yaml"]
+    args = [
+        "--pipeline",
+        "cardiac",
+        "--config",
+        "configs/experiments/clustering.yaml",
+        # Diagnostics belong to this run, not to a shared directory the next
+        # run on the same dataset would overwrite.
+        "--run-id",
+        run_id,
+    ]
     if datasets:
         args.extend(["--datasets", *datasets])
     args.extend(_verbose_flags(verbose))

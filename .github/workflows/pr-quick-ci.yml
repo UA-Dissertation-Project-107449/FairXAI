@@ -39,8 +39,10 @@ jobs:
 
       # Lint tools only — no package install. black/isort/ruff do not import
       # fairxai, so the heavy experiment profile is not needed here.
+      # Versions are pinned so CI matches the local environment; unpinned installs
+      # drift as new releases change formatting/sorting (isort 9 rewraps imports).
       - name: Install lint tools
-        run: python3 -m pip install black isort ruff
+        run: python3 -m pip install "black==26.3.1" "isort==8.0.1" "ruff==0.15.10"
 
       - name: Black format check
         run: black --check src scripts tests flows

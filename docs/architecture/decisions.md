@@ -199,6 +199,211 @@ Key decisions:
   in, it would dominate distance-based complexity metrics. Added to
   `_COMPLEXITY_EXCLUDE_COLS` alongside `year`/`release`.
 
+## Fairness Evidence Decisions
+
+### Subgroup SHAP Is Derived From The Global Matrix, Not A Second Pass
+
+`save_xai_outputs()` computed a full `|SHAP|` matrix and then collapsed it to one
+cohort-wide `summary.csv`, which cannot answer whether the model explains its
+decisions the same way for every group — the question a fairness audit needs.
+`src/fairxai/explainability/subgroup.py` groups that same matrix by each
+sensitive column and writes `subgroup_summary.csv`, `subgroup_disparity.csv`,
+and `subgroup_agreement.csv` beside it.
+
+- **No extra SHAP compute.** The matrix is already in memory; this is a
+  group-by. A second explanation pass per group would have cost as much as the
+  original and produced the same numbers.
+- **Alignment is by index label, not position.** SHAP subsamples above
+  `xai.global_max_samples`, so the sensitive frame is reindexed onto the rows
+  SHAP actually explained. A positional join would silently mislabel groups.
+  This also means the sensitive columns need not be model features — under
+  `exclude_sensitive` they are not.
+- **Two magnitudes, deliberately.** `mean_abs_shap` moves with model confidence,
+  so a uniformly less-confident group looks "less explained" on every feature at
+  once. `share` normalises each group's vector to sum to one, isolating *which*
+  features carry the explanation. A disparity surviving in `share` is structural;
+  one visible only in `mean_abs_shap` is a confidence difference.
+- **Groups below `xai.subgroup_min_size` (30) are dropped and logged.**
+  Per-feature percentiles over a handful of rows are noise, and a disparity
+  driven by a five-person group is not a finding.
+
+Explanation *quality* metrics (fidelity, cross-method agreement, stability)
+remain out of scope; this closes attribution *disparity* only.
+
+### Fairness Intervals: Max-Gap CIs Are Descriptive, Pairwise Differences Are The Test
+
+`src/fairxai/fairness/uncertainty.py` resamples the prediction frame and re-runs
+`calculate_all_metrics` per replicate, so every scalar the assessment reports
+gains an interval and any metric added later inherits one. Written by the assess
+stage as `<dataset>_ci.csv` and `<dataset>_pairwise_ci.csv`.
+
+The load-bearing decision is that **the two tables are not interchangeable**:
+
+- Most parity metrics report `max(rate) - min(rate)` over groups. That statistic
+  is bounded below by zero and biased upward under resampling, so its interval
+  almost never contains zero **even when no disparity exists**. Those intervals
+  are descriptive spread only; a test built on them would fire on every cohort.
+- The `pairwise` table holds the signed difference between two named groups,
+  which is centred at zero under the null. Differences are taken *within* a
+  replicate so the two groups' correlated estimates cancel; differencing two
+  independently summarised intervals would overstate uncertainty and hide real
+  disparities.
+
+Supporting choices:
+
+- **Benjamini-Hochberg, not Bonferroni.** Fairness metrics on one cohort are
+  strongly dependent (`fnr = 1 - tpr`; `tpr` is reported by both equalized odds
+  and equal opportunity), so family-wise control over dozens of near-duplicate
+  comparisons removes real findings with the spurious ones. Bonferroni was also
+  degenerate for a binary attribute — one pair per metric means no correction at
+  all — while the real multiplicity is across metrics and attributes.
+- **p-values rather than adjusted interval endpoints.** An adjusted percentile
+  endpoint is a single extreme order statistic and needs replicate counts nobody
+  can afford at 68k rows; a p-value uses the whole tail. The value is floored at
+  `2/(B+1)` and the run warns when replicates cannot resolve the adjusted
+  threshold.
+- **Stratified by group x outcome by default**, degrading to group and then to
+  i.i.d. when a stratum is too small to resample. Group sizes and per-group
+  prevalence are design facts of the cohort, not quantities being estimated. The
+  scheme that actually ran is recorded in the run metadata. *Measured caveat:*
+  on `cleveland_uci` (n=297) the default never survives — a five-level
+  `age_group` crossed with sex, `group_cluster` and outcome leaves single-row
+  cells, so every split degraded `group_outcome -> group -> none`. The
+  applicable row of the calibration table below is therefore `none`, not the
+  default row. The conditioning argument still decides the *requested* scheme;
+  it simply does not bind on the small cardiac cohorts.
+- **`fairness.uncertainty.n_bootstrap`: 4000 for cardiac, not `auto`.** `auto`
+  is 1000 replicates (thinned to 200 above 10k rows, mirroring
+  `adaptive_shap_sample_cap`), and a bootstrap p-value cannot resolve below
+  `2/(B+1)`. Three sensitive attributes give a 98-comparison family, so BH needs
+  roughly p=0.0005 while 1000 replicates floor at p=0.0020: the adjusted column
+  was structurally unreadable. The run warns when this holds; 4000 clears it.
+- **Replicates run in parallel (`n_jobs`).** Each replicate carries its own
+  spawned seed rather than drawing from one shared generator, so the worker
+  count is a pure performance knob and the numbers are identical at any
+  `n_jobs`. Measured on `cleveland_uci` at B=1000: 32.5s serial, 9.9s on 8
+  cores.
+- **Individual fairness is never bootstrapped.** Its k-NN consistency is O(n^2),
+  and a resampled cohort contains duplicate rows at distance zero from each
+  other, which would inflate consistency by construction.
+- **Never fatal.** A bootstrap failure is logged and swallowed; intervals are an
+  addition to the assessment and must not cost the point estimates downstream
+  stages consume.
+- **`descriptive_only` is a column, not just prose.** The max-gap argument
+  applies verbatim to per-group *expected calibration error*: ECE is a
+  nonnegative plug-in statistic biased upward on small groups. On `cleveland_uci`
+  the age 40-49 ECE came back with point 0.076 and interval [0.079, 0.221] — an
+  interval sitting entirely above its own point estimate. Both families (every
+  `*difference*` gap and `ece`) now carry `descriptive_only = True` in the CI
+  table so the warning travels with the number instead of living only here.
+- **`degenerate` flags rows with no replicate spread.** Where a group is too
+  small or too homogeneous to vary under resampling, every replicate returns the
+  same value and the interval collapses to a point (13 of 94 rows on the first
+  real `cleveland_uci` run). That is not precision, and the run now warns and
+  marks those rows rather than emitting endpoints that look tight.
+
+#### Measured null calibration
+
+`scripts/studies/run_bootstrap_calibration.py` draws cohorts whose predictions
+are independent of every sensitive attribute, so every reported finding is a
+false one. 20 seeds x 400 rows x 1200 replicates, alpha = 0.05, re-measured after
+the per-replicate seeding and the pairwise gating (an earlier table circulated with
+5.89% / 0.89%; it predates the seeding change and is not reproducible):
+
+| stratify | unadjusted | BH-adjusted | runs with a false finding | max-gap CI excludes zero |
+|---|---|---|---|---|
+| `group_outcome` (default) | 5.36% | 0.71% | 3/20 | 99.6% |
+| `group` | 4.64% | 0.00% | 0/20 | 100.0% |
+| `none` | 4.82% | 0.00% | 0/20 | 100.0% |
+
+Readings:
+
+- The **max-gap column is the headline**: on cohorts built with no disparity at
+  all, the gap interval excluded zero essentially every time under every scheme.
+  Shipping those intervals as a test would have reported every cohort as unfair.
+- The pairwise unadjusted rate tracks nominal across all three schemes; the
+  spread between them is within Monte Carlo error at 20 seeds (SE ~0.9pp), so
+  the default is kept on the conditioning argument rather than on this ranking.
+- The BH-adjusted rate — the column the `significant` flag actually uses — stays
+  at or below 0.71% everywhere, comfortably inside the 5% it targets.
+- **The gating is inert here**: zero comparisons went untested on any null cohort,
+  because 400 rows over two sex and three age groups leaves every group far above
+  the floor of 10. The floor costs nothing on data large enough to answer the
+  question, which is the behaviour it was meant to have.
+
+### A Pairwise Comparison Is Only Asked When The Data Can Answer It
+
+The first archived run reported one BH-significant "finding" per single split
+that had no evidence behind it at all: an age band holding **one patient** in the
+90-row test split, precision exactly 1.0 against another band's 0.0, an interval
+collapsed to the single point -1.0, and a bootstrap p-value pinned to the
+`2/(B+1)` floor because the difference never varied. The floor is small, so the
+multiplicity correction promoted it to a finding.
+
+`_pairwise_differences` now gates every comparison on three conditions, each
+catching a different way the evidence can be absent:
+
+- **`min_group_size` (default 10).** Below it a rate is one or two patients wide
+  and not estimable. Configurable at `fairness.uncertainty.min_group_size`.
+- **Non-degenerate replicate spread.** A distribution with zero spread supports
+  no percentile interval and no p-value, whatever the group size.
+- **`min_valid_fraction` (default 0.8).** Replicates where the statistic is
+  undefined are dropped, so a comparison surviving in only a fraction of them is
+  conditioned on the group happening to be non-degenerate — which is not the
+  question being asked. The offending row above survived in 2528 of 4000.
+
+Untested rows are **written out anyway**, with `tested = False`, an
+`untested_reason`, and both group sizes. "This could not be tested" is a result;
+dropping the row would hide the small groups instead of flagging them. They are
+excluded from the BH family, which also makes the correction slightly less
+punishing on the comparisons that were real questions, and `significant` requires
+`tested`, so no filter on the shipped tables can resurface them as findings.
+
+Note the asymmetry with subgroup SHAP's floor of 30: that one protects a
+per-feature percentile summary, this one protects a hypothesis test, and they are
+tuned to different things.
+
+### Sensitive Labels Are Never Reassigned By Sort Position
+
+`decode_sensitive_attributes()` named age bands by zipping the observed distinct
+values, **sorted as text**, against a hardcoded canonical list. `<` is 0x3C and
+`7` is 0x37, so `"<40"` sorts *after* `"70+"` and the whole list rotated by one
+position: every age band in the first archived run's fairness report was named
+after a different band's data, and the four-band `clinical` binning was renamed
+wholesale to bands it does not contain.
+
+- **A column that already carries labels passes through unchanged.** The
+  preprocessed splits ship `age_group` as band strings; those labels are the
+  ground truth and nothing may reassign them. This is the fix.
+- **A numeric encoding is only named when every canonical band is present.**
+  Ascending codes are ascending ages, but a shorter observed set cannot be named
+  positionally without naming it wrong; those get `age_band_<i>` instead of a
+  guess.
+- **Ordering goes through `_age_band_sort_key`, never string comparison.**
+  `age_group_cat` is an ordered categorical, so charts and grouped output follow
+  age order rather than ASCII order.
+- **`sex` is passed through when it is already labelled.** It happened to survive
+  the old code because "Female" sorts before "Male"; that is alphabet luck and
+  would not have survived an `M`/`F` or localised coding.
+
+### Clustering Diagnostics Belong To The Run That Used Them
+
+`cluster_subgroups.py` wrote to a flat
+`output/<pipeline>/studies/grouping_pretrain/<dataset>/`, with no run or study id
+in the path — the only study in the tree that did. The next run on the same
+dataset overwrote it, so an archived run silently acquired a clustering it never
+used, and the link between a run and its cluster definitions was a matching file
+mtime.
+
+- **`--run-id` given (both orchestrators always pass it) → the artifacts are
+  written under that run.** The run becomes self-describing.
+- **No `--run-id` → a versioned study directory plus a `latest.txt` pointer**,
+  matching how HPO, feature selection, and the grouping study already behave.
+- **The idempotent skip still writes provenance.** `cluster_and_persist` refuses
+  to re-cluster splits that already carry `group_cluster`, which previously meant
+  a run training on inherited labels archived nothing about them. It now writes
+  `inherited.json` naming the source splits and the label distribution.
+
 ## Related
 
 - Module map: [modules.md](modules.md)

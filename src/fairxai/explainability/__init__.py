@@ -5,6 +5,7 @@ Configuration is provided by caller-level YAML (`xai` blocks), not by module
 environment variables.
 """
 
+from .subgroup import SubgroupShapSummary, summarise_subgroup_shap
 from .tabular import (
     LimeExplanation,
     ShapExplanation,
@@ -15,6 +16,8 @@ from .tabular import (
 
 __all__ = [
     "ShapExplanation",
+    "SubgroupShapSummary",
+    "summarise_subgroup_shap",
     "LimeExplanation",
     "shap_explain_tabular",
     "lime_explain_instance",

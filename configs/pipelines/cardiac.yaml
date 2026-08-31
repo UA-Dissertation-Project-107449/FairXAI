@@ -33,6 +33,32 @@ training:
 
 fairness:
   sensitive_attributes: [age_group, sex, group_cluster]
+  # Bootstrap confidence intervals for every reported group metric and parity
+  # gap, plus signed pairwise group differences with a multiplicity-adjusted
+  # p-value. Written next to the point estimates as *_ci.csv / *_pairwise_ci.csv.
+  uncertainty:
+    enabled: true
+    # Not `auto` (1000): three sensitive attributes on these cohorts produce a
+    # 98-comparison family, and a bootstrap p-value cannot resolve below
+    # 2/(B+1). At 1000 replicates the floor is 0.0020 while BH needs ~0.0005,
+    # so the adjusted column was unreadable as a finding. 4000 clears it.
+    n_bootstrap: 4000
+    alpha: 0.05
+    # Resampling holds group sizes and per-group prevalence fixed; they are
+    # design facts of the cohort, not quantities being estimated. Degrades
+    # automatically when a stratum is too small to resample — measured on
+    # cleveland_uci (n=297) this degrades all the way to `none`, because a
+    # five-level age_group crossed with sex and outcome leaves single-row cells.
+    stratify: group_outcome
+    # A pairwise comparison is only asked when both groups clear this floor.
+    # Below it a rate is one or two patients wide and its bootstrap p-value pins
+    # to the 2/(B+1) floor with no evidence behind it.
+    min_group_size: 10
+    min_valid_fraction: 0.8
+    random_state: 42
+    # Replicates are independent; -1 uses every core. Measured on cleveland_uci
+    # at B=1000: 32.5s serial vs 9.9s on 8 cores.
+    n_jobs: -1
 
 # Optional: discover patient subgroups via clustering BEFORE training and treat
 # them as a sensitive attribute (group_cluster). Off by default → pipeline is
@@ -86,6 +112,13 @@ xai:
   cv_lime_instances: 3
   global_max_samples: 1000
   skip_shap_model_types: [svm]
+  # Per-sensitive-group SHAP summaries alongside the cohort-wide one. Reuses the
+  # SHAP matrix already computed for the global summary, so the cost is a
+  # group-by, not a second explanation pass.
+  subgroup_shap: true
+  # Groups smaller than this are excluded from the subgroup tables: per-feature
+  # percentiles over a handful of rows are noise, not a disparity.
+  subgroup_min_size: 30
 
 studies:
   skip: false

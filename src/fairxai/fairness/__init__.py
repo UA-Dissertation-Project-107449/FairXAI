@@ -11,9 +11,17 @@ from .mitigation import (
     PostProcessingMitigation,
     PreProcessingMitigation,
 )
+from .uncertainty import (
+    BootstrapResult,
+    adaptive_bootstrap_replicates,
+    bootstrap_fairness_metrics,
+)
 
 __all__ = [
     "FairnessMetrics",
+    "BootstrapResult",
+    "bootstrap_fairness_metrics",
+    "adaptive_bootstrap_replicates",
     "PreProcessingMitigation",
     "InProcessingMitigation",
     "PostProcessingMitigation",

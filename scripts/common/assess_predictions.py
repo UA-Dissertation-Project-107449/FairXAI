@@ -9,12 +9,14 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Dict
 
 import numpy as np
 import pandas as pd
+from pandas.api.types import is_numeric_dtype
 
 # Add src to path
 project_root = Path(__file__).parent.parent.parent
@@ -22,12 +24,21 @@ sys.path.insert(0, str(project_root / "src"))
 
 from fairxai.cli.runner_base import load_pipeline_config, setup_phase_logging
 from fairxai.fairness.metrics import FairnessMetrics, summarize_fairness_results
+from fairxai.fairness.uncertainty import (
+    DEFAULT_ALPHA,
+    DEFAULT_MIN_GROUP_SIZE,
+    DEFAULT_MIN_VALID_FRACTION,
+    DEFAULT_N_JOBS,
+    STRATIFY_GROUP_OUTCOME,
+    adaptive_bootstrap_replicates,
+    bootstrap_fairness_metrics,
+)
 
 _KNOWN_MODELS = ["logistic_regression", "random_forest", "svm", "xgboost"]
 
 # Map a config sensitive-attribute name to the decoded column produced by
-# decode_sensitive_attributes(). age_group / sex are decoded from scaled values;
-# ethnicity / group_cluster are categorical and pass through as *_cat strings.
+# decode_sensitive_attributes(). Labelled columns pass through unchanged;
+# only numeric encodings are decoded back to labels.
 _SENSITIVE_DECODE_MAP = {
     "age_group": "age_group_cat",
     "sex": "sex_cat",
@@ -35,6 +46,10 @@ _SENSITIVE_DECODE_MAP = {
     "group_cluster": "group_cluster_cat",
 }
 _DEFAULT_SENSITIVE = ["age_group", "sex"]
+
+# Canonical band names, used only when an age attribute arrives as a numeric
+# encoding with every band present. Labelled columns keep their own names.
+_AGE_BANDS = ["<40", "40-49", "50-59", "60-69", "70+"]
 
 
 def resolve_sensitive_columns(df: pd.DataFrame, configured: list) -> list:
@@ -149,56 +164,186 @@ def _render_fairness_md(nested_results: dict) -> str:
     return "\n".join(lines)
 
 
+def _age_band_sort_key(label: str) -> float:
+    """Order an age-band label by the age it starts at.
+
+    Band labels do not sort correctly as text: ``"<40"`` sorts *after* ``"70+"``
+    because ``<`` is 0x3C and ``7`` is 0x37. Every ordering of an age attribute
+    must go through this key rather than through the default string comparison.
+    """
+    text = str(label)
+    match = re.search(r"\d+", text)
+    start = float(match.group()) if match else float("inf")
+    # "<40" opens the scale: it starts below the number it names.
+    return start - 0.5 if text.lstrip().startswith("<") else start
+
+
+def _ordered_age_categories(values: pd.Series) -> list:
+    """Distinct age-band labels in age order."""
+    return sorted(values.dropna().astype(str).unique(), key=_age_band_sort_key)
+
+
 def decode_sensitive_attributes(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Decode sensitive attributes from scaled numerical values back to categories.
+    Normalise sensitive attributes to labelled categorical columns.
+
+    Two shapes reach this function. A column that already carries its own
+    labels (``age_group`` holds band strings once ``bin_attributes`` has run,
+    and the preprocessed splits ship it that way) is passed through unchanged —
+    the labels in the data are the ground truth and must never be reassigned.
+    A column holding a numeric encoding is decoded back to labels.
 
     Args:
-        df: DataFrame with scaled sensitive attributes
+        df: DataFrame carrying raw or encoded sensitive attributes
 
     Returns:
-        DataFrame with decoded categories
+        DataFrame with ``*_cat`` columns added
     """
     df = df.copy()
 
-    # For scaled values, we need to find the nearest encoding
     if "age_group" in df.columns:
-        # Round to nearest 0.5
-        scaled_ages = df["age_group"].values
-        unique_scaled = np.unique(scaled_ages)
-
-        # Try to infer categories from unique values
-        sorted_unique = sorted(unique_scaled)
-        if len(sorted_unique) <= 5:
-            # Map sorted values to categories
-            categories = ["<40", "40-49", "50-59", "60-69", "70+"]
-            age_decode = {val: categories[i] for i, val in enumerate(sorted_unique)}
-            df["age_group_cat"] = df["age_group"].map(age_decode)
+        col = df["age_group"]
+        if is_numeric_dtype(col):
+            # A numeric encoding: the ordering of the codes is the ordering of
+            # the bands, but their *names* are only recoverable when every
+            # canonical band is present. Zipping a shorter observed set against
+            # the canonical list would silently rename every band (a four-band
+            # binning would report "<40" for what is really "45-54").
+            sorted_unique = sorted(col.dropna().unique())
+            if len(sorted_unique) == len(_AGE_BANDS):
+                decoded = col.map(dict(zip(sorted_unique, _AGE_BANDS)))
+            elif len(sorted_unique) < len(_AGE_BANDS):
+                decoded = col.map({value: f"age_band_{i}" for i, value in enumerate(sorted_unique)})
+            else:
+                decoded = pd.cut(col, bins=len(_AGE_BANDS), labels=_AGE_BANDS).astype(str)
+            df["age_group_cat"] = decoded
         else:
-            # Use numerical binning if too many unique values
-            df["age_group_cat"] = pd.cut(
-                df["age_group"], bins=5, labels=["<40", "40-49", "50-59", "60-69", "70+"]
-            )
+            df["age_group_cat"] = col.astype(str)
 
-    # Decode sex (0=Female, 1=Male typically, or could be scaled)
+        df["age_group_cat"] = pd.Categorical(
+            df["age_group_cat"],
+            categories=_ordered_age_categories(df["age_group_cat"]),
+            ordered=True,
+        )
+
     if "sex" in df.columns:
-        unique_sex = df["sex"].unique()
-        if len(unique_sex) == 2:
-            # Binary encoding
-            sorted_sex = sorted(unique_sex)
-            sex_decode = {sorted_sex[0]: "Female", sorted_sex[1]: "Male"}
-            df["sex_cat"] = df["sex"].map(sex_decode)
+        col = df["sex"]
+        if is_numeric_dtype(col):
+            # Project encoding is 0 = Female, 1 = Male, and scaling preserves
+            # order, so the lower value is Female whatever the scale.
+            unique_sex = sorted(col.dropna().unique())
+            if len(unique_sex) == 2:
+                df["sex_cat"] = col.map({unique_sex[0]: "Female", unique_sex[1]: "Male"})
+            else:
+                df["sex_cat"] = col.apply(lambda x: "Male" if x > 0 else "Female")
         else:
-            # Fallback
-            df["sex_cat"] = df["sex"].apply(lambda x: "Male" if x > 0 else "Female")
+            # Already labelled. Passing it through is what keeps this correct;
+            # deriving labels from sort position happens to work for "Female"
+            # before "Male" and would not survive an "M"/"F" or localised coding.
+            df["sex_cat"] = col.astype(str)
 
-    # Categorical sensitive attrs — no scaled decode, just a string passthrough.
+    # Categorical sensitive attrs — no encoded decode, just a string passthrough.
     if "group_cluster" in df.columns:
         df["group_cluster_cat"] = df["group_cluster"].astype("Int64").astype(str)
     if "ethnicity" in df.columns:
         df["ethnicity_cat"] = df["ethnicity"].astype(str)
 
     return df
+
+
+def _resolve_n_bootstrap(cfg_value, n_rows: int) -> int:
+    """Resolve the configured replicate count, honouring ``auto``.
+
+    ``auto`` (or an unset value) scales the count to the cohort, which is what
+    keeps a 68k-row dataset from spending minutes per model on interval
+    endpoints that are already tight.
+    """
+    if cfg_value in (None, "auto", "Auto", "AUTO"):
+        return adaptive_bootstrap_replicates(n_rows)
+    return int(cfg_value)
+
+
+def _write_uncertainty(
+    df: pd.DataFrame,
+    sensitive: list,
+    output_dir: Path,
+    file_stem: str,
+    cfg: Dict = None,
+) -> Dict:
+    """Bootstrap the fairness metrics for one split and write both CI tables.
+
+    Returns the run metadata (empty when the bootstrap is disabled or produced
+    nothing). Failures are logged and swallowed: an interval is an addition to
+    the assessment, and losing it must not cost the point estimates that the
+    rest of the pipeline consumes.
+    """
+    cfg = cfg or {}
+    if not cfg.get("enabled", True):
+        logging.info("Bootstrap confidence intervals disabled by configuration")
+        return {}
+    if not sensitive:
+        logging.warning("Bootstrap skipped for %s: no resolved sensitive attributes", file_stem)
+        return {}
+
+    n_boot = _resolve_n_bootstrap(cfg.get("n_bootstrap"), len(df))
+    logging.info(
+        "Bootstrapping fairness metrics for %s (%d rows, %d replicates)",
+        file_stem,
+        len(df),
+        n_boot,
+    )
+
+    try:
+        result = bootstrap_fairness_metrics(
+            df,
+            sensitive,
+            n_boot=n_boot,
+            alpha=float(cfg.get("alpha", DEFAULT_ALPHA)),
+            stratify=str(cfg.get("stratify", STRATIFY_GROUP_OUTCOME)),
+            random_state=int(cfg.get("random_state", 42)),
+            n_jobs=int(cfg.get("n_jobs", DEFAULT_N_JOBS)),
+            min_group_size=int(cfg.get("min_group_size", DEFAULT_MIN_GROUP_SIZE)),
+            min_valid_fraction=float(cfg.get("min_valid_fraction", DEFAULT_MIN_VALID_FRACTION)),
+        )
+    except Exception as exc:  # noqa: BLE001 — intervals are additive, never fatal
+        logging.warning("Bootstrap failed for %s: %s", file_stem, exc)
+        logging.debug("Bootstrap traceback:", exc_info=True)
+        return {}
+
+    if result.is_empty:
+        return {}
+
+    ci_file = output_dir / f"{file_stem}_ci.csv"
+    result.table.to_csv(ci_file, index=False)
+    logging.info("[SUCCESS] Fairness confidence intervals saved to: %s", ci_file)
+
+    pairwise_file = output_dir / f"{file_stem}_pairwise_ci.csv"
+    result.pairwise.to_csv(pairwise_file, index=False)
+    logging.info("[SUCCESS] Pairwise group differences saved to: %s", pairwise_file)
+
+    findings = result.significant_differences()
+    logging.info(
+        "  %d of %d tested group comparisons survive multiplicity adjustment "
+        "(%d comparisons not tested)",
+        len(findings),
+        result.metadata.get("n_pairwise_tested", 0),
+        result.metadata.get("n_pairwise_untested", 0),
+    )
+    for _, row in findings.iterrows():
+        logging.info(
+            "    %s %s/%s: %s vs %s = %+.3f [%.3f, %.3f] (p_adj=%.4f)",
+            row["attribute"],
+            row["metric"],
+            row["quantity"],
+            row["group_a"],
+            row["group_b"],
+            row["difference"],
+            row["ci_low"],
+            row["ci_high"],
+            row["p_value_bh"],
+        )
+
+    return {**result.metadata, "n_significant_differences": int(len(findings))}
 
 
 def assess_dataset_fairness(
@@ -208,6 +353,7 @@ def assess_dataset_fairness(
     output_dir: Path,
     metrics_calculator: FairnessMetrics,
     configured_sensitive: list = None,
+    uncertainty_cfg: Dict = None,
 ) -> Dict:
     """
     Assess fairness for a single dataset's predictions.
@@ -251,7 +397,13 @@ def assess_dataset_fairness(
             "Could not resolve any configured sensitive attributes; using scaled values"
         )
 
-    results = {"dataset": dataset_name, "train_metrics": {}, "test_metrics": {}, "comparison": {}}
+    results = {
+        "dataset": dataset_name,
+        "train_metrics": {},
+        "test_metrics": {},
+        "comparison": {},
+        "uncertainty": {},
+    }
 
     # Get numerical feature columns (exclude metadata)
     exclude_cols = [
@@ -312,6 +464,17 @@ def assess_dataset_fairness(
 
     logging.info(f"[SUCCESS] Summary table saved to: {summary_file}")
 
+    # Intervals are computed on the test split only: it is the split every
+    # reported disparity is quoted from, and the train split's metrics are
+    # diagnostic rather than claims anyone has to defend.
+    results["uncertainty"] = _write_uncertainty(
+        test_df,
+        resolved,
+        output_dir,
+        dataset_name,
+        uncertainty_cfg,
+    )
+
     return results
 
 
@@ -321,6 +484,7 @@ def assess_cv_fairness(
     output_dir: Path,
     metrics_calculator: FairnessMetrics,
     configured_sensitive: list = None,
+    uncertainty_cfg: Dict = None,
 ) -> Dict:
     """Assess fairness for CV out-of-fold predictions."""
     logging.info("[DATASET] Assessing CV fairness dataset_model=%s", dataset_name)
@@ -368,12 +532,21 @@ def assess_cv_fairness(
     summary.to_csv(summary_file, index=False)
     logging.info(f"[SUCCESS] CV summary table saved to: {summary_file}")
 
+    # Out-of-fold rows come from k models rather than one, so a resampled
+    # replicate mixes fold-specific error. The interval is still the best
+    # available statement of spread, but it is a fold-averaged one, not the
+    # sampling distribution of a single fitted model.
+    uncertainty = _write_uncertainty(
+        cv_df, resolved, output_dir, f"{dataset_name}_cv", uncertainty_cfg
+    )
+
     n_folds = int(cv_df["fold"].nunique()) if "fold" in cv_df.columns else None
     return {
         "dataset": dataset_name,
         "cv_metrics": cv_metrics,
         "n_samples": len(cv_df),
         "n_folds": n_folds,
+        "uncertainty": uncertainty,
     }
 
 
@@ -624,13 +797,15 @@ def main():
     # group_cluster / ethnicity are honored when present (per-cluster fairness).
     try:
         pipeline_cfg = load_pipeline_config(project_root, pipeline)
-        configured_sensitive = (pipeline_cfg.get("fairness", {}) or {}).get(
-            "sensitive_attributes", _DEFAULT_SENSITIVE
-        )
+        fairness_cfg = pipeline_cfg.get("fairness", {}) or {}
+        configured_sensitive = fairness_cfg.get("sensitive_attributes", _DEFAULT_SENSITIVE)
+        uncertainty_cfg = fairness_cfg.get("uncertainty", {}) or {}
     except Exception as exc:  # noqa: BLE001 — config is optional, fall back safely
         logging.warning("Could not load pipeline config (%s); using default sensitive attrs", exc)
         configured_sensitive = _DEFAULT_SENSITIVE
+        uncertainty_cfg = {}
     logging.info("Configured sensitive attributes: %s", configured_sensitive)
+    logging.info("Uncertainty configuration: %s", uncertainty_cfg or "defaults")
 
     # Initialize fairness calculator (per-dataset override happens downstream).
     metrics_calculator = FairnessMetrics(sensitive_attributes=["age_group_cat", "sex_cat"])
@@ -678,6 +853,7 @@ def main():
                 results_dir,
                 metrics_calculator,
                 configured_sensitive=configured_sensitive,
+                uncertainty_cfg=uncertainty_cfg,
             )
             nested_results.setdefault(dataset, {}).setdefault(model, {})["single_split"] = results
         except Exception as e:
@@ -707,6 +883,7 @@ def main():
                 results_dir,
                 metrics_calculator,
                 configured_sensitive=configured_sensitive,
+                uncertainty_cfg=uncertainty_cfg,
             )
             nested_results.setdefault(dataset, {}).setdefault(model, {})["kfold_cv"] = cv_results
         except Exception as e:

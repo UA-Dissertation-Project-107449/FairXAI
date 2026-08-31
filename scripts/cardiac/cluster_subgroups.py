@@ -11,6 +11,10 @@ stratification and per-attribute mitigation automatically.
 
 Idempotent: skips any dataset whose splits already carry ``group_cluster``.
 
+Output: ``runs/<run_id>/grouping_pretrain/<dataset>/`` when a ``--run-id`` is
+given (the pipeline always passes one), otherwise
+``studies/grouping_pretrain/<study_id>/<dataset>/``.
+
 Usage:
     python scripts/cardiac/cluster_subgroups.py --pipeline cardiac
     python scripts/cardiac/cluster_subgroups.py --datasets cleveland \\
@@ -26,11 +30,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from fairxai.cli.runner_base import get_project_root, setup_phase_logging
+from fairxai.cli.runner_utils import (
+    get_run_root,
+    get_study_root,
+    resolve_run_id,
+    update_output_study_pointer,
+)
 from fairxai.clustering.grouping_pipeline import DEFAULT_FEATURE_EXCLUDE, cluster_and_persist
 from fairxai.experiments.data_io import resolve_default_binning
 from fairxai.utils.config import load_yaml_config
 
 logger = logging.getLogger(__name__)
+
+# Directory name under runs/<run_id>/ and under studies/.
+STUDY_TYPE = "grouping_pretrain"
 
 _ROOT = get_project_root(Path(__file__))
 
@@ -57,6 +70,15 @@ def parse_args() -> argparse.Namespace:
         nargs="+",
         default=None,
         help="Clustering methods: kmeans hierarchical dbscan gaussian_mixture",
+    )
+    p.add_argument(
+        "--run-id",
+        default=None,
+        help=(
+            "Pipeline run this clustering belongs to. Given, the diagnostics are "
+            "written under that run (output/<pipeline>/runs/<run_id>/grouping_pretrain/). "
+            "Omitted, they go to a versioned standalone study directory."
+        ),
     )
     p.add_argument("--config", default=None, help="Path to clustering.yaml (optional override)")
     p.add_argument("-v", "--verbose", action="count", default=0, help="-v=info, -vv=debug")
@@ -112,14 +134,31 @@ def main() -> None:
     _ms = grouping_cfg.get("min_silhouette")
     min_silhouette = float(_ms) if _ms is not None else None
 
-    out_base = _ROOT / "output" / pipeline / "studies" / "grouping_pretrain"
+    # Where the diagnostics land decides whether they can ever be cited. A flat
+    # per-dataset directory is overwritten by the next run on the same dataset,
+    # so a run archived months ago silently acquires a different clustering than
+    # the one it actually used. Invoked by the pipeline, the artifacts belong to
+    # that run; invoked standalone, they get their own study id like every other
+    # study under scripts/studies/.
+    base_results = _ROOT / "output" / pipeline
+    if args.run_id:
+        out_base = get_run_root(base_results, args.run_id) / STUDY_TYPE
+        scope = f"run={args.run_id}"
+    else:
+        study_id = resolve_run_id()
+        out_base = get_study_root(base_results, STUDY_TYPE, study_id)
+        update_output_study_pointer(base_results, STUDY_TYPE, study_id)
+        scope = f"study={study_id}"
 
     logger.info(
-        "[PHASE] pre-train clustering started pipeline=%s datasets=%s methods=%s binning=%s",
+        "[PHASE] pre-train clustering started pipeline=%s %s datasets=%s methods=%s "
+        "binning=%s out_dir=%s",
         pipeline,
+        scope,
         datasets,
         methods,
         binning,
+        out_base,
     )
 
     for dataset in datasets:
@@ -139,7 +178,7 @@ def main() -> None:
         except Exception as exc:  # noqa: BLE001 — isolate per-dataset failures
             logger.error("[ERROR] cluster: dataset %s failed: %s", dataset, exc, exc_info=True)
 
-    logger.info("[SUCCESS] pre-train clustering complete")
+    logger.info("[SUCCESS] pre-train clustering complete: out_dir=%s", out_base)
 
 
 if __name__ == "__main__":
