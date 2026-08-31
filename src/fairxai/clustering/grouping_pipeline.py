@@ -20,6 +20,7 @@ signature, so the WebApp adapters remain unaffected.
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any, Optional
@@ -119,6 +120,40 @@ def _load_splits(
     return pd.read_csv(train_path), pd.read_csv(test_path), pairs
 
 
+def _write_inherited_marker(
+    out_dir: Path,
+    dataset: str,
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    source_pair: tuple[Path, Path],
+) -> None:
+    """Record that ``group_cluster`` was inherited rather than fitted here.
+
+    Written on the idempotent-skip path so a run directory always answers "where
+    did these clusters come from" — with a label distribution that can be checked
+    against the splits the run actually trained on.
+    """
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "dataset": dataset,
+            "column": GROUP_CLUSTER_COL,
+            "fitted_here": False,
+            "reason": "labels already present in the splits (idempotent skip)",
+            "source_train_split": str(source_pair[0]),
+            "source_test_split": str(source_pair[1]),
+            "train_label_counts": {
+                str(k): int(v) for k, v in train_df[GROUP_CLUSTER_COL].value_counts().items()
+            },
+            "test_label_counts": {
+                str(k): int(v) for k, v in test_df[GROUP_CLUSTER_COL].value_counts().items()
+            },
+        }
+        (out_dir / "inherited.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except OSError as exc:  # noqa: BLE001 — provenance is additive, never fatal
+        logger.warning("[WARNING] cluster: could not write inherited marker: %s", exc)
+
+
 def cluster_and_persist(
     dataset: str,
     processed_dir: Path,
@@ -163,6 +198,10 @@ def cluster_and_persist(
             dataset,
             GROUP_CLUSTER_COL,
         )
+        # Skipping must still leave a record. A run that trains on inherited
+        # cluster labels but archives nothing about them cannot say later which
+        # clustering it used, which is the whole reason these artifacts exist.
+        _write_inherited_marker(out_dir, dataset, train_df, test_df, variant_pairs[0])
         return None
 
     out_dir.mkdir(parents=True, exist_ok=True)

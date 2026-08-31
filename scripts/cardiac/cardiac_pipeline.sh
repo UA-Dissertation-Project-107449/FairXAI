@@ -647,7 +647,7 @@ shopt -u nocasematch
 if should_run 7 && [[ "$RUN_GROUPING" == "true" ]]; then
     echo "[CLUSTER] Discovering subgroups (train-only) -> group_cluster"
     python3 "$ROOT_DIR/scripts/cardiac/cluster_subgroups.py" \
-        --pipeline cardiac --config "$GROUPING_CONFIG" \
+        --pipeline cardiac --config "$GROUPING_CONFIG" --run-id "$RUN_ID" \
         "${DATASET_ARGS[@]}" $VERBOSE_FLAG
     echo ""
 elif should_run 7; then
