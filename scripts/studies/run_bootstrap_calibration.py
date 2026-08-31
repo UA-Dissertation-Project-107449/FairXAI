@@ -64,7 +64,7 @@ def null_cohort(n: int, seed: int) -> pd.DataFrame:
 
 def evaluate_scheme(scheme: str, seeds: int, n_rows: int, n_boot: int, alpha: float) -> dict:
     """Run the null cohort through one resampling scheme and count false findings."""
-    unadjusted = adjusted = comparisons = 0
+    unadjusted = adjusted = comparisons = untested = 0
     runs_with_a_finding = 0
     gap_excluding_zero = gap_total = 0
 
@@ -77,10 +77,15 @@ def evaluate_scheme(scheme: str, seeds: int, n_rows: int, n_boot: int, alpha: fl
             stratify=scheme,
             random_state=seed,
         )
+        # Only tested comparisons count: an untested row carries a raw p-value
+        # but was never a question the data could answer, so including it would
+        # measure the wrong denominator in both directions.
         pairwise = result.pairwise
-        unadjusted += int((pairwise["p_value"] < alpha).sum())
-        adjusted += int(pairwise["significant"].sum())
-        comparisons += len(pairwise)
+        tested = pairwise[pairwise["tested"]]
+        unadjusted += int((tested["p_value"] < alpha).sum())
+        adjusted += int(tested["significant"].sum())
+        comparisons += len(tested)
+        untested += int((~pairwise["tested"]).sum())
         runs_with_a_finding += int(pairwise["significant"].any())
 
         gaps = result.table[result.table["quantity"].str.contains("difference")]
@@ -94,6 +99,7 @@ def evaluate_scheme(scheme: str, seeds: int, n_rows: int, n_boot: int, alpha: fl
         "n_boot": n_boot,
         "alpha": alpha,
         "comparisons": comparisons,
+        "untested": untested,
         "false_rate_unadjusted": unadjusted / comparisons if comparisons else np.nan,
         "false_rate_adjusted": adjusted / comparisons if comparisons else np.nan,
         "runs_with_a_false_finding": runs_with_a_finding,

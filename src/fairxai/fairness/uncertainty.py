@@ -114,6 +114,17 @@ _NON_STATISTIC_KEYS = {
 _DESCRIPTIVE_QUANTITIES = {"ece"}
 _DESCRIPTIVE_SUBSTRING = "difference"
 
+# A comparison is only asked when both groups are large enough for a rate to
+# mean anything. Below this, a precision or TPR is one or two patients wide and
+# its bootstrap p-value pins to the 2/(B+1) floor with no evidence behind it —
+# which then sails through the multiplicity correction as a finding.
+DEFAULT_MIN_GROUP_SIZE = 10
+
+# Replicates where the statistic is undefined are dropped, so a comparison
+# surviving in only a fraction of them is conditioned on the group happening
+# to be non-degenerate. That conditioning is not the question being asked.
+DEFAULT_MIN_VALID_FRACTION = 0.8
+
 
 def _is_descriptive_only(quantity: str) -> bool:
     """True when a quantity's interval carries no claim about zero."""
@@ -159,6 +170,11 @@ _PAIRWISE_COLUMNS = [
     "p_value",
     "p_value_bh",
     "significant",
+    "tested",
+    "untested_reason",
+    "degenerate",
+    "n_group_a",
+    "n_group_b",
     "n_valid",
     "n_comparisons",
     "n_boot",
@@ -229,7 +245,10 @@ class BootstrapResult:
         if adjusted:
             keep = self.pairwise["significant"]
         else:
-            keep = self.pairwise["p_value"] < self.pairwise["alpha"]
+            # Still restricted to tested rows: an untested comparison has a raw
+            # p-value only because the arithmetic ran, not because a question
+            # was asked of enough data to answer it.
+            keep = self.pairwise["tested"] & (self.pairwise["p_value"] < self.pairwise["alpha"])
         return self.pairwise[keep].reset_index(drop=True)
 
 
@@ -420,6 +439,9 @@ def _pairwise_differences(
     alpha: float,
     n_boot: int,
     scheme: str,
+    group_sizes: Dict[str, Dict[str, int]],
+    min_group_size: int = DEFAULT_MIN_GROUP_SIZE,
+    min_valid_fraction: float = DEFAULT_MIN_VALID_FRACTION,
 ) -> pd.DataFrame:
     """Bootstrap the signed difference between every pair of groups.
 
@@ -432,6 +454,22 @@ def _pairwise_differences(
     within one metric: an assessment that reports four parity metrics over three
     age bands and two sexes has asked dozens of questions, and the correction has
     to cover all of them for "this gap is a finding" to mean anything.
+
+    Not every pair is a question worth asking, and asking it anyway is not
+    harmless. A group of one patient yields a precision of exactly 0 or exactly
+    1 in every replicate; the difference never varies, the p-value pins to the
+    ``2/(B+1)`` floor, and the correction then promotes it to a finding. Three
+    conditions gate a comparison into the tested family, each catching a
+    different way the evidence can be absent:
+
+    * both groups at least *min_group_size* — below that a rate is not estimable;
+    * a non-degenerate replicate distribution — zero spread supports no interval;
+    * the statistic defined in at least *min_valid_fraction* of replicates.
+
+    Untested rows are still written out with their point difference, because
+    "this could not be tested" is itself a result worth reading. They are
+    excluded from the correction family, which also makes the correction
+    slightly less punishing on the comparisons that were real questions.
     """
     families: Dict[Tuple[str, str, str, str], List[str]] = {}
     for scope, attribute, metric, group, quantity in point:
@@ -462,6 +500,24 @@ def _pairwise_differences(
                     p_value = _bootstrap_p_value(valid)
                     excludes = not (ci_low <= 0.0 <= ci_high)
 
+                sizes = group_sizes.get(attribute, {})
+                n_a = int(sizes.get(group_a, 0))
+                n_b = int(sizes.get(group_b, 0))
+                degenerate = valid.size < 2 or bool(np.ptp(valid) == 0.0)
+                valid_fraction = valid.size / n_boot if n_boot else 0.0
+
+                if valid.size == 0:
+                    reason = "no_valid_replicates"
+                elif min(n_a, n_b) < min_group_size:
+                    reason = f"group_below_{min_group_size}"
+                elif degenerate:
+                    reason = "no_replicate_spread"
+                elif valid_fraction < min_valid_fraction:
+                    reason = f"undefined_in_{1 - valid_fraction:.0%}_of_replicates"
+                else:
+                    reason = ""
+                tested = not reason
+
                 rows.append(
                     {
                         "scope": scope,
@@ -481,6 +537,11 @@ def _pairwise_differences(
                         "p_value": p_value,
                         "p_value_bh": np.nan,
                         "significant": False,
+                        "tested": tested,
+                        "untested_reason": reason,
+                        "degenerate": degenerate,
+                        "n_group_a": n_a,
+                        "n_group_b": n_b,
                         "n_valid": int(valid.size),
                         "n_comparisons": 0,
                         "n_boot": int(n_boot),
@@ -494,11 +555,14 @@ def _pairwise_differences(
     if frame.empty:
         return frame
 
-    testable = frame["p_value"].notna()
+    # Only tested rows enter the correction family. An untested row keeps its
+    # raw p_value for inspection but never acquires an adjusted one, so it
+    # cannot be mistaken for a finding by filtering on `significant`.
+    testable = frame["tested"] & frame["p_value"].notna()
     frame.loc[testable, "p_value_bh"] = _benjamini_hochberg(
         frame.loc[testable, "p_value"].to_numpy()
     )
-    frame["significant"] = frame["p_value_bh"] < alpha
+    frame["significant"] = testable & (frame["p_value_bh"] < alpha)
     frame["n_comparisons"] = int(testable.sum())
 
     return frame.sort_values(
@@ -534,6 +598,8 @@ def bootstrap_fairness_metrics(
     min_stratum: int = DEFAULT_MIN_STRATUM,
     metrics_calculator: Optional[FairnessMetrics] = None,
     n_jobs: int = DEFAULT_N_JOBS,
+    min_group_size: int = DEFAULT_MIN_GROUP_SIZE,
+    min_valid_fraction: float = DEFAULT_MIN_VALID_FRACTION,
 ) -> BootstrapResult:
     """Attach percentile confidence intervals to every reported fairness scalar.
 
@@ -555,6 +621,9 @@ def bootstrap_fairness_metrics(
         metrics_calculator: Optional pre-configured calculator. Built from
             ``sensitive_attributes`` when omitted.
         n_jobs: Worker processes for the replicate loop; -1 uses every core.
+        min_group_size: Smallest group that may enter a pairwise comparison.
+        min_valid_fraction: Share of replicates in which the statistic must be
+            defined for the comparison to be tested.
             A performance knob only — each replicate carries its own seed, so
             the numbers are identical at any worker count.
 
@@ -678,13 +747,42 @@ def bootstrap_fairness_metrics(
             n_degenerate,
             len(table),
         )
-    pairwise = _pairwise_differences(point, replicates, alpha, n_boot, scheme)
+    # Observed cohort sizes, which is the right basis for the floor: how many
+    # patients a group actually has, not how many a replicate happened to draw.
+    group_sizes = {
+        attribute: {
+            str(group): int(count)
+            for group, count in frame[attribute].astype(str).value_counts().items()
+        }
+        for attribute in usable
+    }
+    pairwise = _pairwise_differences(
+        point,
+        replicates,
+        alpha,
+        n_boot,
+        scheme,
+        group_sizes,
+        min_group_size=min_group_size,
+        min_valid_fraction=min_valid_fraction,
+    )
+
+    n_untested = int((~pairwise["tested"]).sum()) if not pairwise.empty else 0
+    if n_untested:
+        reasons = pairwise.loc[~pairwise["tested"], "untested_reason"].value_counts().to_dict()
+        logging.info(
+            "%d of %d group comparisons were not tested and carry no adjusted p-value: %s",
+            n_untested,
+            len(pairwise),
+            reasons,
+        )
 
     # A bootstrap p-value cannot resolve below 2/(B+1), so with too few
     # replicates a real difference is reported at a p-value the resampling
     # invented. Flagged rather than silently trusted.
     p_floor = 2.0 / (n_boot + 1)
-    p_resolved = p_floor <= alpha / max(int(len(pairwise)), 1)
+    n_tested = int(pairwise["n_comparisons"].iloc[0]) if not pairwise.empty else 0
+    p_resolved = p_floor <= alpha / max(n_tested, 1)
     if not p_resolved:
         logging.warning(
             "Bootstrap p-values are under-resolved for multiplicity control: %d replicates "
@@ -692,9 +790,9 @@ def bootstrap_fairness_metrics(
             "n_boot to at least %d before reading the adjusted column as a finding.",
             n_boot,
             p_floor,
-            len(pairwise),
-            alpha / max(int(len(pairwise)), 1),
-            int(np.ceil(2 * max(int(len(pairwise)), 1) / alpha)),
+            n_tested,
+            alpha / max(n_tested, 1),
+            int(np.ceil(2 * max(n_tested, 1) / alpha)),
         )
 
     metadata = {
@@ -709,6 +807,10 @@ def bootstrap_fairness_metrics(
         "sensitive_attributes": list(usable),
         "individual_fairness_bootstrapped": False,
         "n_pairwise_comparisons": int(len(pairwise)),
+        "n_pairwise_tested": n_tested,
+        "n_pairwise_untested": n_untested,
+        "min_group_size": int(min_group_size),
+        "min_valid_fraction": float(min_valid_fraction),
         "p_value_resolution": float(p_floor),
         "p_values_resolved_for_multiplicity": bool(p_resolved),
         "n_degenerate_rows": n_degenerate,

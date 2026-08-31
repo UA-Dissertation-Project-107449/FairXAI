@@ -413,3 +413,139 @@ def test_metadata_records_the_worker_count():
     result = bootstrap_fairness_metrics(df, SENSITIVE, n_boot=40, n_jobs=2)
 
     assert result.metadata["n_jobs"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Gating: which comparisons are questions the data can answer
+# ---------------------------------------------------------------------------
+
+
+def _frame_with_a_tiny_group(n: int = 200, seed: int = 0) -> pd.DataFrame:
+    """A cohort where one age band holds a single patient."""
+    rng = np.random.default_rng(seed)
+    df = pd.DataFrame(
+        {
+            "y_true": rng.integers(0, 2, n),
+            "age_group": ["40-49"] * (n // 2) + ["50-59"] * (n - n // 2 - 1) + ["70+"],
+        }
+    )
+    df["y_proba"] = rng.random(n)
+    df["y_pred"] = (df["y_proba"] > 0.5).astype(int)
+    # Make the single 70+ patient a confidently correct positive, which is what
+    # drives its precision to exactly 1.0 in every replicate that contains it.
+    df.loc[df.index[-1], ["y_true", "y_pred", "y_proba"]] = [1, 1, 0.99]
+    return df
+
+
+def test_a_group_below_the_floor_is_never_a_finding():
+    """One patient cannot support a precision claim, however small its p-value."""
+    result = bootstrap_fairness_metrics(
+        _frame_with_a_tiny_group(), ["age_group"], n_boot=200, random_state=0
+    )
+
+    tiny = result.pairwise[
+        (result.pairwise["group_a"] == "70+") | (result.pairwise["group_b"] == "70+")
+    ]
+    assert not tiny.empty
+    assert not tiny["tested"].any()
+    assert not tiny["significant"].any()
+    assert tiny["p_value_bh"].isna().all()
+    assert (tiny["untested_reason"] == "group_below_10").all()
+
+
+def test_untested_rows_are_still_written_out_with_their_point_difference():
+    """ "Could not be tested" is a result; dropping the row hides it."""
+    result = bootstrap_fairness_metrics(
+        _frame_with_a_tiny_group(), ["age_group"], n_boot=200, random_state=0
+    )
+
+    untested = result.pairwise[~result.pairwise["tested"]]
+    assert not untested.empty
+    assert untested["difference"].notna().any()
+    assert (untested["n_group_a"] > 0).all()
+
+
+def test_untested_rows_are_excluded_from_the_correction_family():
+    result = bootstrap_fairness_metrics(
+        _frame_with_a_tiny_group(), ["age_group"], n_boot=200, random_state=0
+    )
+
+    n_tested = int(result.pairwise["tested"].sum())
+    assert result.metadata["n_pairwise_tested"] == n_tested
+    assert result.metadata["n_pairwise_untested"] == len(result.pairwise) - n_tested
+    assert (result.pairwise["n_comparisons"] == n_tested).all()
+    assert n_tested < len(result.pairwise)
+
+
+def test_the_unadjusted_shortlist_is_also_restricted_to_tested_rows():
+    """A raw p-value on an untested row exists only because the arithmetic ran."""
+    result = bootstrap_fairness_metrics(
+        _frame_with_a_tiny_group(), ["age_group"], n_boot=200, random_state=0
+    )
+
+    assert result.significant_differences(adjusted=False)["tested"].all()
+
+
+def test_the_floor_is_configurable():
+    """A small but non-degenerate group is admitted once the floor allows it."""
+    rng = np.random.default_rng(3)
+    n = 205
+    frame = pd.DataFrame(
+        {
+            "y_true": rng.integers(0, 2, n),
+            "age_group": ["40-49"] * 100 + ["50-59"] * 100 + ["70+"] * 5,
+        }
+    )
+    frame["y_proba"] = rng.random(n)
+    frame["y_pred"] = (frame["y_proba"] > 0.5).astype(int)
+
+    def tested_pairs(floor):
+        result = bootstrap_fairness_metrics(
+            frame, ["age_group"], n_boot=300, random_state=0, min_group_size=floor
+        )
+        pairs = result.pairwise
+        involves_tiny = (pairs["group_a"] == "70+") | (pairs["group_b"] == "70+")
+        return int((pairs["tested"] & involves_tiny).sum())
+
+    assert tested_pairs(10) == 0
+    assert tested_pairs(3) > 0
+
+
+def test_lowering_the_floor_does_not_rescue_a_group_with_no_spread():
+    """The guards are layered: size is only the first way evidence can be absent."""
+    frame = _frame_with_a_tiny_group()
+    permissive = bootstrap_fairness_metrics(
+        frame, ["age_group"], n_boot=200, random_state=0, min_group_size=1
+    )
+
+    tiny = permissive.pairwise[
+        (permissive.pairwise["group_a"] == "70+") | (permissive.pairwise["group_b"] == "70+")
+    ]
+    assert not tiny["significant"].any()
+    assert not (tiny["untested_reason"] == "group_below_1").any()
+
+
+def test_a_comparison_undefined_in_most_replicates_is_not_tested():
+    """Surviving replicates are conditioned on the group being non-degenerate."""
+    frame = _frame_with_a_tiny_group()
+    result = bootstrap_fairness_metrics(
+        frame,
+        ["age_group"],
+        n_boot=200,
+        random_state=0,
+        min_group_size=1,
+        min_valid_fraction=0.99,
+    )
+
+    reasons = set(result.pairwise.loc[~result.pairwise["tested"], "untested_reason"])
+    assert any(r.startswith("undefined_in_") or r == "no_replicate_spread" for r in reasons)
+
+
+def test_group_sizes_recorded_on_the_comparison_are_the_cohort_sizes():
+    frame = _frame_with_a_tiny_group()
+    result = bootstrap_fairness_metrics(frame, ["age_group"], n_boot=100, random_state=0)
+
+    observed = frame["age_group"].value_counts().to_dict()
+    row = result.pairwise.iloc[0]
+    assert row["n_group_a"] == observed[row["group_a"]]
+    assert row["n_group_b"] == observed[row["group_b"]]

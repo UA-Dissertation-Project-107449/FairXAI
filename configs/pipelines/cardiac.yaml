@@ -50,6 +50,11 @@ fairness:
     # cleveland_uci (n=297) this degrades all the way to `none`, because a
     # five-level age_group crossed with sex and outcome leaves single-row cells.
     stratify: group_outcome
+    # A pairwise comparison is only asked when both groups clear this floor.
+    # Below it a rate is one or two patients wide and its bootstrap p-value pins
+    # to the 2/(B+1) floor with no evidence behind it.
+    min_group_size: 10
+    min_valid_fraction: 0.8
     random_state: 42
     # Replicates are independent; -1 uses every core. Measured on cleveland_uci
     # at B=1000: 32.5s serial vs 9.9s on 8 cores.
