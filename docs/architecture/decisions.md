@@ -265,15 +265,42 @@ Supporting choices:
 - **Stratified by group x outcome by default**, degrading to group and then to
   i.i.d. when a stratum is too small to resample. Group sizes and per-group
   prevalence are design facts of the cohort, not quantities being estimated. The
-  scheme that actually ran is recorded in the run metadata.
-- **`fairness.uncertainty.n_bootstrap: auto`** = 1000 replicates, thinned to 200
-  above 10k rows, mirroring `adaptive_shap_sample_cap`.
+  scheme that actually ran is recorded in the run metadata. *Measured caveat:*
+  on `cleveland_uci` (n=297) the default never survives — a five-level
+  `age_group` crossed with sex, `group_cluster` and outcome leaves single-row
+  cells, so every split degraded `group_outcome -> group -> none`. The
+  applicable row of the calibration table below is therefore `none`, not the
+  default row. The conditioning argument still decides the *requested* scheme;
+  it simply does not bind on the small cardiac cohorts.
+- **`fairness.uncertainty.n_bootstrap`: 4000 for cardiac, not `auto`.** `auto`
+  is 1000 replicates (thinned to 200 above 10k rows, mirroring
+  `adaptive_shap_sample_cap`), and a bootstrap p-value cannot resolve below
+  `2/(B+1)`. Three sensitive attributes give a 98-comparison family, so BH needs
+  roughly p=0.0005 while 1000 replicates floor at p=0.0020: the adjusted column
+  was structurally unreadable. The run warns when this holds; 4000 clears it.
+- **Replicates run in parallel (`n_jobs`).** Each replicate carries its own
+  spawned seed rather than drawing from one shared generator, so the worker
+  count is a pure performance knob and the numbers are identical at any
+  `n_jobs`. Measured on `cleveland_uci` at B=1000: 32.5s serial, 9.9s on 8
+  cores.
 - **Individual fairness is never bootstrapped.** Its k-NN consistency is O(n^2),
   and a resampled cohort contains duplicate rows at distance zero from each
   other, which would inflate consistency by construction.
 - **Never fatal.** A bootstrap failure is logged and swallowed; intervals are an
   addition to the assessment and must not cost the point estimates downstream
   stages consume.
+- **`descriptive_only` is a column, not just prose.** The max-gap argument
+  applies verbatim to per-group *expected calibration error*: ECE is a
+  nonnegative plug-in statistic biased upward on small groups. On `cleveland_uci`
+  the age 40-49 ECE came back with point 0.076 and interval [0.079, 0.221] — an
+  interval sitting entirely above its own point estimate. Both families (every
+  `*difference*` gap and `ece`) now carry `descriptive_only = True` in the CI
+  table so the warning travels with the number instead of living only here.
+- **`degenerate` flags rows with no replicate spread.** Where a group is too
+  small or too homogeneous to vary under resampling, every replicate returns the
+  same value and the interval collapses to a point (13 of 94 rows on the first
+  real `cleveland_uci` run). That is not precision, and the run now warns and
+  marks those rows rather than emitting endpoints that look tight.
 
 #### Measured null calibration
 
