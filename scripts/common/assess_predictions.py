@@ -24,6 +24,7 @@ from fairxai.cli.runner_base import load_pipeline_config, setup_phase_logging
 from fairxai.fairness.metrics import FairnessMetrics, summarize_fairness_results
 from fairxai.fairness.uncertainty import (
     DEFAULT_ALPHA,
+    DEFAULT_N_JOBS,
     STRATIFY_GROUP_OUTCOME,
     adaptive_bootstrap_replicates,
     bootstrap_fairness_metrics,
@@ -257,6 +258,7 @@ def _write_uncertainty(
             alpha=float(cfg.get("alpha", DEFAULT_ALPHA)),
             stratify=str(cfg.get("stratify", STRATIFY_GROUP_OUTCOME)),
             random_state=int(cfg.get("random_state", 42)),
+            n_jobs=int(cfg.get("n_jobs", DEFAULT_N_JOBS)),
         )
     except Exception as exc:  # noqa: BLE001 — intervals are additive, never fatal
         logging.warning("Bootstrap failed for %s: %s", file_stem, exc)

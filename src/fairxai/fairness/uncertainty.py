@@ -53,6 +53,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
 
 from .metrics import FairnessMetrics
 
@@ -67,6 +68,11 @@ BOOTSTRAP_LARGE_REPLICATES = 200
 BOOTSTRAP_LARGE_COHORT_ROWS = 10_000
 DEFAULT_ALPHA = 0.05
 DEFAULT_MIN_STRATUM = 2
+# Replicates are independent, so the loop is embarrassingly parallel. It stays
+# serial by default because the assessment stage already runs inside whatever
+# parallelism the pipeline chose; callers that know they own the machine pass
+# n_jobs=-1.
+DEFAULT_N_JOBS = 1
 
 STRATIFY_GROUP_OUTCOME = "group_outcome"
 STRATIFY_GROUP = "group"
@@ -99,6 +105,21 @@ _NON_STATISTIC_KEYS = {
     "predicted_positive_count",
 }
 
+# Quantities that are nonnegative by construction, so a percentile interval on
+# them is descriptive spread and never a test against zero. Two families qualify:
+# every max-of-differences parity gap, and per-group expected calibration error,
+# which is a plug-in statistic biased upward on small groups — its interval can
+# sit entirely above its own point estimate. Rows carrying this flag must not be
+# read as findings; the pairwise table is the inferential instrument.
+_DESCRIPTIVE_QUANTITIES = {"ece"}
+_DESCRIPTIVE_SUBSTRING = "difference"
+
+
+def _is_descriptive_only(quantity: str) -> bool:
+    """True when a quantity's interval carries no claim about zero."""
+    return quantity in _DESCRIPTIVE_QUANTITIES or _DESCRIPTIVE_SUBSTRING in quantity
+
+
 _TABLE_COLUMNS = [
     "scope",
     "attribute",
@@ -111,6 +132,8 @@ _TABLE_COLUMNS = [
     "se",
     "bootstrap_mean",
     "includes_zero",
+    "descriptive_only",
+    "degenerate",
     "n_valid",
     "n_boot",
     "alpha",
@@ -483,6 +506,23 @@ def _pairwise_differences(
     ).reset_index(drop=True)
 
 
+def _draw_replicate(
+    frame: pd.DataFrame,
+    blocks: Optional[List[np.ndarray]],
+    calculator: FairnessMetrics,
+    seed: np.random.SeedSequence,
+) -> Dict[MetricKey, float]:
+    """Resample the cohort once and re-run every metric on the draw.
+
+    Module-level and seed-carrying rather than a closure over a shared
+    generator, so it can be shipped to a worker process and so a replicate's
+    draw depends on its own seed rather than on execution order.
+    """
+    rng = np.random.default_rng(seed)
+    sample = frame.take(_replicate_indices(len(frame), blocks, rng))
+    return flatten_fairness_metrics(calculator.calculate_all_metrics(sample))
+
+
 def bootstrap_fairness_metrics(
     df: pd.DataFrame,
     sensitive_attributes: Sequence[str],
@@ -493,6 +533,7 @@ def bootstrap_fairness_metrics(
     true_col: str = "y_true",
     min_stratum: int = DEFAULT_MIN_STRATUM,
     metrics_calculator: Optional[FairnessMetrics] = None,
+    n_jobs: int = DEFAULT_N_JOBS,
 ) -> BootstrapResult:
     """Attach percentile confidence intervals to every reported fairness scalar.
 
@@ -513,6 +554,9 @@ def bootstrap_fairness_metrics(
         min_stratum: Smallest stratum that may be resampled before degrading.
         metrics_calculator: Optional pre-configured calculator. Built from
             ``sensitive_attributes`` when omitted.
+        n_jobs: Worker processes for the replicate loop; -1 uses every core.
+            A performance knob only — each replicate carries its own seed, so
+            the numbers are identical at any worker count.
 
     Returns:
         A :class:`BootstrapResult`. The table is empty when the frame yields no
@@ -525,6 +569,8 @@ def bootstrap_fairness_metrics(
         raise ValueError(f"n_boot must be at least 2, got {n_boot}")
     if not 0.0 < alpha < 1.0:
         raise ValueError(f"alpha must lie in (0, 1), got {alpha}")
+    if n_jobs == 0:
+        raise ValueError("n_jobs must be a positive worker count or -1, got 0")
 
     usable = [c for c in sensitive_attributes if c in df.columns]
 
@@ -558,17 +604,24 @@ def bootstrap_fairness_metrics(
         frame, usable, stratify, true_col, min_stratum=min_stratum
     )
     blocks = _stratum_blocks(strata, len(frame))
-    rng = np.random.default_rng(random_state)
 
-    replicates: Dict[MetricKey, List[float]] = {key: [] for key in point}
-    for _ in range(n_boot):
-        sample = frame.take(_replicate_indices(len(frame), blocks, rng))
-        drawn = flatten_fairness_metrics(calculator.calculate_all_metrics(sample))
-        for key in point:
-            # A group absent from this replicate contributes no value rather than
-            # a zero, which would drag its interval toward an outcome that never
-            # happened.
-            replicates[key].append(drawn.get(key, np.nan))
+    # One independent seed per replicate rather than one shared generator: the
+    # draw a replicate makes then depends on its own index, not on the order
+    # workers happen to finish in, which is what lets n_jobs stay a pure
+    # performance knob.
+    seeds = np.random.SeedSequence(random_state).spawn(n_boot)
+    if n_jobs == 1:
+        drawn_replicates = [_draw_replicate(frame, blocks, calculator, s) for s in seeds]
+    else:
+        drawn_replicates = Parallel(n_jobs=n_jobs)(
+            delayed(_draw_replicate)(frame, blocks, calculator, s) for s in seeds
+        )
+
+    # A group absent from a replicate contributes no value rather than a zero,
+    # which would drag its interval toward an outcome that never happened.
+    replicates: Dict[MetricKey, List[float]] = {
+        key: [drawn.get(key, np.nan) for drawn in drawn_replicates] for key in point
+    }
 
     lo_pct, hi_pct = 100 * (alpha / 2), 100 * (1 - alpha / 2)
     rows = []
@@ -576,6 +629,12 @@ def bootstrap_fairness_metrics(
         scope, attribute, metric, group, quantity = key
         arr = np.asarray(values, dtype=float)
         valid = arr[np.isfinite(arr)]
+        # A quantity that returns the same value in every replicate has no
+        # sampling distribution to summarise — its "interval" is a point. This
+        # happens where a group is too small or too homogeneous to vary under
+        # resampling, and an endpoint pair that looks tight for that reason must
+        # not be read as precision.
+        degenerate = valid.size < 2 or bool(np.ptp(valid) == 0.0)
         if valid.size == 0:
             ci_low = ci_high = se = boot_mean = np.nan
         else:
@@ -596,6 +655,8 @@ def bootstrap_fairness_metrics(
                 "se": se,
                 "bootstrap_mean": boot_mean,
                 "includes_zero": bool(ci_low <= 0.0 <= ci_high) if valid.size else False,
+                "descriptive_only": _is_descriptive_only(quantity),
+                "degenerate": degenerate,
                 "n_valid": int(valid.size),
                 "n_boot": int(n_boot),
                 "alpha": float(alpha),
@@ -607,6 +668,16 @@ def bootstrap_fairness_metrics(
     table = pd.DataFrame(rows, columns=_TABLE_COLUMNS).sort_values(
         ["scope", "attribute", "metric", "group", "quantity"]
     )
+
+    n_degenerate = int(table["degenerate"].sum())
+    if n_degenerate:
+        logging.warning(
+            "%d of %d interval rows have no replicate spread at all (a group too "
+            "small or too homogeneous to vary under resampling). Their endpoints "
+            "are not precision — read the degenerate column before quoting one.",
+            n_degenerate,
+            len(table),
+        )
     pairwise = _pairwise_differences(point, replicates, alpha, n_boot, scheme)
 
     # A bootstrap p-value cannot resolve below 2/(B+1), so with too few
@@ -628,6 +699,7 @@ def bootstrap_fairness_metrics(
 
     metadata = {
         "n_boot": int(n_boot),
+        "n_jobs": int(n_jobs),
         "alpha": float(alpha),
         "method": "percentile",
         "stratify_requested": stratify,
@@ -639,6 +711,8 @@ def bootstrap_fairness_metrics(
         "n_pairwise_comparisons": int(len(pairwise)),
         "p_value_resolution": float(p_floor),
         "p_values_resolved_for_multiplicity": bool(p_resolved),
+        "n_degenerate_rows": n_degenerate,
+        "n_descriptive_only_rows": int(table["descriptive_only"].sum()),
     }
     return BootstrapResult(
         table=table.reset_index(drop=True),

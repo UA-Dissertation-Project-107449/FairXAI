@@ -90,3 +90,15 @@ def test_config_alpha_reaches_the_written_table(tmp_path):
 
     ci = pd.read_csv(tmp_path / "cleveland_ci.csv")
     assert (ci["alpha"] == 0.10).all()
+
+
+def test_config_n_jobs_reaches_the_bootstrap(tmp_path):
+    metadata = _write_uncertainty(
+        _predictions(),
+        SENSITIVE,
+        tmp_path,
+        "cleveland_logistic_regression",
+        {"n_bootstrap": 40, "n_jobs": 2},
+    )
+
+    assert metadata["n_jobs"] == 2

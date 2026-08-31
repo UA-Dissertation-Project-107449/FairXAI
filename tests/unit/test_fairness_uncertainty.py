@@ -208,11 +208,18 @@ def test_max_gap_intervals_are_reported_but_not_treated_as_tests():
 
 
 def test_intervals_bracket_their_point_estimates_for_per_group_quantities():
+    """Holds for rates, not for the descriptive-only quantities.
+
+    A per-group ECE is biased upward under resampling, and on a real cohort
+    (Cleveland, age 40-49) its interval sat entirely above its own point
+    estimate. Bracketing is a property of the quantities that are not flagged
+    descriptive-only, so the assertion is scoped to those.
+    """
     df = _cohort(n=400)
 
     result = bootstrap_fairness_metrics(df, SENSITIVE, n_boot=200)
 
-    per_group = result.table[result.table["group"] != ""]
+    per_group = result.table[(result.table["group"] != "") & (~result.table["descriptive_only"])]
     assert not per_group.empty
     assert (per_group["ci_low"] <= per_group["point"]).all()
     assert (per_group["point"] <= per_group["ci_high"]).all()
@@ -305,3 +312,104 @@ def test_every_pair_of_groups_is_compared_once():
     # Three age bands → three unordered pairs, each appearing once.
     assert len(age) == 3
     assert len(set(zip(age["group_a"], age["group_b"]))) == 3
+
+
+# --- descriptive-only quantities -------------------------------------------
+
+
+def _cohort_with_a_constant_group(n: int = 200, seed: int = 3) -> pd.DataFrame:
+    """A cohort whose smallest group cannot vary under resampling."""
+    df = _cohort(n=n, seed=seed)
+    idx = df.index[:4]
+    df.loc[idx, "age_group"] = "tiny"
+    df.loc[idx, "y_true"] = 1
+    df.loc[idx, "y_pred"] = 1
+    df.loc[idx, "y_proba"] = 0.9
+    return df
+
+
+def test_gap_quantities_are_reported_descriptive_only():
+    df = _cohort(n=400, seed=7)
+
+    result = bootstrap_fairness_metrics(df, SENSITIVE, n_boot=100)
+
+    gaps = result.table[result.table["quantity"].str.contains("difference")]
+    assert not gaps.empty
+    assert gaps["descriptive_only"].all()
+
+
+def test_per_group_calibration_error_is_reported_descriptive_only():
+    """ECE is a nonnegative plug-in statistic, biased upward on small groups.
+
+    Its interval can sit entirely above its own point estimate, so it carries
+    the same warning label as a max-gap row rather than reading as an estimate
+    anyone can test against zero.
+    """
+    df = _cohort(n=400, seed=7)
+
+    result = bootstrap_fairness_metrics(df, SENSITIVE, n_boot=100)
+
+    ece = result.table[result.table["quantity"] == "ece"]
+    assert not ece.empty
+    assert ece["descriptive_only"].all()
+
+
+def test_group_rates_are_not_descriptive_only():
+    df = _cohort(n=400, seed=7)
+
+    result = bootstrap_fairness_metrics(df, SENSITIVE, n_boot=100)
+
+    rates = result.table[result.table["quantity"].isin(["positive_rate", "tpr", "precision"])]
+    assert not rates.empty
+    assert not rates["descriptive_only"].any()
+
+
+# --- degenerate replicate spread -------------------------------------------
+
+
+def test_a_quantity_that_cannot_vary_under_resampling_is_flagged_degenerate():
+    df = _cohort_with_a_constant_group()
+
+    result = bootstrap_fairness_metrics(df, SENSITIVE, n_boot=100, random_state=5)
+
+    tiny = result.table[
+        (result.table["attribute"] == "age_group")
+        & (result.table["group"] == "tiny")
+        & (result.table["quantity"] == "tpr")
+    ]
+    assert not tiny.empty
+    assert tiny["degenerate"].all()
+
+
+def test_ordinary_group_quantities_are_not_flagged_degenerate():
+    df = _cohort(n=400, seed=7)
+
+    result = bootstrap_fairness_metrics(df, SENSITIVE, n_boot=100)
+
+    rates = result.table[
+        (result.table["attribute"] == "sex") & (result.table["quantity"] == "positive_rate")
+    ]
+    assert not rates.empty
+    assert not rates["degenerate"].any()
+
+
+# --- parallel replicates ----------------------------------------------------
+
+
+def test_parallel_replicates_reproduce_the_serial_result():
+    """Worker count is a performance knob, never a change to the numbers."""
+    df = _cohort(n=250)
+
+    serial = bootstrap_fairness_metrics(df, SENSITIVE, n_boot=60, random_state=11, n_jobs=1)
+    parallel = bootstrap_fairness_metrics(df, SENSITIVE, n_boot=60, random_state=11, n_jobs=2)
+
+    pd.testing.assert_frame_equal(serial.table, parallel.table)
+    pd.testing.assert_frame_equal(serial.pairwise, parallel.pairwise)
+
+
+def test_metadata_records_the_worker_count():
+    df = _cohort(n=200)
+
+    result = bootstrap_fairness_metrics(df, SENSITIVE, n_boot=40, n_jobs=2)
+
+    assert result.metadata["n_jobs"] == 2
