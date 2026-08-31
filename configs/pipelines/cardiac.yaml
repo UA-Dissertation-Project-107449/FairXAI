@@ -33,6 +33,19 @@ training:
 
 fairness:
   sensitive_attributes: [age_group, sex, group_cluster]
+  # Bootstrap confidence intervals for every reported group metric and parity
+  # gap, plus signed pairwise group differences with a multiplicity-adjusted
+  # p-value. Written next to the point estimates as *_ci.csv / *_pairwise_ci.csv.
+  uncertainty:
+    enabled: true
+    # auto = 1000 replicates, thinned to 200 above 10k rows (cardio70k).
+    n_bootstrap: auto
+    alpha: 0.05
+    # Resampling holds group sizes and per-group prevalence fixed; they are
+    # design facts of the cohort, not quantities being estimated. Degrades
+    # automatically when a stratum is too small to resample.
+    stratify: group_outcome
+    random_state: 42
 
 # Optional: discover patient subgroups via clustering BEFORE training and treat
 # them as a sensitive attribute (group_cluster). Off by default → pipeline is
@@ -86,6 +99,13 @@ xai:
   cv_lime_instances: 3
   global_max_samples: 1000
   skip_shap_model_types: [svm]
+  # Per-sensitive-group SHAP summaries alongside the cohort-wide one. Reuses the
+  # SHAP matrix already computed for the global summary, so the cost is a
+  # group-by, not a second explanation pass.
+  subgroup_shap: true
+  # Groups smaller than this are excluded from the subgroup tables: per-feature
+  # percentiles over a handful of rows are noise, not a disparity.
+  subgroup_min_size: 30
 
 studies:
   skip: false
