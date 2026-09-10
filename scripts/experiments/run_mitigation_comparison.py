@@ -215,6 +215,51 @@ def train_baseline(
     }
 
 
+def _persist_arm_predictions(
+    predictions_df,
+    meta_test,
+    predictions_dir,
+    prediction_index,
+    dataset_name: str,
+    model_type: str,
+    technique_name: str,
+    sensitive_attr: str,
+) -> None:
+    """Write one arm's per-sample predictions and record it in the index.
+
+    Every arm of the comparison lands under the same directory in the same
+    shape, which is what lets the downstream evidence pass treat the baseline
+    and the mitigated arms alike. The index exists because the filename cannot
+    be parsed back by splitting on "_": dataset, family, technique, and
+    attribute all contain underscores of their own.
+    """
+    if predictions_dir is None:
+        return
+
+    frame = predictions_df
+    if meta_test is not None:
+        # Analysis-only `*_raw` metadata (e.g. age_raw) for the post-hoc
+        # age-binning sweep; never a feature or a grouping key.
+        frame = frame.copy()
+        for col in meta_test.columns:
+            frame[col] = meta_test[col].values
+
+    predictions_dir.mkdir(parents=True, exist_ok=True)
+    pred_name = f"{dataset_name}_{model_type}_{technique_name}_{sensitive_attr}.csv"
+    frame.to_csv(predictions_dir / pred_name, index=False)
+
+    if prediction_index is not None:
+        prediction_index.append(
+            {
+                "file": pred_name,
+                "dataset": dataset_name,
+                "model_type": model_type,
+                "technique": technique_name,
+                "constraint_attr": sensitive_attr,
+            }
+        )
+
+
 def apply_mitigation_techniques(
     X_train,
     y_train,
@@ -343,23 +388,16 @@ def apply_mitigation_techniques(
 
                 # Persist the mitigated per-sample predictions ("after" regime)
                 # so the age-binning sensitivity sweep can pair them vs baseline.
-                if predictions_dir is not None:
-                    predictions_dir.mkdir(parents=True, exist_ok=True)
-                    pred_name = f"{dataset_name}_{model_type}_{technique_name}_{sensitive_attr}.csv"
-                    predictions_df.to_csv(predictions_dir / pred_name, index=False)
-                    # Machine-readable map for the age-binning sweep: the filename
-                    # cannot be parsed back by splitting on "_" because every
-                    # component (dataset, family, technique, attr) contains them.
-                    if prediction_index is not None:
-                        prediction_index.append(
-                            {
-                                "file": pred_name,
-                                "dataset": dataset_name,
-                                "model_type": model_type,
-                                "technique": technique_name,
-                                "constraint_attr": sensitive_attr,
-                            }
-                        )
+                _persist_arm_predictions(
+                    predictions_df,
+                    None,  # meta columns are already on the frame
+                    predictions_dir=predictions_dir,
+                    prediction_index=prediction_index,
+                    dataset_name=dataset_name,
+                    model_type=model_type,
+                    technique_name=technique_name,
+                    sensitive_attr=sensitive_attr,
+                )
 
                 # Calculate fairness metrics across ALL sensitive attrs (measurement
                 # is unchanged; only the imposed constraint varies per loop).
@@ -750,6 +788,22 @@ def run_analysis(
                     dataset_name,
                     model_params,
                     model_type=model_type,
+                )
+
+                # Persist the unmitigated arm alongside the mitigated ones. The
+                # baseline this stage trains is not the stage-7 baseline -- it
+                # uses this experiment's model params on this experiment's
+                # split -- so a before/after comparison is only like-for-like
+                # when both arms come from here.
+                _persist_arm_predictions(
+                    baseline["predictions"],
+                    meta_test,
+                    predictions_dir=output_dir / "predictions",
+                    prediction_index=prediction_index,
+                    dataset_name=dataset_name,
+                    model_type=model_type,
+                    technique_name="baseline",
+                    sensitive_attr="none",
                 )
 
                 baseline_results.append(
