@@ -91,6 +91,16 @@ BUILTIN_STRATEGIES: Dict[str, Dict[str, Any]] = {
         "bins": [0, 45, 55, 65, 100],
         "labels": ["<45", "45-54", "55-64", "65+"],
     },
+    "clinical_adaptive": {
+        "description": "Clinical guidelines with auto-merge of small bins",
+        "method": "fixed",
+        "bins": [0, 45, 55, 65, 100],
+        "labels": ["<45", "45-54", "55-64", "65+"],
+        # Fixed edges normally bypass the repair pass. Setting adaptive lets
+        # validate_and_repair merge any clinical band that falls below
+        # min_group_size, which is what separates this from "clinical".
+        "adaptive": True,
+    },
     # --- Quantile strategies ------------------------------------------------
     "quantile_3": {
         "description": "Data-driven terciles (equal sample sizes)",
@@ -450,6 +460,21 @@ def _categorical_identity_bins(series: pd.Series) -> Tuple[List[float], None]:
 # ---------------------------------------------------------------------------
 
 
+def _label_for_edges(bins: List[float], idx: int) -> str:
+    """Name the bin between ``bins[idx]`` and ``bins[idx + 1]``.
+
+    Follows the convention the fixed strategies declare by hand: the first bin
+    is an upper bound, the last an open-ended floor, and the rest a closed
+    range whose upper end is the next edge minus one.
+    """
+    low, high = bins[idx], bins[idx + 1]
+    if idx == 0:
+        return f"<{high:g}"
+    if idx == len(bins) - 2:
+        return f"{low:g}+"
+    return f"{low:g}-{high - 1:g}"
+
+
 def validate_and_repair(
     series: pd.Series,
     bins: List[float],
@@ -549,8 +574,13 @@ def validate_and_repair(
 
         old_label = None
         if labels is not None and len(labels) == n_bins_now:
-            merge_idx = idx if merge_right else idx - 1
-            old_label = labels.pop(max(merge_idx, 0))
+            merge_idx = max(idx if merge_right else idx - 1, 0)
+            old_label = labels.pop(merge_idx)
+            # The surviving label described only one of the two bins, so it now
+            # understates the range it covers -- a merged "<45" + "45-54" bin
+            # left labelled "45-54" reports under-45 patients under a band that
+            # excludes them. Rebuild it from the edges that remain.
+            labels[merge_idx] = _label_for_edges(bins, merge_idx)
 
         logger.warning(
             f"  strategy '{strategy_name}': merged bin with {cnt} samples "
