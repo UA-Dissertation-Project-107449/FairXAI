@@ -143,6 +143,10 @@ PY
 )}
 export RUN_ID
 
+# Ensure bare run IDs use the same `run_`-prefixed directory as all pipeline stages.
+[[ "$RUN_ID" == run_* ]] || RUN_ID="run_$RUN_ID"
+export RUN_ID
+
 RUN_ROOT="$BASE_RESULTS/runs/$RUN_ID"
 CHECKPOINT_DIR="$RUN_ROOT/.checkpoints"
 mkdir -p "$CHECKPOINT_DIR" "$BASE_RESULTS" "$ROOT_DIR/logs/dermatology"
