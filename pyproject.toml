@@ -16,7 +16,12 @@ requires-python = ">=3.11"
 # CORE: Minimum viable install — all that the HPC batch jobs need
 dependencies = [
     "numpy>=2.0.0",        # (reqs: 2.3.5)  array ops used everywhere
-    "pandas>=2.0.0",       # (reqs: 2.3.3)  tabular data throughout pipeline
+    # Upper bound <3: pandas 3.0 makes copy-on-write unconditional and changes
+    # groupby defaults. Every archived run and every number already quoted in the
+    # dissertation was produced under 2.x, so an unpinned install silently makes
+    # new results incomparable with them. Bumping past 3.0 is a deliberate
+    # migration that has to be revalidated against the archived runs.
+    "pandas>=2.0.0,<3",    # (reqs: 2.3.3)  tabular data throughout pipeline
     # Upper bound <1.8: 1.8 deprecates LogisticRegression(penalty=...) and 1.9
     # deprecates SVC(probability=True); their replacement APIs are 1.8-only and
     # change model behavior. Pin keeps CI reproducible (tested 1.7.2) and
