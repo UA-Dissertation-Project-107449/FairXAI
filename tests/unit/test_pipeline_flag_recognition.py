@@ -274,6 +274,7 @@ _BASH_ARG_ARRAY_TO_FLAGS = {
     "FIGURE_ARGS": ("--figures", "--no-figures"),
     "GROUP_VIEW_ARGS": ("--group-views", "--no-group-views"),
     "AUGMENTATION_ARGS": ("--augmentation", "--no-augmentation"),
+    "FEATURE_CACHE_ARGS": ("--cache-frozen-features", "--no-cache-frozen-features"),
 }
 
 

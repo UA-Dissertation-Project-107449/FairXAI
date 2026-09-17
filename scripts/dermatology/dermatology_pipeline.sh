@@ -18,6 +18,7 @@ EPOCHS=""
 BATCH_SIZE=""
 PRETRAINED_ARGS=()
 AUGMENTATION_ARGS=()
+FEATURE_CACHE_ARGS=()
 FIGURE_ARGS=()
 GROUP_VIEW_ARGS=()
 
@@ -76,6 +77,12 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-augmentation)
             AUGMENTATION_ARGS=(--no-augmentation)
+            ;;
+        --cache-frozen-features)
+            FEATURE_CACHE_ARGS=(--cache-frozen-features)
+            ;;
+        --no-cache-frozen-features)
+            FEATURE_CACHE_ARGS=(--no-cache-frozen-features)
             ;;
         --figures)
             FIGURE_ARGS=(--figures)
@@ -260,7 +267,7 @@ fi
 
 if should_run 7; then
     echo "[PHASE 7] Training image baseline"
-    "$PYTHON" "$ROOT_DIR/scripts/dermatology/train_baseline.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" "${DEVICE_ARGS[@]}" "${EPOCH_ARGS[@]}" "${BATCH_ARGS[@]}" "${PRETRAINED_ARGS[@]}" "${AUGMENTATION_ARGS[@]}" $VERBOSE_FLAG
+    "$PYTHON" "$ROOT_DIR/scripts/dermatology/train_baseline.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" "${DEVICE_ARGS[@]}" "${EPOCH_ARGS[@]}" "${BATCH_ARGS[@]}" "${PRETRAINED_ARGS[@]}" "${AUGMENTATION_ARGS[@]}" "${FEATURE_CACHE_ARGS[@]}" $VERBOSE_FLAG
     mark_done 7
 else
     echo "[7] train - SKIPPED"

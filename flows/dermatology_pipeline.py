@@ -146,6 +146,7 @@ def train_baseline_model(
     batch_size: Optional[int] = None,
     pretrained: Optional[bool] = None,
     augmentation: Optional[bool] = None,
+    cache_frozen_features: Optional[bool] = None,
     verbose: int = 0,
 ):
     """Stage 7: train the image baseline for each requested model family."""
@@ -164,6 +165,11 @@ def train_baseline_model(
         args.extend(["--batch-size", str(batch_size)])
     args.extend(_toggle_flags(pretrained, "--pretrained", "--no-pretrained"))
     args.extend(_toggle_flags(augmentation, "--augmentation", "--no-augmentation"))
+    args.extend(
+        _toggle_flags(
+            cache_frozen_features, "--cache-frozen-features", "--no-cache-frozen-features"
+        )
+    )
     args.extend(_verbose_flags(verbose))
     _run_script(SCRIPTS_DIR / "train_baseline.py", args, _stage_env(run_id))
 
@@ -267,6 +273,7 @@ def dermatology_pipeline(
     batch_size: Optional[int] = None,
     pretrained: Optional[bool] = None,
     augmentation: Optional[bool] = None,
+    cache_frozen_features: Optional[bool] = None,
     figures: Optional[bool] = None,
     group_views: Optional[bool] = None,
 ):
@@ -282,6 +289,10 @@ def dermatology_pipeline(
     augmentation : ``None`` defers to ``training.image.use_augmentation``.
         Enabling it disables frozen-feature caching, so an augmented run pays
         the pixels->features cost every epoch.
+    cache_frozen_features : ``None`` defers to
+        ``training.image.cache_frozen_features``. Caching extracts features once
+        through an eval-mode backbone, so BatchNorm statistics stay frozen where
+        the uncached path lets them drift; the two are not interchangeable.
     """
     flow_logger = get_run_logger()
 
@@ -444,6 +455,7 @@ def dermatology_pipeline(
             batch_size=batch_size,
             pretrained=pretrained,
             augmentation=augmentation,
+            cache_frozen_features=cache_frozen_features,
             verbose=verbose,
             wait_for=[preprocess_task] if preprocess_task else [],
         )
@@ -646,6 +658,24 @@ Examples:
         help="Disable image augmentation, keeping the frozen-feature cache usable.",
     )
     p.set_defaults(augmentation=None)
+    feature_cache_group = p.add_mutually_exclusive_group()
+    feature_cache_group.add_argument(
+        "--cache-frozen-features",
+        dest="cache_frozen_features",
+        action="store_true",
+        help=(
+            "Extract frozen-backbone features once and reuse them. Uses an "
+            "eval-mode backbone, so BatchNorm and dropout differ from the "
+            "default train-mode path."
+        ),
+    )
+    feature_cache_group.add_argument(
+        "--no-cache-frozen-features",
+        dest="cache_frozen_features",
+        action="store_false",
+        help="Run the backbone every epoch in train mode instead of caching features.",
+    )
+    p.set_defaults(cache_frozen_features=None)
     figures_group = p.add_mutually_exclusive_group()
     figures_group.add_argument(
         "--figures",
@@ -713,6 +743,7 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         pretrained=args.pretrained,
         augmentation=args.augmentation,
+        cache_frozen_features=args.cache_frozen_features,
         figures=args.figures,
         group_views=args.group_views,
     )
