@@ -17,6 +17,7 @@ Usage:
 """
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -239,6 +240,101 @@ def _report(label: str, result) -> None:
 # ------------------------------------------------------------------
 
 
+def _expand_exclusions(df: pd.DataFrame, feat_exclude: list[str]) -> list[str]:
+    """Add the encoded forms of each excluded column to the exclusion list.
+
+    The exclusion list is written in terms of the source attributes -- ``sex``,
+    ``age_group`` -- but preprocessing keeps a string column for fairness
+    grouping and adds a model-usable numeric encoding beside it (``sex_bin``,
+    ``sex_extended``, ``age_group_idx``). Only the string column matches the
+    list by name, so the numeric encoding of every sensitive attribute survived
+    the filter and was clustered on. That undercuts what the clusters are for:
+    subgroups that the declared sensitive attributes do not already describe.
+
+    The convention across preprocessing is ``<attr>_<encoding>``, so an exact
+    match or a match up to an underscore catches the encodings without catching
+    an unrelated column that merely starts with the same letters.
+    """
+    expanded = set(feat_exclude)
+    for col in df.columns:
+        for name in feat_exclude:
+            if col == name or col.startswith(f"{name}_"):
+                expanded.add(col)
+                break
+    return sorted(expanded)
+
+
+def _training_feature_space(
+    dataset: str, binning: str, df: pd.DataFrame, feat_exclude: list[str]
+) -> tuple[list[str], dict[str, Any]]:
+    """Columns to cluster on: the ones the models were actually trained on.
+
+    The grouping study reads the *unscaled* splits, because cluster profiles have
+    to be readable in clinical units. Those splits still carry the raw UCI
+    missingness that preprocessing resolved, and preprocessing resolved it two
+    ways: it dropped the columns that were missing too often to keep, and imputed
+    what remained. Clustering a feature space the models never saw is wrong on its
+    own terms -- the clusters are meant to explain model behaviour -- and on
+    four_site_uci it was also fatal, because ``ca`` (609/918 missing), ``thal``,
+    ``slope`` and ``chol`` survive only in the unscaled file and every sklearn
+    method rejects NaN. That dataset produced no clusters at all until this.
+
+    The scaled split is the record of what training kept, so it is the reference
+    here rather than a hard-coded list: the set is per dataset (cleveland_uci
+    keeps ``ca``/``thal``/``slope``, four_site_uci does not) and it moves whenever
+    preprocessing changes.
+    """
+    scaled_dir = resolve_dataset_dir(_PROCESSED_DIR, dataset, binning)
+    scaled_path = scaled_dir / f"{dataset}_train_scaled.csv"
+    if not scaled_path.exists():
+        logger.warning(
+            "  No scaled split at %s; clustering on every numeric column instead.",
+            scaled_path,
+        )
+        return [], {"aligned": False}
+
+    trained_cols = set(pd.read_csv(scaled_path, nrows=0).columns)
+    candidates = ClusteringEngine(feature_exclude=feat_exclude)._resolve_feature_cols(df, None)
+    aligned = [c for c in candidates if c in trained_cols]
+    dropped = [c for c in candidates if c not in trained_cols]
+    if not aligned:
+        logger.warning(
+            "  No clustering feature survived alignment to %s; falling back.", scaled_path.name
+        )
+        return [], {"aligned": False}
+    if dropped:
+        logger.info("  Dropped %d column(s) absent from training: %s", len(dropped), dropped)
+    return aligned, {"aligned": True, "dropped": dropped, "features": aligned}
+
+
+def _impute_like_training(df: pd.DataFrame, feature_cols: list[str]) -> tuple[pd.DataFrame, int]:
+    """Return a copy with median-filled NaN in the clustering features.
+
+    Preprocessing imputed these same columns before training -- the scaled split
+    has no missing values -- so leaving them NaN here would cluster a different
+    row set than the baseline predictions this study pairs clusters against.
+    Dropping the rows instead would break that row-for-row correspondence, which
+    is the whole reason the splits are preferred over the flat processed file.
+
+    The fill goes on a copy and never on the caller's frame. This study writes
+    its ``group_cluster`` labels back into the processed file and the source
+    splits, so imputing in place silently replaced observed missingness in the
+    inputs with fitted values -- a study recording its own preprocessing into the
+    data every other stage reads. The cluster profiles are also built from the
+    caller's frame, and they should describe what was measured.
+    """
+    resid = df[feature_cols].isna()
+    n_rows = int(resid.any(axis=1).sum())
+    if not n_rows:
+        return df, 0
+    filled = df.copy()
+    for col in feature_cols:
+        if resid[col].any():
+            filled[col] = filled[col].fillna(filled[col].median())
+    logger.info("  Median-imputed residual NaN in %d row(s) before clustering.", n_rows)
+    return filled, n_rows
+
+
 def run_dataset(
     dataset: str,
     run_root: Path,
@@ -266,6 +362,9 @@ def run_dataset(
         .get("feature_selection", {})
         .get("exclude", ["heart_disease", "age_group", "sex", "ethnicity", "group_cluster"])
     )
+    # Both phases below are meant to work on the non-sensitive feature space, so
+    # the encoded forms of the excluded attributes have to go too.
+    feat_exclude = _expand_exclusions(df, feat_exclude)
 
     # Build method config - restrict to requested methods
     method_cfg = {
@@ -285,8 +384,17 @@ def run_dataset(
     else:
         logger.info("[PHASE] clustering")
         try:
+            feature_cols, align_meta = _training_feature_space(dataset, binning, df, feat_exclude)
+            cluster_input = df
+            if feature_cols:
+                cluster_input, imputed_rows = _impute_like_training(df, feature_cols)
+                align_meta["imputed_rows"] = imputed_rows
+            # The feature space is a result, not an implementation detail: cluster
+            # profiles are only interpretable against the columns they were built
+            # from, and which columns survived alignment differs per dataset.
+            (ds_out / "clustering_features.json").write_text(json.dumps(align_meta, indent=2))
             engine = ClusteringEngine(config=method_cfg, feature_exclude=feat_exclude)
-            cluster_result = engine.fit(df)
+            cluster_result = engine.fit(cluster_input, feature_cols=feature_cols or None)
             engine.save_diagnostics(cluster_result, ds_out)
 
             # Write cluster_assignments.csv
