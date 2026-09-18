@@ -752,10 +752,33 @@ def _generate_model_stability_plots(
 _GROUPING_STUDIES_BASE = _ROOT / "output" / "cardiac" / "studies" / "grouping"
 
 
-def _resolve_latest_grouping_dir() -> Path | None:
-    """Return the most recent grouping study directory, or None if absent."""
+def _resolve_latest_grouping_dir(run_id: str | None = None) -> Path | None:
+    """Return this run's grouping study directory, else the most recent one.
+
+    ``run_id`` is tried first because the grouping studies of different runs all
+    live side by side under one base directory, while ``latest.txt`` names only
+    the study that ran last. With more than one cohort in flight (cardiac and
+    cardio70k here) the newest study belongs to whichever run finished last, so
+    plotting purely by recency silently attributes one run's clusters to
+    another. Falling back to ``latest.txt`` keeps single-run behaviour intact.
+    """
     if not _GROUPING_STUDIES_BASE.exists():
         return None
+    if run_id:
+        by_run = _GROUPING_STUDIES_BASE / run_id
+        if by_run.is_dir():
+            return by_run
+        matches = sorted(
+            (
+                p
+                for p in _GROUPING_STUDIES_BASE.iterdir()
+                if p.is_dir() and p.name.startswith(run_id)
+            ),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if matches:
+            return matches[0]
     latest_txt = _GROUPING_STUDIES_BASE / "latest.txt"
     if latest_txt.exists():
         study_id = latest_txt.read_text().strip()
@@ -770,11 +793,11 @@ def _resolve_latest_grouping_dir() -> Path | None:
     return candidates[0] if candidates else None
 
 
-def _generate_cluster_evidence_plots(out_dir: Path) -> None:
+def _generate_cluster_evidence_plots(out_dir: Path, run_id: str | None = None) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     _phase("cluster evidence plots")
 
-    grouping_dir = _resolve_latest_grouping_dir()
+    grouping_dir = _resolve_latest_grouping_dir(run_id)
     if grouping_dir is None:
         logger.warning(
             "[WARNING] cluster_evidence: no grouping study found under %s — "
@@ -895,7 +918,7 @@ def main() -> None:
         out_base / "model_stability",
         comparison_config,
     )
-    _generate_cluster_evidence_plots(out_base / "cluster_evidence")
+    _generate_cluster_evidence_plots(out_base / "cluster_evidence", run_dir.name)
 
     logger.info("[SUCCESS] Dissertation figures generated: output_dir=%s", out_base)
 
