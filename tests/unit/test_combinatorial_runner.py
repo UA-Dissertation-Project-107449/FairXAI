@@ -184,6 +184,45 @@ def test_combo_experiments_are_planned_per_supported_family():
     assert families == ["logistic_regression"]
 
 
+def test_combo_model_types_honour_the_selected_families():
+    """A family excluded from the run must not reappear through the combo arm.
+
+    The single-technique arm already filters on the run's selected families, so a
+    combo list that ignored the selection would run the most expensive arm for a
+    family the invocation was told to skip.
+    """
+    module = _load_runner_module()
+
+    config = {
+        "mitigation_combo_model_types": [
+            "logistic_regression",
+            "random_forest",
+            "svm",
+            "xgboost",
+        ]
+    }
+
+    families = module._resolve_combo_model_types(
+        config, ["logistic_regression", "random_forest", "xgboost"]
+    )
+    assert families == ["logistic_regression", "random_forest", "xgboost"]
+
+    # No selection given (config-only invocation) leaves the config list intact.
+    assert module._resolve_combo_model_types(config, None) == [
+        "logistic_regression",
+        "random_forest",
+        "svm",
+        "xgboost",
+    ]
+
+    # A selection sharing no family with the combo list plans no combos at all,
+    # which is the honest outcome: nothing is both selected and combo-capable.
+    assert (
+        module._resolve_combo_model_types({"mitigation_combo_model_types": ["svm"]}, ["xgboost"])
+        == []
+    )
+
+
 def test_combo_model_types_fall_back_to_logistic_regression():
     """An empty config must not silently plan zero combo experiments."""
     module = _load_runner_module()
