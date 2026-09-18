@@ -37,6 +37,7 @@ from fairxai.cli.runner_utils import (
     resolve_run_id,
     update_latest_pointer,
 )
+from fairxai.data.schemas import get_age_unit
 from fairxai.experiments.attribute_binning import (
     analyze_strategy_comprehensive,
     compare_strategies,
@@ -73,6 +74,19 @@ def load_dataset_for_binning(
     missing = [col for col in REQUIRED_COLUMNS if col not in df.columns]
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
+
+    # Normalize age from days to years for datasets that declare age_unit: days.
+    # Every fixed-boundary strategy in the catalogue (clinical, clinical_adaptive,
+    # fixed_2/3, fixed_5yr, fixed_10yr) has edges in years, so on a days-valued
+    # column all of them collapse into one bin holding the whole cohort. That is
+    # what happened to cardio70k, whose raw age_raw runs 10798-23713 days: six of
+    # the 26 strategies reported n_groups=1 and a demographic parity ratio of 1.0
+    # by construction. preprocess_data.py already does this before binning the
+    # canonical splits; this study reads the standardized raw file instead and so
+    # has to do it too.
+    if get_age_unit(dataset_name) == "days":
+        df["age_raw"] = (df["age_raw"] / 365.25).round(2)
+        logging.info(f"  age_raw normalized: days to years for {dataset_name}")
 
     logging.info(f"  Loaded: {len(df)} samples")
     logging.info(f"  Age range: [{df['age_raw'].min()}, {df['age_raw'].max()}]")
