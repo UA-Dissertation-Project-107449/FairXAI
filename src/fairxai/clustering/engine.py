@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 from sklearn.cluster import DBSCAN, AgglomerativeClustering, KMeans
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import pairwise_distances, silhouette_score
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
 
@@ -21,6 +21,38 @@ logger = logging.getLogger(__name__)
 _DEFAULT_EXCLUDE = ["heart_disease", "age_group", "sex", "ethnicity", "group_cluster"]
 _DEFAULT_MIN_SILHOUETTE = 0.05
 _DEFAULT_MAX_DBSCAN_NOISE_FRACTION = 0.30
+
+# Row ceiling for agglomerative clustering. Ward linkage without a connectivity
+# graph goes through scipy's hierarchy.ward, which materialises the full
+# condensed distance matrix: n(n-1)/2 float64 entries, rebuilt once per k in the
+# grid. That is 0.37 GiB at 10k rows but 17.6 GiB at 68.7k, which is what killed
+# the cardio70k grouping study (OOM at 28.1 GiB anon-rss on a 30 GB machine).
+# Every other method here is memory-bounded, so the ceiling drops hierarchical
+# alone rather than the whole study. 10_000 is set so the cardio70k 10k
+# subsample still clusters hierarchically and the full 70k run does not.
+_DEFAULT_MAX_HIERARCHICAL_SAMPLES = 10_000
+
+# Memory budget for a single DBSCAN candidate's neighbour lists. DBSCAN holds,
+# for every row, the indices of every row within ``eps``; that is n * k * 8 bytes
+# with k the average neighbourhood size, so cost is driven by ``eps`` and density,
+# not by rows alone. The shipped grid reaches eps=5.0, and in 13-D standardised
+# space the expected pairwise distance is only ~5.1, so at that eps roughly half
+# the dataset is a neighbour of every row: ~31 GiB at 68.7k rows, a second OOM in
+# the same study that the hierarchical ceiling above does not cover. A row ceiling
+# would be the wrong instrument here because eps=0.5 stays cheap at any n, so the
+# budget is checked per eps from a measured density estimate instead.
+_DEFAULT_MAX_DBSCAN_NEIGHBOR_GIB = 4.0
+
+# The estimate below counts neighbour indices only. Measured peak RSS ran
+# 1.66-1.74x that across n=5k/10k/20k at eps=5.0 (tree structures, the boolean
+# core-sample mask and temporary copies), so the estimate is scaled by 2.0 to
+# stay conservative at the top of that range.
+_DBSCAN_NEIGHBOR_SAFETY_FACTOR = 2.0
+
+# Rows sampled to estimate neighbourhood density. The estimate needs the fraction
+# of pairs within eps, which a uniform subsample gives to well within the accuracy
+# a power-of-two budget check needs; 2000 rows is one 4M-entry distance matrix.
+_DBSCAN_DENSITY_SAMPLE_ROWS = 2000
 
 
 class ClusteringError(ValueError):
@@ -263,9 +295,33 @@ class ClusteringEngine:
         params = cfg.get("parameters", {})
         k_grid = params.get("n_clusters", [3, 4, 5, 6])
         linkage = params.get("linkage", "ward")
+        max_samples = int(params.get("max_samples", _DEFAULT_MAX_HIERARCHICAL_SAMPLES))
 
         diagnostics = []
         best: Optional[tuple] = None
+
+        if max_samples > 0 and n_samples > max_samples:
+            # Recorded rather than silently dropped: the diagnostics CSV is the
+            # audit trail for which candidates a run actually considered, so a
+            # skipped method has to be visible there.
+            logger.warning(
+                "hierarchical SKIPPED: %d rows exceeds max_samples=%d. Ward linkage "
+                "needs an n(n-1)/2 distance matrix (%.1f GiB here), which does not fit. "
+                "Raise clustering_methods.hierarchical.parameters.max_samples to force it.",
+                n_samples,
+                max_samples,
+                n_samples * (n_samples - 1) / 2 * 8 / 2**30,
+            )
+            diagnostics.append(
+                ClusterDiagnostics(
+                    method="hierarchical",
+                    params={"linkage": linkage, "max_samples": max_samples},
+                    n_clusters=0,
+                    silhouette=None,
+                    note=f"skipped: n_samples={n_samples} exceeds max_samples={max_samples}",
+                )
+            )
+            return {"diagnostics": diagnostics, "best": best}
 
         for k in k_grid:
             if k >= n_samples:
@@ -290,6 +346,35 @@ class ClusteringEngine:
 
     # -- DBSCAN ------------------------------------------------------------
 
+    @staticmethod
+    def _estimate_dbscan_neighbor_gib(X: np.ndarray, eps: float, n_samples: int) -> Optional[float]:
+        """Estimated peak GiB of DBSCAN's neighbour lists for one ``eps``.
+
+        Takes a uniform subsample, measures the fraction of pairs within ``eps``
+        (the diagonal counts: a point is its own neighbour in the radius query),
+        and scales that density up to the full row count. Returns the index bytes
+        times :data:`_DBSCAN_NEIGHBOR_SAFETY_FACTOR`.
+
+        Non-finite rows are dropped before measuring, because ``pairwise_distances``
+        rejects NaN outright. Returns ``None`` when no estimate is possible, which
+        the caller reads as "unknown, do not block": a budget check that cannot run
+        must never be what stops a dataset being clustered.
+        """
+        if n_samples <= 0:
+            return 0.0
+        finite = X[np.isfinite(X).all(axis=1)]
+        if len(finite) < 2:
+            return None
+        m = min(_DBSCAN_DENSITY_SAMPLE_ROWS, len(finite))
+        rng = np.random.default_rng(0)  # fixed: the budget check must be reproducible
+        sample = (
+            finite[rng.choice(len(finite), size=m, replace=False)] if len(finite) > m else finite
+        )
+        within = pairwise_distances(sample, sample) <= eps
+        fraction = float(within.mean())
+        index_bytes = n_samples * fraction * n_samples * 8
+        return index_bytes / 2**30 * _DBSCAN_NEIGHBOR_SAFETY_FACTOR
+
     def _fit_dbscan(self, X: np.ndarray, cfg: Dict, n_samples: int) -> Dict:
         params = cfg.get("parameters", {})
         eps_grid = params.get("eps", [0.3, 0.5, 0.7, 1.0])
@@ -297,11 +382,52 @@ class ClusteringEngine:
         max_noise_fraction = float(
             params.get("max_noise_fraction", _DEFAULT_MAX_DBSCAN_NOISE_FRACTION)
         )
+        max_neighbor_gib = float(params.get("max_neighbor_gib", _DEFAULT_MAX_DBSCAN_NEIGHBOR_GIB))
 
         diagnostics = []
         best: Optional[tuple] = None
 
         for eps in eps_grid:
+            if max_neighbor_gib > 0:
+                try:
+                    projected = self._estimate_dbscan_neighbor_gib(X, eps, n_samples)
+                except Exception as exc:
+                    # The estimate is an optimisation, not a correctness check, and
+                    # it runs outside the per-candidate try below. Letting it raise
+                    # would abort the whole dataset over a guard that is only meant
+                    # to skip one candidate, so an unusable estimate falls through
+                    # to the fit and whatever that does.
+                    logger.debug("dbscan eps=%.2f budget estimate failed: %s", eps, exc)
+                    projected = None
+                if projected is not None and projected > max_neighbor_gib:
+                    # Recorded per eps rather than dropped silently: the
+                    # diagnostics CSV is the audit trail for which candidates a
+                    # run actually considered.
+                    logger.warning(
+                        "dbscan eps=%.2f SKIPPED at %d rows: neighbour lists need "
+                        "~%.1f GiB, over max_neighbor_gib=%.1f. Raise "
+                        "clustering_methods.dbscan.parameters.max_neighbor_gib to "
+                        "force it.",
+                        eps,
+                        n_samples,
+                        projected,
+                        max_neighbor_gib,
+                    )
+                    for min_s in min_samples_grid:
+                        diagnostics.append(
+                            ClusterDiagnostics(
+                                method="dbscan",
+                                params={"eps": eps, "min_samples": min_s},
+                                n_clusters=0,
+                                silhouette=None,
+                                note=(
+                                    f"skipped: estimated {projected:.1f} GiB of "
+                                    f"neighbours at n_samples={n_samples} exceeds "
+                                    f"max_neighbor_gib={max_neighbor_gib}"
+                                ),
+                            )
+                        )
+                    continue
             for min_s in min_samples_grid:
                 try:
                     db = DBSCAN(eps=eps, min_samples=min_s, metric="euclidean")
