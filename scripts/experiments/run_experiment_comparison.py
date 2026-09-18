@@ -856,6 +856,7 @@ def run_comparison_analysis(
     output_root: str = None,
     save_top_n: int = 10,
     config_path: str | None = None,
+    exclude_model_types: list[str] | None = None,
 ):
     """Main comparison script."""
     project_root = get_project_root(Path(__file__))
@@ -940,6 +941,34 @@ def run_comparison_analysis(
         f"successful={(df['status'] == 'success').sum()} "
         f"failed={(df['status'] == 'failed').sum()}"
     )
+
+    # Drop whole model families from the comparison.
+    #
+    # This exists for a specific failure shape: a family whose cost scales badly
+    # enough with dataset size that only its cheapest cells ever finish. On
+    # cardio70k, svm_rbf is O(n^2) in rows inside a Fairlearn reduction and did
+    # not complete at 48k train rows, so 54 of its 704 cells landed -- and they
+    # are not a random 54. Every one comes from a cheap corner of the grid
+    # (reweighting and threshold_optimizer, none from the baseline arm), so
+    # ranking them against families that completed every cell compares svm's
+    # easiest configurations with everyone else's hardest. Dropping the family
+    # is the honest reading; keeping it as a cost-biased subsample is not.
+    if exclude_model_types:
+        excluded = set(exclude_model_types)
+        present = sorted(excluded & set(df["model_type"].unique()))
+        dropped = df["model_type"].isin(excluded)
+        if dropped.any():
+            logging.warning(
+                "Excluding model families from the comparison: %s (%d of %d experiments). "
+                "Report these separately rather than ranked against complete families.",
+                ", ".join(present),
+                int(dropped.sum()),
+                len(df),
+            )
+        df = df[~dropped].copy()
+        if df.empty:
+            logging.error("No experiments left after excluding %s", ", ".join(sorted(excluded)))
+            return
 
     # Filter successful experiments
     df_success = df[df["status"] == "success"].copy()
@@ -1276,6 +1305,16 @@ def main():
         help="Number of top-ranked experiment models to promote from _temp/ (0 = skip)",
     )
     parser.add_argument(
+        "--exclude-model-types",
+        nargs="+",
+        default=None,
+        help=(
+            "Model families to drop before ranking (e.g. svm). Use when a family's "
+            "grid is only partly complete, so its finished cells are a cost-biased "
+            "subsample rather than a comparable arm."
+        ),
+    )
+    parser.add_argument(
         "-v", "--verbose", action="count", default=0, help="Verbosity: -v=info, -vv=debug"
     )
 
@@ -1292,6 +1331,7 @@ def main():
         output_root=args.output_root,
         save_top_n=args.save_top_n,
         config_path=args.config,
+        exclude_model_types=args.exclude_model_types,
     )
 
 

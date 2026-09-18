@@ -327,6 +327,17 @@ if (( ${#MODEL_TYPES[@]} > 0 )); then
     MODEL_TYPE_ARGS=(--model-types "${MODEL_TYPES[@]}")
 fi
 
+# Model families to drop from the stage-12 comparison only. Space-separated, e.g.
+# COMPARE_EXCLUDE_MODEL_TYPES="svm". This is not the same as MODEL_TYPES: those
+# families still ran, and their results stay on disk. Use it when a family's grid
+# is only partly complete, so its finished cells are a cost-biased subsample that
+# cannot be ranked against families that completed every cell.
+COMPARE_EXCLUDE_ARGS=()
+if [[ -n "${COMPARE_EXCLUDE_MODEL_TYPES:-}" ]]; then
+    read -r -a _cmp_excl <<< "$COMPARE_EXCLUDE_MODEL_TYPES"
+    COMPARE_EXCLUDE_ARGS=(--exclude-model-types "${_cmp_excl[@]}")
+fi
+
 # ======================================================================
 # Resolve stage range
 # ======================================================================
@@ -890,7 +901,7 @@ fi
 if should_run 12; then
     if [[ "$RUN_COMPARISON" == "true" ]]; then
         echo "[PHASE 12/12] Experiment comparison and dissertation plots"
-        python3 "$ROOT_DIR/scripts/cardiac/compare.py" --run-id "$RUN_ID" --config "$COMPARISON_CONFIG" $VERBOSE_FLAG
+        python3 "$ROOT_DIR/scripts/cardiac/compare.py" --run-id "$RUN_ID" --config "$COMPARISON_CONFIG" "${COMPARE_EXCLUDE_ARGS[@]}" $VERBOSE_FLAG
         python3 "$ROOT_DIR/scripts/studies/run_grouping_analysis.py" --run-id "$RUN_ID" "${DATASET_ARGS[@]}"
         python3 "$ROOT_DIR/scripts/studies/generate_dissertation_plots.py" --run-id "$RUN_ID" --config "$COMPARISON_CONFIG"
         mark_done 12
