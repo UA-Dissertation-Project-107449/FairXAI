@@ -1,5 +1,7 @@
 """Unit tests for ClusteringEngine."""
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -195,3 +197,218 @@ class TestClusteringEngineDiagnostics:
         assert "method" in saved.columns
         assert "silhouette" in saved.columns
         assert len(saved) >= 2  # one row per k
+
+
+class TestClusteringEngineHierarchicalRowCeiling:
+    """Ward linkage is O(n^2) in memory, so it is capped by row count.
+
+    Every other method in the engine is memory-bounded, so exceeding the ceiling
+    must drop hierarchical alone and leave the rest of the study intact.
+    """
+
+    def test_hierarchical_runs_below_the_ceiling(self):
+        df = _make_df(n=60)
+        cfg = {"hierarchical": {"parameters": {"n_clusters": [3], "max_samples": 100}}}
+        engine = ClusteringEngine(config=cfg)
+        result = engine.fit(df, feature_cols=["feat_a", "feat_b"])
+
+        assert result.method == "hierarchical"
+        assert len(result.group_cluster) == len(df)
+
+    def test_hierarchical_is_skipped_above_the_ceiling(self):
+        df = _make_df(n=60)
+        cfg = {
+            "hierarchical": {"parameters": {"n_clusters": [3], "max_samples": 10}},
+            "kmeans": {"parameters": {"n_clusters": [3], "n_init": 5, "random_state": 42}},
+        }
+        engine = ClusteringEngine(config=cfg)
+        result = engine.fit(df, feature_cols=["feat_a", "feat_b"])
+
+        # KMeans still produces a solution; hierarchical contributed no candidate.
+        assert result.method == "kmeans"
+        notes = [d.note for d in result.diagnostics if d.method == "hierarchical"]
+        assert notes and "skipped" in notes[0]
+        assert "max_samples=10" in notes[0]
+
+    def test_skipped_hierarchical_is_visible_in_diagnostics_csv(self, tmp_path):
+        df = _make_df(n=60)
+        cfg = {
+            "hierarchical": {"parameters": {"n_clusters": [3], "max_samples": 10}},
+            "kmeans": {"parameters": {"n_clusters": [3], "n_init": 5, "random_state": 42}},
+        }
+        engine = ClusteringEngine(config=cfg)
+        result = engine.fit(df, feature_cols=["feat_a", "feat_b"])
+        saved = pd.read_csv(engine.save_diagnostics(result, tmp_path))
+
+        skipped = saved[saved["method"] == "hierarchical"]
+        assert len(skipped) == 1
+        assert "skipped" in str(skipped.iloc[0]["note"])
+
+    def test_ceiling_can_be_disabled(self):
+        df = _make_df(n=60)
+        cfg = {"hierarchical": {"parameters": {"n_clusters": [3], "max_samples": 0}}}
+        engine = ClusteringEngine(config=cfg)
+        result = engine.fit(df, feature_cols=["feat_a", "feat_b"])
+
+        assert result.method == "hierarchical"
+
+    def test_shipped_config_ceiling_splits_the_cardio70k_variants(self):
+        """10k subsample must cluster hierarchically; the full 70k run must not."""
+        import yaml
+
+        root = Path(__file__).resolve().parents[2]
+        cfg = yaml.safe_load(open(root / "configs" / "experiments" / "clustering.yaml"))
+        ceiling = cfg["clustering_methods"]["hierarchical"]["parameters"]["max_samples"]
+
+        assert 9822 <= ceiling, "the cardio70k 10k subsample must stay under the ceiling"
+        assert ceiling < 68749, "the full cardio70k train+test row set must exceed it"
+
+
+class TestClusteringEngineDbscanMemoryBudget:
+    """DBSCAN's neighbour lists are O(n^2) when eps is large relative to density.
+
+    The cost depends on eps, not on row count alone, so the guard is per eps: a
+    cheap eps must still run at full row count while an expensive one is dropped.
+    """
+
+    @staticmethod
+    def _dbscan_config(max_neighbor_gib, eps_grid):
+        return {
+            "dbscan": {
+                "parameters": {
+                    "eps": eps_grid,
+                    "min_samples": [5],
+                    "max_neighbor_gib": max_neighbor_gib,
+                }
+            }
+        }
+
+    def test_estimate_grows_quadratically_in_rows(self):
+        """The estimate is what the budget is checked against, so it must scale."""
+        rng = np.random.default_rng(0)
+        X = rng.normal(size=(500, 13))
+
+        small = ClusteringEngine._estimate_dbscan_neighbor_gib(X, 5.0, 10_000)
+        large = ClusteringEngine._estimate_dbscan_neighbor_gib(X, 5.0, 20_000)
+
+        assert large == pytest.approx(small * 4, rel=0.01)
+
+    def test_estimate_grows_with_eps(self):
+        rng = np.random.default_rng(0)
+        X = rng.normal(size=(500, 13))
+
+        tight = ClusteringEngine._estimate_dbscan_neighbor_gib(X, 0.5, 68_749)
+        wide = ClusteringEngine._estimate_dbscan_neighbor_gib(X, 5.0, 68_749)
+
+        assert wide > tight * 100
+
+    def test_expensive_eps_is_skipped_and_recorded(self):
+        rng = np.random.default_rng(0)
+        df = pd.DataFrame(rng.normal(size=(300, 2)), columns=["feat_a", "feat_b"])
+        engine = ClusteringEngine(config=self._dbscan_config(1e-9, [5.0]))
+
+        with pytest.raises(ClusteringError) as excinfo:
+            engine.fit(df, feature_cols=["feat_a", "feat_b"])
+
+        notes = [d.note or "" for d in excinfo.value.diagnostics if d.method == "dbscan"]
+        assert notes, "the skipped candidate must still appear in diagnostics"
+        assert all("max_neighbor_gib" in n for n in notes)
+
+    def test_cheap_eps_still_runs_under_the_same_budget(self):
+        """A budget that rejects a wide eps must not reject a tight one."""
+        rng = np.random.default_rng(0)
+        blobs = np.vstack(
+            [rng.normal(loc, 0.15, size=(100, 2)) for loc in ([0, 0], [6, 6], [0, 6])]
+        )
+        df = pd.DataFrame(blobs, columns=["feat_a", "feat_b"])
+        engine = ClusteringEngine(config=self._dbscan_config(0.001, [0.5, 5.0]))
+
+        result = engine.fit(df, feature_cols=["feat_a", "feat_b"])
+
+        by_eps = {
+            d.params["eps"]: (d.note or "") for d in result.diagnostics if d.method == "dbscan"
+        }
+        assert "max_neighbor_gib" in by_eps[5.0], "wide eps must exceed this budget"
+        assert "max_neighbor_gib" not in by_eps[0.5], "tight eps must stay affordable"
+        assert result.method == "dbscan"
+
+    def test_budget_can_be_disabled(self):
+        rng = np.random.default_rng(0)
+        blobs = np.vstack(
+            [rng.normal(loc, 0.15, size=(100, 2)) for loc in ([0, 0], [6, 6], [0, 6])]
+        )
+        df = pd.DataFrame(blobs, columns=["feat_a", "feat_b"])
+        engine = ClusteringEngine(config=self._dbscan_config(0, [0.5]))
+
+        result = engine.fit(df, feature_cols=["feat_a", "feat_b"])
+
+        notes = [d.note or "" for d in result.diagnostics if d.method == "dbscan"]
+        assert all("max_neighbor_gib" not in n for n in notes)
+
+    def test_shipped_config_budget_splits_a_13d_eps_grid(self):
+        """The shipped budget must keep the cheap end of the eps grid and drop the wide end.
+
+        The fixture is synthetic 13-D gaussian noise, which is *sparser* than the
+        real cardio70k feature space: on the real data the study skipped eps=3.0
+        (10.2 GiB) and eps=5.0 (42.3 GiB), where this fixture only skips 5.0. So
+        this test pins the mechanism and the budget's order of magnitude, not the
+        exact cut point for any one dataset -- the guard measures density at run
+        time precisely because that cut point is dataset-dependent.
+        """
+        import yaml
+
+        root = Path(__file__).resolve().parents[2]
+        cfg = yaml.safe_load(open(root / "configs" / "experiments" / "clustering.yaml"))
+        params = cfg["clustering_methods"]["dbscan"]["parameters"]
+        budget = params["max_neighbor_gib"]
+
+        rng = np.random.default_rng(0)
+        X = rng.normal(size=(2000, 13))  # 13-D standardised, as the study clusters
+        over = {
+            eps: ClusteringEngine._estimate_dbscan_neighbor_gib(X, eps, 68_749) > budget
+            for eps in params["eps"]
+        }
+
+        assert over[5.0], "the widest eps must be skipped even on sparse data"
+        assert not any(
+            over[e] for e in params["eps"] if e <= 2.0
+        ), "the cheap end of the grid must survive the budget at the full row count"
+
+    def test_estimate_ignores_non_finite_rows(self):
+        """pairwise_distances rejects NaN, so the estimate must exclude those rows."""
+        rng = np.random.default_rng(0)
+        clean = rng.normal(size=(500, 13))
+        dirty = np.vstack([clean, np.full((10, 13), np.nan)])
+
+        assert ClusteringEngine._estimate_dbscan_neighbor_gib(dirty, 5.0, 68_749) == pytest.approx(
+            ClusteringEngine._estimate_dbscan_neighbor_gib(clean, 5.0, 68_749), rel=0.15
+        )
+
+    def test_estimate_returns_none_when_nothing_is_finite(self):
+        allnan = np.full((50, 13), np.nan)
+
+        assert ClusteringEngine._estimate_dbscan_neighbor_gib(allnan, 5.0, 68_749) is None
+
+    def test_nan_data_fails_as_a_contained_clustering_error(self):
+        """NaN must surface as the engine's own error, not the budget check's.
+
+        Every sklearn method here rejects NaN, so NaN data legitimately produces
+        no solution -- that is pre-existing behaviour and four_site_uci has always
+        ended this way. What matters is *which* error escapes. The budget check
+        runs outside the per-candidate try, so before this was contained it raised
+        ValueError("Input contains NaN") straight out of pairwise_distances,
+        replacing the engine's own ClusteringError and reporting a memory guard as
+        the cause of a data-quality failure.
+        """
+        rng = np.random.default_rng(0)
+        blobs = np.vstack(
+            [rng.normal(loc, 0.15, size=(100, 2)) for loc in ([0, 0], [6, 6], [0, 6])]
+        )
+        df = pd.DataFrame(blobs, columns=["feat_a", "feat_b"])
+        df.loc[0, "feat_a"] = np.nan
+        engine = ClusteringEngine(config=self._dbscan_config(4.0, [0.5]))
+
+        with pytest.raises(ClusteringError) as excinfo:
+            engine.fit(df, feature_cols=["feat_a", "feat_b"])
+
+        assert "No clustering method produced a valid solution" in str(excinfo.value)

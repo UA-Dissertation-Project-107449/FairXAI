@@ -178,6 +178,77 @@ def _annotate_gate_fields(result: Dict[str, Any], thresholds: Dict[str, float]) 
     result["fairness_gap"] = fairness_gap
 
 
+# Fairlearn reductions refit a weighted model many times per fold, so a combo
+# containing one costs orders of magnitude more than the pre-processing and
+# post-processing techniques. On a 48k-row dataset a single reductions combo can
+# run for hours while a threshold-optimizer combo finishes in minutes.
+REDUCTION_TECHNIQUES = frozenset({"exponentiated_gradient", "grid_search"})
+
+# Fields that together identify one cell of the grid. Experiment IDs are random
+# UUIDs regenerated on every invocation, so they cannot be used to recognise
+# work that a previous run already completed.
+_SIGNATURE_FIELDS = (
+    "dataset",
+    "binning_strategy",
+    "mitigation_technique",
+    "training_method",
+    "model_type",
+    "model_variant",
+)
+
+
+def _experiment_signature(exp_config: Dict[str, Any]) -> tuple:
+    """Return the grid coordinates of an experiment configuration."""
+    return tuple(exp_config.get(field) for field in _SIGNATURE_FIELDS)
+
+
+def _load_completed_signatures(results_root: Path, logger) -> set:
+    """
+    Collect grid coordinates of experiments already saved under results_root.
+
+    Results are written incrementally, one JSON per experiment, so a run that was
+    interrupted leaves a usable record of everything it finished. Matching on the
+    configuration rather than the experiment ID is what makes that record
+    reusable across invocations.
+    """
+    completed = set()
+    if not results_root.exists():
+        return completed
+
+    unreadable = 0
+    for path in results_root.rglob("*.json"):
+        try:
+            with open(path) as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            # A result being written when we scan is the expected case here;
+            # treating it as missing only means it gets recomputed.
+            unreadable += 1
+            continue
+        configuration = payload.get("configuration")
+        if isinstance(configuration, dict):
+            completed.add(_experiment_signature(configuration))
+
+    if unreadable:
+        logger.warning(f"[RESUME] Skipped {unreadable} unreadable result file(s) while scanning")
+    return completed
+
+
+def _combo_cost_rank(exp_config: Dict[str, Any]) -> tuple:
+    """
+    Sort key placing cheap experiments ahead of expensive ones.
+
+    joblib dispatches in the order it is given, so an expensive class queued
+    first delays every cheap class behind it — cheap combos that would take
+    hours in total can end up waiting days. Ranking by reduction count first
+    means a partial run yields complete cheap cells instead of a fraction of an
+    expensive one.
+    """
+    combo = exp_config.get("mitigation_combo") or []
+    reductions = sum(1 for technique in combo if technique in REDUCTION_TECHNIQUES)
+    return (reductions, len(combo))
+
+
 def _resolve_xgb_device(config: Dict[str, Any]) -> str:
     """Resolve XGBoost compute device from config accelerator setting.
 
@@ -387,16 +458,30 @@ def _build_postprocessing_base_model(model_type, model_params=None):
     return model_class(**(model_params or {}))
 
 
-def _resolve_combo_model_types(config: Dict[str, Any]) -> List[str]:
+def _resolve_combo_model_types(
+    config: Dict[str, Any], selected_model_types: Optional[List[str]] = None
+) -> List[str]:
     """Families that run the sequential mitigation combos.
 
     Combos are the most expensive arm — up to three fits chained per row — so
     they get their own key: mitigation coverage can widen without every added
     family also paying for combos. Defaults to the mitigation families.
+
+    ``selected_model_types`` is the run's effective family list (``--model-types``
+    or the selector contract). The combo list is intersected with it, because a
+    family excluded from the run must not reappear through the combo arm: the
+    single-technique arm already honours the selection, so without this the same
+    invocation would silently run combos for a family it was told to skip. On
+    cardio70k that meant SVM combos — and ``svm_rbf`` is O(n²) in rows inside a
+    Fairlearn reduction, which does not finish at 48k rows.
     """
     explicit = config.get("mitigation_combo_model_types")
     source = explicit if explicit else config.get("mitigation_supported_model_types", [])
-    return [str(m).strip().lower() for m in source if str(m).strip()] or ["logistic_regression"]
+    resolved = [str(m).strip().lower() for m in source if str(m).strip()] or ["logistic_regression"]
+    if selected_model_types:
+        allowed = {str(m).strip().lower() for m in selected_model_types}
+        resolved = [m for m in resolved if m in allowed]
+    return resolved
 
 
 def _build_mitigation_engine(config: Dict[str, Any]) -> MitigationEngine:
@@ -1688,7 +1773,7 @@ def run_combinatorial_analysis(
                             experiments.append((exp_id, exp_config))
 
     # Combo experiments: pre to in to post chains, per configured family.
-    combo_model_types = _resolve_combo_model_types(config)
+    combo_model_types = _resolve_combo_model_types(config, selected_model_types)
     logger.info(f"Mitigation combo model types: {combo_model_types}")
     for combo in config.get("mitigation_combos", []):
         for dataset in selected_datasets:
@@ -1728,8 +1813,32 @@ def run_combinatorial_analysis(
                             }
                             experiments.append((exp_id, exp_config))
 
+    planned_experiments = len(experiments)
+
+    # Resume: drop grid cells a previous invocation already saved results for.
+    skipped_completed = 0
+    if config.get("skip_completed", True):
+        completed_signatures = _load_completed_signatures(versioning.latest_dir / "results", logger)
+        if completed_signatures:
+            remaining = [
+                (exp_id, exp_config)
+                for exp_id, exp_config in experiments
+                if _experiment_signature(exp_config) not in completed_signatures
+            ]
+            skipped_completed = len(experiments) - len(remaining)
+            experiments = remaining
+
+    # Cheap-first: run combos without Fairlearn reductions before the ones with.
+    if config.get("order_cheap_first", True):
+        experiments.sort(key=lambda item: _combo_cost_rank(item[1]))
+
     total_experiments = len(experiments)
     logger.info(f"[PLAN] Total experiments: {total_experiments}")
+    if skipped_completed:
+        logger.info(
+            f"  Resumed: {skipped_completed}/{planned_experiments} already complete, "
+            f"{total_experiments} to run"
+        )
     logger.info(f"  Datasets ({len(selected_datasets)}): {selected_datasets}")
     logger.info(f"  Binning strategies: {len(config['binning_strategies'])}")
     logger.info(f"  Mitigation techniques: {len(config['mitigation_techniques'])}")
@@ -1767,7 +1876,15 @@ def run_combinatorial_analysis(
         # Parallel execution
         logger.info(f"Running experiments in parallel with {n_jobs} jobs...")
         parallel_verbose = int(config.get("parallel_verbose", 0))
-        results = Parallel(n_jobs=n_jobs, verbose=parallel_verbose)(
+        # Each result is saved as its worker returns rather than after the whole
+        # grid finishes. Collecting the full list first makes a long run
+        # all-or-nothing at the results layer: an interrupt or an out-of-memory
+        # kill part-way through leaves no results JSONs at all, and the
+        # comparison stage reads exactly those. It tolerates a partial grid,
+        # so partial credit is worth having.
+        completed = Parallel(
+            n_jobs=n_jobs, verbose=parallel_verbose, return_as="generator_unordered"
+        )(
             delayed(run_single_experiment)(
                 exp_id, exp_config, versioning, processed_dir, schema_cfg, logger, target_col
             )
@@ -1775,10 +1892,13 @@ def run_combinatorial_analysis(
         )
 
         # Annotate gate fields and save results
-        for result in results:
+        results = []
+        for finished, result in enumerate(completed, 1):
             _annotate_gate_fields(result, gate_thresholds)
             _sm = "holdout" if result.get("training_method") == "single_split" else "cv"
             versioning.save_results(result["experiment_id"], result, split_method=_sm)
+            results.append(result)
+            logger.info(f"[SAVED] {finished}/{total_experiments} exp_id={result['experiment_id']}")
 
     # Deferred XAI pass: run only for top-ranked configurations.
     if xai_cfg_global.get("enabled", True) and xai_mode == "top_configs":

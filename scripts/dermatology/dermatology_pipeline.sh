@@ -18,6 +18,7 @@ EPOCHS=""
 BATCH_SIZE=""
 PRETRAINED_ARGS=()
 AUGMENTATION_ARGS=()
+FEATURE_CACHE_ARGS=()
 FIGURE_ARGS=()
 GROUP_VIEW_ARGS=()
 
@@ -76,6 +77,12 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-augmentation)
             AUGMENTATION_ARGS=(--no-augmentation)
+            ;;
+        --cache-frozen-features)
+            FEATURE_CACHE_ARGS=(--cache-frozen-features)
+            ;;
+        --no-cache-frozen-features)
+            FEATURE_CACHE_ARGS=(--no-cache-frozen-features)
             ;;
         --figures)
             FIGURE_ARGS=(--figures)
@@ -141,6 +148,10 @@ ts = datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]
 print(f"run_{ts}_{os.getpid()}_{uuid.uuid4().hex[:6]}")
 PY
 )}
+export RUN_ID
+
+# Ensure bare run IDs use the same `run_`-prefixed directory as all pipeline stages.
+[[ "$RUN_ID" == run_* ]] || RUN_ID="run_$RUN_ID"
 export RUN_ID
 
 RUN_ROOT="$BASE_RESULTS/runs/$RUN_ID"
@@ -256,7 +267,7 @@ fi
 
 if should_run 7; then
     echo "[PHASE 7] Training image baseline"
-    "$PYTHON" "$ROOT_DIR/scripts/dermatology/train_baseline.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" "${DEVICE_ARGS[@]}" "${EPOCH_ARGS[@]}" "${BATCH_ARGS[@]}" "${PRETRAINED_ARGS[@]}" "${AUGMENTATION_ARGS[@]}" $VERBOSE_FLAG
+    "$PYTHON" "$ROOT_DIR/scripts/dermatology/train_baseline.py" "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" "${DEVICE_ARGS[@]}" "${EPOCH_ARGS[@]}" "${BATCH_ARGS[@]}" "${PRETRAINED_ARGS[@]}" "${AUGMENTATION_ARGS[@]}" "${FEATURE_CACHE_ARGS[@]}" $VERBOSE_FLAG
     mark_done 7
 else
     echo "[7] train - SKIPPED"

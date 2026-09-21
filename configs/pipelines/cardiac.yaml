@@ -28,7 +28,11 @@ training:
   # Override with --feature-selection-mode CLI flag for ablation studies.
   feature_selection_mode: exclude_sensitive
   rfe_top_k: 10
-  use_hpo: false
+  # Cardiac only. Stage 5 tunes each family before training, so the reported
+  # models are the tuned ones and the results are not a statement about
+  # library defaults. Dermatology keeps use_hpo: false -- image training is
+  # epoch-bound and a search over it is not affordable.
+  use_hpo: true
   cv_n_jobs: 1
 
 fairness:
@@ -100,8 +104,38 @@ similarity:
 # Off by default → enable via this flag or env RUN_AGE_BINNING=1. Output under
 # <run>/baseline/age_binning_sensitivity/<dataset>/{<model>,before_after/<model>/<regime>}/.
 age_binning_sensitivity:
-  enabled: false
-  strategies: [quantile_3, fixed_5yr, fixed_10yr, equal_width_4]
+  enabled: true
+  # The full catalogue declared in configs/experiments/age_binning.yaml, so the
+  # sweep answers "is this gap a bucketing artifact?" against every scheme the
+  # study describes rather than a four-scheme sample of it. Every name below
+  # resolves in BUILTIN_STRATEGIES; a name that does not aborts the sweep.
+  strategies:
+    - fixed_2
+    - fixed_3
+    - fixed_5yr
+    - fixed_10yr
+    - clinical
+    - clinical_adaptive
+    - quantile_3
+    - quantile_4
+    - quantile_5
+    - quantile_6
+    - quantile_7
+    - quantile_8
+    - quantile_9
+    - quantile_10
+    - equal_width_3
+    - equal_width_4
+    - equal_width_5
+    - equal_width_6
+    - equal_width_8
+    - equal_width_10
+    - jenks_3
+    - jenks_4
+    - jenks_5
+    - adaptive_quantile_5
+    - adaptive_quantile_8
+    - adaptive_quantile_10
   k: 5
   min_bin_size: 20
 

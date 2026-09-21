@@ -186,6 +186,44 @@ def test_validate_and_repair_merges_small_bins():
     assert len(repaired_bins) - 1 == 2
 
 
+def test_clinical_adaptive_merges_where_clinical_does_not():
+    """The adaptive twin repairs a starved clinical band; the plain one does not."""
+    rng = np.random.default_rng(0)
+    ages = np.concatenate(
+        [
+            rng.integers(30, 44, 4),  # below min_group_size
+            rng.integers(46, 54, 60),
+            rng.integers(56, 64, 60),
+            rng.integers(66, 80, 60),
+        ]
+    )
+    df = pd.DataFrame({"age_raw": ages})
+
+    fixed_bins, fixed_labels = create_binning_strategy(df, "clinical", min_group_size=20)
+    adaptive_bins, adaptive_labels = create_binning_strategy(
+        df, "clinical_adaptive", min_group_size=20
+    )
+
+    assert fixed_bins == [0, 45, 55, 65, 100]
+    assert fixed_labels == ["<45", "45-54", "55-64", "65+"]
+    assert adaptive_bins == [0, 55, 65, 100]
+    # The merged bin now reaches down to zero, so its label must say so.
+    assert adaptive_labels == ["<55", "55-64", "65+"]
+
+
+def test_merged_bin_label_describes_the_merged_range():
+    """A survivor label is rebuilt from the edges, not inherited from one side."""
+    values = np.concatenate([np.full(60, 40.0), np.full(5, 50.0), np.full(60, 60.0)])
+    series = pd.Series(values)
+    bins = [0.0, 45.0, 55.0, 100.0]
+    labels = ["<45", "45-54", "55+"]
+
+    repaired_bins, repaired_labels = validate_and_repair(series, bins, labels, min_group_size=20)
+
+    assert len(repaired_labels) == len(repaired_bins) - 1
+    assert "45-54" not in repaired_labels
+
+
 def test_validate_and_repair_clips_leading_edge():
     """Edges that fall below the data minimum are clipped."""
     series = pd.Series([10.0, 20.0, 30.0])

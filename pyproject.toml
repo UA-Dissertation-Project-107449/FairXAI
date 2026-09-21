@@ -16,7 +16,12 @@ requires-python = ">=3.11"
 # CORE: Minimum viable install — all that the HPC batch jobs need
 dependencies = [
     "numpy>=2.0.0",        # (reqs: 2.3.5)  array ops used everywhere
-    "pandas>=2.0.0",       # (reqs: 2.3.3)  tabular data throughout pipeline
+    # Upper bound <3: pandas 3.0 makes copy-on-write unconditional and changes
+    # groupby defaults. Every archived run and every number already quoted in the
+    # dissertation was produced under 2.x, so an unpinned install silently makes
+    # new results incomparable with them. Bumping past 3.0 is a deliberate
+    # migration that has to be revalidated against the archived runs.
+    "pandas>=2.0.0,<3",    # (reqs: 2.3.3)  tabular data throughout pipeline
     # Upper bound <1.8: 1.8 deprecates LogisticRegression(penalty=...) and 1.9
     # deprecates SVC(probability=True); their replacement APIs are 1.8-only and
     # change model behavior. Pin keeps CI reproducible (tested 1.7.2) and
@@ -30,7 +35,7 @@ dependencies = [
 # EXPERIMENT: ML training, fairness metrics, and imbalance handling
 # Install: pip install -e ".[experiment]"
 experiment = [
-    "joblib>=1.3.0",            # (reqs: 1.5.2)  model serialisation / persistence
+    "joblib>=1.4.0",            # (reqs: 1.5.2)  model serialisation / persistence; 1.4 adds return_as="generator_unordered"
     "scipy>=1.10.0",            # (reqs: 1.15.3) distance metrics, statistical functions
     "imbalanced-learn>=0.12.0", # (reqs: 0.14.0) SMOTE, oversampling, undersampling
     "fairlearn>=0.10.0,<0.14",  # (reqs: 0.13.0) fairness metrics and mitigation algorithms
@@ -38,6 +43,7 @@ experiment = [
     "interpret>=0.6.0",         # (reqs: 0.6.10) InterpretML — loads the EBM difficulty model
     "psutil>=5.9.0",            # (reqs: 7.0.0)  memory-aware worker budgeting in studies
     "jenkspy>=0.3.0",           # (reqs: 0.3.3)  Jenks natural breaks for attribute binning
+    "tabulate>=0.9.0",          # (reqs: 0.9.0)  pandas to_markdown() backend
 ]
 
 # DEV: Local notebooks, visualisation, and explainability analysis

@@ -327,6 +327,17 @@ if (( ${#MODEL_TYPES[@]} > 0 )); then
     MODEL_TYPE_ARGS=(--model-types "${MODEL_TYPES[@]}")
 fi
 
+# Model families to drop from the stage-12 comparison only. Space-separated, e.g.
+# COMPARE_EXCLUDE_MODEL_TYPES="svm". This is not the same as MODEL_TYPES: those
+# families still ran, and their results stay on disk. Use it when a family's grid
+# is only partly complete, so its finished cells are a cost-biased subsample that
+# cannot be ranked against families that completed every cell.
+COMPARE_EXCLUDE_ARGS=()
+if [[ -n "${COMPARE_EXCLUDE_MODEL_TYPES:-}" ]]; then
+    read -r -a _cmp_excl <<< "$COMPARE_EXCLUDE_MODEL_TYPES"
+    COMPARE_EXCLUDE_ARGS=(--exclude-model-types "${_cmp_excl[@]}")
+fi
+
 # ======================================================================
 # Resolve stage range
 # ======================================================================
@@ -379,6 +390,10 @@ suffix = uuid.uuid4().hex[:6]
 print(f"run_{ts}_{pid}_{suffix}")
 PY
 )}
+export RUN_ID
+
+# Ensure bare run IDs use the same `run_`-prefixed directory as all pipeline stages.
+[[ "$RUN_ID" == run_* ]] || RUN_ID="run_$RUN_ID"
 export RUN_ID
 
 RUN_ROOT="$BASE_RESULTS/runs/$RUN_ID"
@@ -797,6 +812,39 @@ else
     echo "[10/12] mitigate — SKIPPED (outside active range)"
 fi
 
+# ---- Post-mitigation fairness intervals --------------------------------------
+# Puts every mitigation arm, the unmitigated baseline included, through the same
+# bootstrap the baseline assessment uses, so a technique that moves a parity gap
+# carries an interval and a multiplicity-adjusted difference rather than a bare
+# point estimate. Analysis-only: it scores the predictions stage 10 wrote and
+# retrains nothing. Follows fairness.uncertainty.enabled; override with
+# RUN_MITIGATION_INTERVALS=0/1. Output under
+# <run>/experiments/mitigation/prediction_fairness/.
+MITIGATION_INTERVALS_ENABLED=$(python3 - "$ROOT_DIR" <<'MITIGATION_INTERVALS_PY'
+import sys
+import yaml
+from pathlib import Path
+
+cfg = yaml.safe_load((Path(sys.argv[1]) / "configs/pipelines/cardiac.yaml").read_text()) or {}
+uncertainty = (cfg.get("fairness", {}) or {}).get("uncertainty", {}) or {}
+print("true" if uncertainty.get("enabled", False) else "false")
+MITIGATION_INTERVALS_PY
+)
+RUN_MITIGATION_INTERVALS=${RUN_MITIGATION_INTERVALS:-$MITIGATION_INTERVALS_ENABLED}
+shopt -s nocasematch
+[[ "$RUN_MITIGATION_INTERVALS" =~ ^(1|true|yes|on)$ ]] && RUN_MITIGATION_INTERVALS=true || RUN_MITIGATION_INTERVALS=false
+shopt -u nocasematch
+
+if should_run 10 && [[ "$RUN_MITIGATION" == "true" ]] && [[ "$RUN_MITIGATION_INTERVALS" == "true" ]]; then
+    echo "[MITIGATION-INTERVALS] Bootstrap fairness intervals per mitigation arm"
+    python3 "$ROOT_DIR/scripts/common/assess_mitigated_predictions.py" \
+        --pipeline cardiac --run-id "$RUN_ID" \
+        "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $VERBOSE_FLAG
+    echo ""
+elif should_run 10 && [[ "$RUN_MITIGATION" == "true" ]]; then
+    echo "[MITIGATION-INTERVALS] fairness intervals — SKIPPED (set RUN_MITIGATION_INTERVALS=1 or fairness.uncertainty.enabled=true)"
+fi
+
 # ---- Optional post-mitigation age-binning fairness sensitivity sweep ---------
 # Off by default. Enable via env RUN_AGE_BINNING=1 or age_binning_sensitivity.enabled
 # in the pipeline config. Analysis-only: predictions are independent of the age
@@ -853,7 +901,7 @@ fi
 if should_run 12; then
     if [[ "$RUN_COMPARISON" == "true" ]]; then
         echo "[PHASE 12/12] Experiment comparison and dissertation plots"
-        python3 "$ROOT_DIR/scripts/cardiac/compare.py" --run-id "$RUN_ID" --config "$COMPARISON_CONFIG" $VERBOSE_FLAG
+        python3 "$ROOT_DIR/scripts/cardiac/compare.py" --run-id "$RUN_ID" --config "$COMPARISON_CONFIG" "${COMPARE_EXCLUDE_ARGS[@]}" $VERBOSE_FLAG
         python3 "$ROOT_DIR/scripts/studies/run_grouping_analysis.py" --run-id "$RUN_ID" "${DATASET_ARGS[@]}"
         python3 "$ROOT_DIR/scripts/studies/generate_dissertation_plots.py" --run-id "$RUN_ID" --config "$COMPARISON_CONFIG"
         mark_done 12
@@ -901,6 +949,7 @@ should_run 3 && [[ "$RUN_RECOMMENDATIONS" == "true" ]] && echo "  - Recommendati
 should_run 7 && echo "  - Baseline:           $RUN_ROOT/baseline"
 should_run 9 && [[ "$RUN_ATTRIBUTE_BINNING" == "true" ]] && echo "  - Attr binning:       $RUN_ROOT/experiments/attribute_binning"
 should_run 10 && [[ "$RUN_MITIGATION" == "true" ]] && echo "  - Mitigation:         $RUN_ROOT/experiments/mitigation"
+should_run 10 && [[ "$RUN_MITIGATION" == "true" ]] && [[ "$RUN_MITIGATION_INTERVALS" == "true" ]] && echo "  - Mitigation CIs:     $RUN_ROOT/experiments/mitigation/prediction_fairness"
 should_run 11 && [[ "$RUN_COMBINATORIAL" == "true" ]] && echo "  - Combinatorial:      $RUN_ROOT/experiments"
 should_run 12 && [[ "$RUN_COMPARISON" == "true" ]] && echo "  - Comparison:         $RUN_ROOT/experiments/comparisons"
 echo ""

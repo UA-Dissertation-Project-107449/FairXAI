@@ -16,15 +16,23 @@ difference table does not inherit the problem.
 It also compares the three resampling schemes, so the default is a measured
 choice rather than an assumed one.
 
+Two tables come out of it. The summary carries one row per resampling scheme
+and replicate count, pooled over metrics, and is what Section 5.5.6 quotes. The
+per-metric table splits the same counters by metric, because a false-finding
+rate pooled across metrics hides which metric produced the findings.
+
 Usage:
     python3 scripts/studies/run_bootstrap_calibration.py
     python3 scripts/studies/run_bootstrap_calibration.py --seeds 50 --n-boot 2000
+    python3 scripts/studies/run_bootstrap_calibration.py --n-boot 1000 2000 4000
 """
 
 import argparse
 import logging
 import sys
+from collections import Counter, defaultdict
 from pathlib import Path
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -62,11 +70,19 @@ def null_cohort(n: int, seed: int) -> pd.DataFrame:
     return df
 
 
-def evaluate_scheme(scheme: str, seeds: int, n_rows: int, n_boot: int, alpha: float) -> dict:
-    """Run the null cohort through one resampling scheme and count false findings."""
+def evaluate_scheme(
+    scheme: str, seeds: int, n_rows: int, n_boot: int, alpha: float
+) -> Tuple[dict, List[dict]]:
+    """Run the null cohort through one resampling scheme and count false findings.
+
+    Returns the pooled summary row and one row per metric. Both carry the same
+    counters; the per-metric rows exist because pooling hides which metric a
+    false finding came from, and Appendix C reports that breakdown.
+    """
     unadjusted = adjusted = comparisons = untested = 0
     runs_with_a_finding = 0
     gap_excluding_zero = gap_total = 0
+    per_metric: Dict[str, Counter] = defaultdict(Counter)
 
     for seed in range(seeds):
         result = bootstrap_fairness_metrics(
@@ -92,7 +108,21 @@ def evaluate_scheme(scheme: str, seeds: int, n_rows: int, n_boot: int, alpha: fl
         gap_excluding_zero += int((~gaps["includes_zero"]).sum())
         gap_total += len(gaps)
 
-    return {
+        # Same counters, split by metric. The denominators differ per metric
+        # because not every metric yields a testable comparison on every draw.
+        for metric, block in tested.groupby("metric", sort=False):
+            counts = per_metric[str(metric)]
+            counts["unadjusted"] += int((block["p_value"] < alpha).sum())
+            counts["adjusted"] += int(block["significant"].sum())
+            counts["comparisons"] += len(block)
+        for metric, block in pairwise[~pairwise["tested"]].groupby("metric", sort=False):
+            per_metric[str(metric)]["untested"] += len(block)
+        for metric, block in gaps.groupby("metric", sort=False):
+            counts = per_metric[str(metric)]
+            counts["gap_excluding_zero"] += int((~block["includes_zero"]).sum())
+            counts["gap_total"] += len(block)
+
+    summary = {
         "stratify": scheme,
         "seeds": seeds,
         "n_rows": n_rows,
@@ -106,6 +136,34 @@ def evaluate_scheme(scheme: str, seeds: int, n_rows: int, n_boot: int, alpha: fl
         "max_gap_ci_excludes_zero": gap_excluding_zero / gap_total if gap_total else np.nan,
     }
 
+    metric_rows = []
+    for metric in sorted(per_metric):
+        counts = per_metric[metric]
+        n_comparisons = counts["comparisons"]
+        n_gaps = counts["gap_total"]
+        metric_rows.append(
+            {
+                "stratify": scheme,
+                "metric": metric,
+                "seeds": seeds,
+                "n_rows": n_rows,
+                "n_boot": n_boot,
+                "alpha": alpha,
+                "comparisons": n_comparisons,
+                "untested": counts["untested"],
+                "false_rate_unadjusted": (
+                    counts["unadjusted"] / n_comparisons if n_comparisons else np.nan
+                ),
+                "false_rate_adjusted": (
+                    counts["adjusted"] / n_comparisons if n_comparisons else np.nan
+                ),
+                "max_gap_ci_excludes_zero": (
+                    counts["gap_excluding_zero"] / n_gaps if n_gaps else np.nan
+                ),
+            }
+        )
+    return summary, metric_rows
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -113,13 +171,22 @@ def main() -> None:
     )
     parser.add_argument("--seeds", type=int, default=20, help="Independent null cohorts to draw")
     parser.add_argument("--n-rows", type=int, default=400, help="Rows per cohort")
-    parser.add_argument("--n-boot", type=int, default=1200, help="Bootstrap replicates per cohort")
+    parser.add_argument(
+        "--n-boot",
+        type=int,
+        nargs="+",
+        default=[4000],
+        help=(
+            "Bootstrap replicates per cohort. Accepts several values to sweep the "
+            "replicate count; the default matches the count the cardiac results run at."
+        ),
+    )
     parser.add_argument("--alpha", type=float, default=0.05, help="Two-sided level")
     parser.add_argument(
         "--output",
         type=str,
         default=None,
-        help="Optional CSV path for the results table",
+        help="Optional CSV path for the summary table; the per-metric table lands beside it",
     )
     args = parser.parse_args()
 
@@ -127,32 +194,40 @@ def main() -> None:
     # sweep those are expected and would drown the results.
     logging.disable(logging.WARNING)
 
-    rows = [
-        evaluate_scheme(scheme, args.seeds, args.n_rows, args.n_boot, args.alpha)
-        for scheme in SCHEMES
-    ]
-    table = pd.DataFrame(rows)
+    summary_rows = []
+    metric_rows = []
+    for n_boot in args.n_boot:
+        for scheme in SCHEMES:
+            summary, per_metric = evaluate_scheme(
+                scheme, args.seeds, args.n_rows, n_boot, args.alpha
+            )
+            summary_rows.append(summary)
+            metric_rows.extend(per_metric)
 
-    print(
-        table.to_string(
-            index=False,
-            formatters={
-                "false_rate_unadjusted": "{:.2%}".format,
-                "false_rate_adjusted": "{:.2%}".format,
-                "max_gap_ci_excludes_zero": "{:.1%}".format,
-            },
-        )
-    )
+    table = pd.DataFrame(summary_rows)
+    by_metric = pd.DataFrame(metric_rows)
+
+    rate_formatters = {
+        "false_rate_unadjusted": "{:.2%}".format,
+        "false_rate_adjusted": "{:.2%}".format,
+        "max_gap_ci_excludes_zero": "{:.1%}".format,
+    }
+    print(table.to_string(index=False, formatters=rate_formatters))
     print(
         f"\nNominal per-comparison rate is {args.alpha:.0%}. A max-gap interval near 100% is the "
         "expected failure this study documents: that statistic cannot be read as a test."
     )
 
+    print("\nPer-metric detail:")
+    print(by_metric.to_string(index=False, formatters=rate_formatters))
+
     if args.output:
         out = Path(args.output)
         out.parent.mkdir(parents=True, exist_ok=True)
         table.to_csv(out, index=False)
-        print(f"\nSaved to {out}")
+        metric_out = out.with_name(f"{out.stem}_by_metric{out.suffix}")
+        by_metric.to_csv(metric_out, index=False)
+        print(f"\nSaved to {out} and {metric_out}")
 
 
 if __name__ == "__main__":

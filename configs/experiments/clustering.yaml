@@ -43,6 +43,15 @@ clustering_methods:
       n_clusters: [3, 4, 5, 6]
       linkage: "ward"
       affinity: "euclidean"
+      # Row ceiling. Ward without a connectivity graph builds the full condensed
+      # distance matrix, n(n-1)/2 float64 entries, once per k above: 0.37 GiB at
+      # 10k rows, 17.6 GiB at 68.7k. The cardio70k grouping study OOMed on the
+      # full 70k split (28.1 GiB anon-rss, 30 GB machine, swap 0). Above this
+      # ceiling hierarchical is skipped and recorded in cluster_diagnostics.csv;
+      # kmeans, dbscan and gaussian_mixture are memory-bounded and still run.
+      # 10000 keeps the cardio70k 10k subsample on the hierarchical path while
+      # excluding the full 70k one. Set to 0 to disable the ceiling.
+      max_samples: 10000
     selection_method: "dendrogram"
   
   dbscan:
@@ -53,6 +62,15 @@ clustering_methods:
       eps: [0.5, 1.0, 1.5, 2.0, 3.0, 5.0]  # Extended: 13D StandardScaler space has expected L2 ~5.1, original [0.3-1.0] found 0 clusters
       min_samples: [5, 10, 15]
       max_noise_fraction: 0.30  # Reject high-silhouette DBSCAN runs that explain mostly noise
+      # Memory budget per eps for DBSCAN's neighbour lists (n * neighbours * 8 B).
+      # Cost is driven by eps and density, not rows alone: eps 0.5-2.0 stays under
+      # 0.1 GiB at 68.7k rows, but eps 5.0 is ~31 GiB there, because the expected
+      # pairwise distance in this 13-D standardised space is only ~5.1 so half the
+      # dataset falls inside that radius. That was a second OOM waiting in the
+      # cardio70k grouping study alongside the hierarchical one. Candidates over
+      # the budget are skipped per eps and recorded in cluster_diagnostics.csv;
+      # cheaper eps values still run at full row count. Set to 0 to disable.
+      max_neighbor_gib: 4.0
       metric: "euclidean"
     selection_method: "silhouette"
   

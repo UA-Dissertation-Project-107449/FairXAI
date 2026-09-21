@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
-from scipy.spatial.distance import pdist, squareform
+from sklearn.neighbors import NearestNeighbors
 
 
 class FairnessMetrics:
@@ -321,15 +321,29 @@ class FairnessMetrics:
 
             X = StandardScaler().fit_transform(X)
         y_pred = df[pred_col].values
+        n = len(df)
 
-        distances = squareform(pdist(X, metric="euclidean"))
-        consistencies = np.empty(len(df), dtype=float)
-        for i in range(len(df)):
-            # k+1 nearest (includes self), then drop self.
-            nearest = np.argsort(distances[i])[: k + 1]
-            nearest = nearest[nearest != i][:k]
-            consistencies[i] = (y_pred[nearest] == y_pred[i]).sum() / k
-        return consistencies
+        # Only the k+1 nearest rows are ever read, so the neighbourhood is
+        # queried directly rather than materialising the full n x n distance
+        # matrix. That matrix is what put this out of reach on the larger
+        # cohorts: a 48k-row split needs 18.5 GB for the square form alone,
+        # before the per-row argsort over all n columns on top of it.
+        n_neighbors = min(k + 1, n)
+        finder = NearestNeighbors(n_neighbors=n_neighbors, metric="euclidean", n_jobs=-1)
+        _, neighbours = finder.fit(X).kneighbors(X)
+
+        # k+1 nearest (includes self), then drop self. A stable reorder moves
+        # the self column to the back without disturbing the distance order of
+        # the rest, which is what the old per-row boolean filter did.
+        keep = neighbours != np.arange(n)[:, None]
+        order = np.argsort(~keep, axis=1, kind="stable")
+        nearest = np.take_along_axis(neighbours, order, axis=1)[:, :k]
+        valid = np.take_along_axis(keep, order, axis=1)[:, :k]
+
+        # The denominator stays k even where fewer than k neighbours exist, so a
+        # sparse neighbourhood reads as low consistency rather than as a full one.
+        matches = (y_pred[nearest] == y_pred[:, None]) & valid
+        return matches.sum(axis=1) / k
 
     def individual_fairness_consistency(
         self,

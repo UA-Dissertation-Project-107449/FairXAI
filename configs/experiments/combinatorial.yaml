@@ -188,7 +188,21 @@ paths:
 
 # Parallel execution
 enable_parallelization: true
-n_jobs: 6  # 6 threads; i5-1135G7 has 8 logical cores, leave 2 for OS/other work
+n_jobs: 14  # 14 workers; the miniPC has 16 logical cores, leave 2 for OS/other work
+
+# Resume behaviour. Results are written one JSON per experiment as workers
+# return, so an interrupted run leaves a record of everything it finished.
+# skip_completed matches those records against the grid by configuration
+# (experiment IDs are random UUIDs, regenerated every invocation) and drops the
+# cells that are already done, making a restart resume rather than recompute.
+skip_completed: true
+
+# Dispatch order. joblib runs experiments in the order it receives them, so
+# combos containing a Fairlearn reduction (exponentiated_gradient, grid_search)
+# will otherwise delay every cheaper combo behind them — on cardio70k that was
+# the difference between finishing the cheap classes in hours and not reaching
+# them for days. Cheap-first means a partial run yields complete cells.
+order_cheap_first: true
 
 # Combination counting guide (formula-based so it stays correct after config edits)
 # Symbols:
