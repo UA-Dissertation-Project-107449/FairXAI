@@ -74,6 +74,8 @@ Both orchestrators support `--datasets`, `--model-types`, `--resume-from`,
 
 ## Pipeline Stages
 
+![Stage pipeline for both domains: a shared load/profile/recommend front end, the cardiac branch through tune and select_features to compare, and the dermatology branch that omits stages 5-6 and ends compare, explain, mitigate.](docs/diagrams/F1.drawio.png)
+
 | # | Stage | Purpose |
 |---|-------|---------|
 | 1 | `load` | Load and standardize raw cardiac datasets |
