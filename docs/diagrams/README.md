@@ -35,7 +35,7 @@ The DataLenzAI figures (A0 system context, W1–W4) live in that repo, at
 
 | ID | Last checked | Against | State |
 |----|--------------|---------|-------|
-| F1 | 2026-09-22 | `src/fairxai/pipeline/stages.py` | Current. Uses the canonical stage names rather than the pre-rename aliases. Re-exported on this date to match the DataLenzAI settings. |
+| F1 | 2026-09-22 | `src/fairxai/pipeline/stages.py` | Current. Uses the canonical stage names rather than the pre-rename aliases. Re-exported on this date; the band around the shared stages now reads "command-invocable from DataLenzAI", since those three are reachable through the CLI rather than run by the web platform itself. |
 
 ## Not drawn
 
