@@ -1,8 +1,9 @@
 # FairXAI
 
 FairXAI is the dissertation research repository for fairness-aware and
-explainable healthcare decision-support experiments. The current complete
-pipeline are cardiac and dermatology-focused, with a shared schema and modularized architecture to support future domains.
+explainable healthcare decision-support experiments. Two domains run end to
+end, cardiac and dermatology, over a shared schema and a modular architecture
+that further domains can reuse.
 
 ## What This Repo Does
 
@@ -116,14 +117,14 @@ resume. See [docs/architecture/pipeline-flow-control.md](docs/architecture/pipel
 
 ## Outputs
 
-| Artifact | Path |
-|----------|------|
-| Run root | `output/cardiac/runs/<run_id>/` |
-| Latest run pointer | `output/cardiac/latest_run` and `output/cardiac/latest_run.txt` |
-| Logs | `logs/cardiac/runs/<run_id>/` |
-| Processed splits | `data/processed/cardiac/<dataset>_<binning>/` |
-| Study outputs | `output/cardiac/studies/<study_type>/` |
-| Dissertation figures | `output/cardiac/studies/dissertation_figures/<run_id>/` |
+| Artifact | Cardiac | Dermatology |
+|----------|---------|-------------|
+| Run root | `output/cardiac/runs/<run_id>/` | `output/dermatology/runs/<run_id>/` |
+| Latest run pointer | `output/cardiac/latest_run` and `output/cardiac/latest_run.txt` | `output/dermatology/latest_run` and `output/dermatology/latest_run.txt` |
+| Logs | `logs/cardiac/runs/<run_id>/` | `logs/dermatology/runs/<run_id>/` |
+| Processed splits | `data/processed/cardiac/<dataset>_<binning>/` | `data/processed/dermatology/<dataset>/` |
+| Study outputs | `output/cardiac/studies/<study_type>/` | none; the studies are cardiac-only |
+| Dissertation figures | `output/cardiac/studies/dissertation_figures/<run_id>/` | none |
 
 ## Documentation Map
 
@@ -149,7 +150,9 @@ For all test commands and coverage notes, see [docs/guides/testing.md](docs/guid
 
 ## Current Limits
 
-- Cardiac is the active end-to-end pipeline. Dermatology is scaffolded only.
+- Both pipelines run end to end. Cardiac is the domain the dissertation's
+  quantitative claims rest on; dermatology is reported as a second domain
+  rather than an independent replication, because its evidence is thinner.
 - Counterfactual explanations are intentionally frozen behind `counterfactual_stub`.
 - Clustering and similarity evidence should be framed as exploratory subgroup diagnostics, not standalone proof of fairness.
 - GPU paths require a compatible CUDA/HPC environment.
