@@ -16,10 +16,12 @@ difference table does not inherit the problem.
 It also compares the three resampling schemes, so the default is a measured
 choice rather than an assumed one.
 
-Two tables come out of it. The summary carries one row per resampling scheme
+Three tables come out of it. The summary carries one row per resampling scheme
 and replicate count, pooled over metrics, and is what Section 5.5.6 quotes. The
 per-metric table splits the same counters by metric, because a false-finding
-rate pooled across metrics hides which metric produced the findings.
+rate pooled across metrics hides which metric produced the findings. The third
+runs the paired arm test on two exchangeable arms, which is the null for
+"this technique changed something".
 
 Usage:
     python3 scripts/studies/run_bootstrap_calibration.py
@@ -44,6 +46,7 @@ from fairxai.fairness.uncertainty import (  # noqa: E402
     STRATIFY_GROUP_OUTCOME,
     STRATIFY_NONE,
     bootstrap_fairness_metrics,
+    paired_arm_differences,
 )
 
 SCHEMES = (STRATIFY_GROUP_OUTCOME, STRATIFY_GROUP, STRATIFY_NONE)
@@ -165,6 +168,64 @@ def evaluate_scheme(
     return summary, metric_rows
 
 
+def exchangeable_arms(n: int, seed: int) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Two arms that predict the same rows equally well, and differ only by noise.
+
+    The paired test asks whether a technique changed anything. Here nothing was
+    changed: both arms score the same cohort with independent draws from one
+    process, so every paired difference has population value zero. This is the
+    scenario the max-gap interval cannot survive — a gap is biased upward under
+    resampling — and the one the paired difference should, because both arms
+    carry that bias and it cancels.
+    """
+    baseline = null_cohort(n, seed)
+    arm = baseline.copy()
+    rng = np.random.default_rng(seed + 10_000)
+    arm["y_proba"] = rng.random(n)
+    arm["y_pred"] = (arm["y_proba"] > 0.5).astype(int)
+    return baseline, arm
+
+
+def evaluate_paired(seeds: int, n_rows: int, n_boot: int, alpha: float) -> dict:
+    """Count false findings from the paired test on exchangeable arms."""
+    unadjusted = adjusted = quantities = 0
+    runs_with_a_finding = 0
+    gap_excluding_zero = gap_total = 0
+
+    for seed in range(seeds):
+        baseline, arm = exchangeable_arms(n_rows, seed)
+        table = paired_arm_differences(
+            baseline,
+            arm,
+            SENSITIVE,
+            n_boot=n_boot,
+            alpha=alpha,
+            random_state=seed,
+        ).table
+        tested = table[table["p_value"].notna() & ~table["degenerate"]]
+        unadjusted += int((tested["p_value"] < alpha).sum())
+        adjusted += int(tested["significant"].sum())
+        quantities += len(tested)
+        runs_with_a_finding += int(table["significant"].any())
+
+        gaps = tested[tested["quantity"].str.contains("difference")]
+        gap_excluding_zero += int(gaps["excludes_zero"].sum())
+        gap_total += len(gaps)
+
+    return {
+        "scenario": "paired_exchangeable_arms",
+        "seeds": seeds,
+        "n_rows": n_rows,
+        "n_boot": n_boot,
+        "alpha": alpha,
+        "quantities": quantities,
+        "false_rate_unadjusted": unadjusted / quantities if quantities else np.nan,
+        "false_rate_adjusted": adjusted / quantities if quantities else np.nan,
+        "runs_with_a_false_finding": runs_with_a_finding,
+        "gap_ci_excludes_zero": gap_excluding_zero / gap_total if gap_total else np.nan,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Null-calibration study for the fairness bootstrap"
@@ -182,6 +243,11 @@ def main() -> None:
         ),
     )
     parser.add_argument("--alpha", type=float, default=0.05, help="Two-sided level")
+    parser.add_argument(
+        "--skip-paired",
+        action="store_true",
+        help="Skip the paired scenario (exchangeable arms) and run the single-arm study only",
+    )
     parser.add_argument(
         "--output",
         type=str,
@@ -221,13 +287,40 @@ def main() -> None:
     print("\nPer-metric detail:")
     print(by_metric.to_string(index=False, formatters=rate_formatters))
 
+    paired = pd.DataFrame()
+    if not args.skip_paired:
+        paired = pd.DataFrame(
+            [evaluate_paired(args.seeds, args.n_rows, n_boot, args.alpha) for n_boot in args.n_boot]
+        )
+        print("\nPaired test on exchangeable arms:")
+        print(
+            paired.to_string(
+                index=False,
+                formatters={
+                    "false_rate_unadjusted": "{:.2%}".format,
+                    "false_rate_adjusted": "{:.2%}".format,
+                    "gap_ci_excludes_zero": "{:.1%}".format,
+                },
+            )
+        )
+        print(
+            "\nThe gap column is the point of this scenario: the same max-gap statistic whose "
+            "single-arm interval never contains zero is testable once it is differenced against "
+            "a paired baseline."
+        )
+
     if args.output:
         out = Path(args.output)
         out.parent.mkdir(parents=True, exist_ok=True)
         table.to_csv(out, index=False)
         metric_out = out.with_name(f"{out.stem}_by_metric{out.suffix}")
         by_metric.to_csv(metric_out, index=False)
-        print(f"\nSaved to {out} and {metric_out}")
+        saved = [out, metric_out]
+        if not paired.empty:
+            paired_out = out.with_name(f"{out.stem}_paired{out.suffix}")
+            paired.to_csv(paired_out, index=False)
+            saved.append(paired_out)
+        print("\nSaved to " + ", ".join(str(path) for path in saved))
 
 
 if __name__ == "__main__":

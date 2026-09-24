@@ -47,6 +47,10 @@ from fairxai.experiments.data_io import (
 )
 from fairxai.fairness.metrics import FairnessMetrics
 from fairxai.fairness.mitigation import MitigationEngine
+from fairxai.fairness.uncertainty import (
+    adaptive_bootstrap_replicates,
+    paired_arm_differences,
+)
 from fairxai.models import generate_predictions_with_metadata, get_model_class
 from fairxai.training.grid_search import hpo_params_dir, resolve_model_params
 from fairxai.utils.config import load_yaml_config
@@ -260,6 +264,87 @@ def _persist_arm_predictions(
                 "constraint_attr": sensitive_attr,
             }
         )
+
+
+def _write_paired_effects(
+    output_dir,
+    prediction_index,
+    sensitive_attrs,
+    settings,
+) -> None:
+    """Interval and p-value for what each arm changed against its own baseline.
+
+    Every arm predicts the same test rows as the baseline of its family, so the
+    two results are paired and the cohort noise they share cancels. Without this
+    the stage reports a before/after pair with no way to tell a real change from
+    a resampling wobble, which is the gap the mitigation chapter admits to.
+    """
+    if not settings.get("enabled", True) or not prediction_index:
+        return
+
+    predictions_dir = output_dir / "predictions"
+    baselines = {
+        (row["dataset"], row["model_type"]): row["file"]
+        for row in prediction_index
+        if row["technique"] == "baseline"
+    }
+
+    alpha = float(settings.get("alpha", 0.05))
+    n_jobs = int(settings.get("n_jobs", 1))
+    configured_boot = settings.get("n_boot")
+
+    frames = []
+    for row in prediction_index:
+        if row["technique"] == "baseline":
+            continue
+        baseline_file = baselines.get((row["dataset"], row["model_type"]))
+        if baseline_file is None:
+            logging.warning(
+                "No baseline arm for %s/%s; skipping its paired comparison",
+                row["dataset"],
+                row["model_type"],
+            )
+            continue
+
+        baseline_df = pd.read_csv(predictions_dir / baseline_file)
+        arm_df = pd.read_csv(predictions_dir / row["file"])
+        n_boot = int(configured_boot or adaptive_bootstrap_replicates(len(baseline_df)))
+        try:
+            result = paired_arm_differences(
+                baseline_df,
+                arm_df,
+                sensitive_attrs,
+                n_boot=n_boot,
+                alpha=alpha,
+                n_jobs=n_jobs,
+                baseline_label="baseline",
+                arm_label=row["technique"],
+            )
+        except ValueError as exc:
+            logging.warning("Paired comparison failed for %s: %s", row["file"], exc)
+            continue
+
+        if result.is_empty:
+            continue
+        table = result.table.copy()
+        table.insert(0, "dataset", row["dataset"])
+        table.insert(1, "model_type", row["model_type"])
+        table.insert(2, "technique", row["technique"])
+        table.insert(3, "constraint_attr", row["constraint_attr"])
+        frames.append(table)
+
+    if not frames:
+        return
+
+    effects = pd.concat(frames, ignore_index=True)
+    effects_path = output_dir / "paired_effects.csv"
+    effects.to_csv(effects_path, index=False)
+    logging.info(
+        "[SUCCESS] Saved paired arm effects: %s (%d rows, %d significant after BH)",
+        effects_path,
+        len(effects),
+        int(effects["significant"].sum()),
+    )
 
 
 def apply_mitigation_techniques(
@@ -897,6 +982,13 @@ def run_analysis(
         with open(index_path, "w") as f:
             json.dump(prediction_index, f, indent=2)
         logging.info("[SUCCESS] Saved predictions index: %s", index_path)
+
+        _write_paired_effects(
+            output_dir,
+            prediction_index,
+            sensitive_attrs,
+            experiment_cfg.get("paired_effects", {}),
+        )
 
     # Generate human-readable markdown report
     report_file = output_dir / "report.md"

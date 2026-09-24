@@ -219,6 +219,15 @@ evaluation:
     - recall_vs_equalized_odds
     - calibration_vs_demographic_parity
 
+# Paired bootstrap over the change each arm makes against its own baseline.
+# Both arms predict the same test rows, so one resample serves both and the
+# shared cohort noise cancels.
+paired_effects:
+  enabled: true
+  alpha: 0.05
+  n_boot: null      # null follows adaptive_bootstrap_replicates (1000 small, 200 large)
+  n_jobs: 4
+
 comparison:
   baseline_comparison: true
   cross_technique_ranking: true

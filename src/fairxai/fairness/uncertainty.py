@@ -54,6 +54,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
 from .metrics import FairnessMetrics
 
@@ -821,3 +822,300 @@ def bootstrap_fairness_metrics(
         pairwise=pairwise,
         metadata=metadata,
     )
+
+
+# --------------------------------------------------------------------------
+# Paired arm comparison
+# --------------------------------------------------------------------------
+# Every mitigation arm predicts the same test rows as its baseline, so the two
+# results are paired rather than independent. Resampling the row indices once
+# and applying the draw to both arms cancels the cohort noise they share, which
+# is what gives the *change* a technique makes an interval instead of the bare
+# before/after pair reported today. It also repairs the max-gap statistic: a gap
+# is biased upward under resampling, but both arms carry the same bias, so their
+# difference is centred at zero under exchangeable arms and can be tested.
+
+_PAIRED_COLUMNS = [
+    "scope",
+    "attribute",
+    "metric",
+    "group",
+    "quantity",
+    "baseline",
+    "arm",
+    "difference",
+    "ci_low",
+    "ci_high",
+    "se",
+    "bootstrap_mean",
+    "excludes_zero",
+    "p_value",
+    "p_value_bh",
+    "significant",
+    "degenerate",
+    "n_valid",
+    "n_comparisons",
+    "n_boot",
+    "alpha",
+    "method",
+    "stratify",
+    "n_rows",
+]
+
+# Performance scalars the paired table carries alongside the fairness ones. A
+# fairness gain is only a result next to what it cost, and the fairness
+# calculator reports no overall performance.
+PAIRED_PERFORMANCE_METRICS = ("f1", "accuracy", "precision", "recall")
+
+
+@dataclass
+class PairedEffectResult:
+    """The change one arm makes relative to its baseline, with intervals.
+
+    Attributes:
+        table: One row per (scope, attribute, metric, group, quantity), carrying
+            both arms' point estimates, their signed difference, a percentile
+            interval on that difference, and a Benjamini-Hochberg adjusted
+            p-value across every quantity in the comparison.
+        metadata: What ran — replicate count, stratification scheme after any
+            degradation, seed, and the arm labels.
+    """
+
+    table: pd.DataFrame
+    metadata: Dict = field(default_factory=dict)
+
+    @property
+    def is_empty(self) -> bool:
+        return self.table.empty
+
+    def significant_effects(self, adjusted: bool = True) -> pd.DataFrame:
+        """Quantities the arm moved by more than sampling noise."""
+        if self.table.empty:
+            return self.table
+        keep = (
+            self.table["significant"] if adjusted else self.table["p_value"] < self.table["alpha"]
+        )
+        return self.table[keep].reset_index(drop=True)
+
+
+def _performance_scalars(
+    frame: pd.DataFrame, true_col: str, pred_col: str
+) -> Dict[MetricKey, float]:
+    """Overall performance for one arm, keyed like a flattened fairness metric."""
+    scorers = {
+        "f1": f1_score,
+        "accuracy": accuracy_score,
+        "precision": precision_score,
+        "recall": recall_score,
+    }
+    y_true = frame[true_col]
+    y_pred = frame[pred_col]
+    out: Dict[MetricKey, float] = {}
+    for name in PAIRED_PERFORMANCE_METRICS:
+        scorer = scorers[name]
+        kwargs = {} if name == "accuracy" else {"zero_division": 0}
+        out[("performance", "", "overall", "", name)] = float(scorer(y_true, y_pred, **kwargs))
+    return out
+
+
+def _arm_scalars(
+    frame: pd.DataFrame,
+    calculator: FairnessMetrics,
+    true_col: str,
+    pred_col: str,
+) -> Dict[MetricKey, float]:
+    """Every scalar one arm contributes: fairness metrics plus performance."""
+    scalars = flatten_fairness_metrics(calculator.calculate_all_metrics(frame))
+    scalars.update(_performance_scalars(frame, true_col, pred_col))
+    return scalars
+
+
+def _draw_paired_replicate(
+    baseline: pd.DataFrame,
+    arm: pd.DataFrame,
+    blocks: Optional[List[np.ndarray]],
+    calculator: FairnessMetrics,
+    true_col: str,
+    pred_col: str,
+    seed: np.random.SeedSequence,
+) -> Tuple[Dict[MetricKey, float], Dict[MetricKey, float]]:
+    """Resample the row indices once and score both arms on the same draw."""
+    rng = np.random.default_rng(seed)
+    indices = _replicate_indices(len(baseline), blocks, rng)
+    return (
+        _arm_scalars(baseline.take(indices), calculator, true_col, pred_col),
+        _arm_scalars(arm.take(indices), calculator, true_col, pred_col),
+    )
+
+
+def paired_arm_differences(
+    baseline_df: pd.DataFrame,
+    arm_df: pd.DataFrame,
+    sensitive_attributes: Sequence[str],
+    n_boot: int = DEFAULT_N_BOOTSTRAP,
+    alpha: float = DEFAULT_ALPHA,
+    stratify: str = STRATIFY_GROUP_OUTCOME,
+    random_state: int = 42,
+    true_col: str = "y_true",
+    pred_col: str = "y_pred",
+    min_stratum: int = DEFAULT_MIN_STRATUM,
+    metrics_calculator: Optional[FairnessMetrics] = None,
+    n_jobs: int = DEFAULT_N_JOBS,
+    baseline_label: str = "baseline",
+    arm_label: str = "arm",
+) -> PairedEffectResult:
+    """Interval and p-value for the change an arm makes against its baseline.
+
+    Both frames must describe the *same* test rows in the same order — that is
+    what makes the comparison paired and lets one draw serve both arms. Only the
+    prediction columns are expected to differ.
+
+    Args:
+        baseline_df: Prediction frame for the unmitigated arm.
+        arm_df: Prediction frame for the mitigated arm, same rows and order.
+        sensitive_attributes: Columns to compute fairness across.
+        n_boot: Replicate count.
+        alpha: Two-sided level. 0.05 gives a 95% interval.
+        stratify: ``group_outcome`` (default), ``group``, or ``none``.
+        random_state: Seed, so a reported interval is reproducible.
+        true_col: Outcome column, shared by both arms.
+        pred_col: Predicted-label column used for the performance scalars.
+        min_stratum: Smallest stratum that may be resampled before degrading.
+        metrics_calculator: Optional pre-configured calculator.
+        n_jobs: Worker processes for the replicate loop; -1 uses every core.
+        baseline_label: Name recorded for the baseline arm.
+        arm_label: Name recorded for the mitigated arm.
+
+    Returns:
+        A :class:`PairedEffectResult`, empty when neither arm yields a scalar.
+
+    Raises:
+        ValueError: If the two frames are not the same rows, or ``n_boot`` /
+            ``alpha`` are out of range.
+    """
+    if n_boot < 2:
+        raise ValueError(f"n_boot must be at least 2, got {n_boot}")
+    if not 0.0 < alpha < 1.0:
+        raise ValueError(f"alpha must lie in (0, 1), got {alpha}")
+    if len(baseline_df) != len(arm_df):
+        raise ValueError(
+            "Paired comparison needs the same test rows in both arms, got "
+            f"{len(baseline_df)} baseline rows and {len(arm_df)} arm rows"
+        )
+
+    baseline = baseline_df.reset_index(drop=True)
+    arm = arm_df.reset_index(drop=True)
+    if not baseline[true_col].equals(arm[true_col]):
+        raise ValueError(
+            f"Paired comparison needs identical '{true_col}' in both arms; the frames "
+            "are not the same test rows in the same order"
+        )
+
+    usable = [c for c in sensitive_attributes if c in baseline.columns and c in arm.columns]
+    if not usable or baseline.empty:
+        logging.warning(
+            "Paired comparison skipped: no usable sensitive attribute in both arms "
+            "(requested=%s, rows=%d)",
+            list(sensitive_attributes),
+            len(baseline),
+        )
+        return PairedEffectResult(table=pd.DataFrame(columns=_PAIRED_COLUMNS), metadata={})
+
+    calculator = metrics_calculator or FairnessMetrics(sensitive_attributes=list(usable))
+    point_base = _arm_scalars(baseline, calculator, true_col, pred_col)
+    point_arm = _arm_scalars(arm, calculator, true_col, pred_col)
+    # Only quantities both arms report can be differenced. A group present in
+    # one arm alone is a different cohort description, not an effect.
+    shared = [key for key in point_base if key in point_arm]
+    if not shared:
+        logging.warning("Paired comparison skipped: the two arms share no comparable scalar")
+        return PairedEffectResult(table=pd.DataFrame(columns=_PAIRED_COLUMNS), metadata={})
+
+    scheme, strata = _resolve_stratification(
+        baseline, usable, stratify, true_col, min_stratum=min_stratum
+    )
+    blocks = _stratum_blocks(strata, len(baseline))
+
+    seeds = np.random.SeedSequence(random_state).spawn(n_boot)
+    args = (baseline, arm, blocks, calculator, true_col, pred_col)
+    if n_jobs == 1:
+        drawn = [_draw_paired_replicate(*args, s) for s in seeds]
+    else:
+        drawn = Parallel(n_jobs=n_jobs)(delayed(_draw_paired_replicate)(*args, s) for s in seeds)
+
+    lo_pct, hi_pct = 100 * (alpha / 2), 100 * (1 - alpha / 2)
+    rows = []
+    for key in shared:
+        scope, attribute, metric, group, quantity = key
+        diffs = np.asarray(
+            [rep_arm.get(key, np.nan) - rep_base.get(key, np.nan) for rep_base, rep_arm in drawn],
+            dtype=float,
+        )
+        valid = diffs[np.isfinite(diffs)]
+        degenerate = valid.size < 2 or bool(np.ptp(valid) == 0.0)
+        if valid.size == 0:
+            ci_low = ci_high = se = boot_mean = p_value = np.nan
+        else:
+            ci_low, ci_high = (float(v) for v in np.percentile(valid, [lo_pct, hi_pct]))
+            se = float(valid.std(ddof=1)) if valid.size > 1 else np.nan
+            boot_mean = float(valid.mean())
+            p_value = _bootstrap_p_value(valid)
+
+        rows.append(
+            {
+                "scope": scope,
+                "attribute": attribute,
+                "metric": metric,
+                "group": group,
+                "quantity": quantity,
+                "baseline": point_base[key],
+                "arm": point_arm[key],
+                "difference": point_arm[key] - point_base[key],
+                "ci_low": ci_low,
+                "ci_high": ci_high,
+                "se": se,
+                "bootstrap_mean": boot_mean,
+                "excludes_zero": bool(valid.size and not ci_low <= 0.0 <= ci_high),
+                "p_value": p_value,
+                "p_value_bh": np.nan,
+                "significant": False,
+                "degenerate": degenerate,
+                "n_valid": int(valid.size),
+                "n_comparisons": 0,
+                "n_boot": int(n_boot),
+                "alpha": float(alpha),
+                "method": "paired_percentile",
+                "stratify": scheme,
+                "n_rows": int(len(baseline)),
+            }
+        )
+
+    table = pd.DataFrame(rows, columns=_PAIRED_COLUMNS)
+    # A paired run asks one question per quantity, so the correction is taken
+    # over the whole table rather than over a subset of it.
+    testable = table["p_value"].notna() & ~table["degenerate"]
+    table.loc[testable, "p_value_bh"] = _benjamini_hochberg(
+        table.loc[testable, "p_value"].to_numpy()
+    )
+    table["significant"] = testable & (table["p_value_bh"] < alpha)
+    table["n_comparisons"] = int(testable.sum())
+    table = table.sort_values(["scope", "attribute", "metric", "group", "quantity"])
+
+    metadata = {
+        "baseline_label": baseline_label,
+        "arm_label": arm_label,
+        "n_boot": int(n_boot),
+        "n_jobs": int(n_jobs),
+        "alpha": float(alpha),
+        "method": "paired_percentile",
+        "stratify_requested": stratify,
+        "stratify_used": scheme,
+        "random_state": int(random_state),
+        "n_rows": int(len(baseline)),
+        "sensitive_attributes": list(usable),
+        "n_quantities": int(len(table)),
+        "n_tested": int(testable.sum()),
+        "n_significant": int(table["significant"].sum()),
+        "p_value_resolution": float(2.0 / (n_boot + 1)),
+    }
+    return PairedEffectResult(table=table.reset_index(drop=True), metadata=metadata)
