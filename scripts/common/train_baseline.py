@@ -38,7 +38,7 @@ from fairxai.experiments.data_io import (
     resolve_dataset_dir,
     resolve_default_binning,
 )
-from fairxai.explainability.subgroup import DEFAULT_MIN_GROUP_SIZE, summarise_subgroup_shap
+from fairxai.explainability.subgroup import DEFAULT_MIN_GROUP_SIZE, save_subgroup_shap
 from fairxai.explainability.tabular import (
     build_lime_explainer,
     lime_explain_instance,
@@ -132,66 +132,6 @@ def _build_cv_features(
     return x_full_raw, FoldPreprocessor
 
 
-def _save_subgroup_shap(
-    shap_abs: np.ndarray,
-    feature_names: list,
-    sensitive_global: pd.DataFrame,
-    explained_index: pd.Index,
-    holdout_shap_dir: Path,
-    dataset_name: str,
-    min_group_size: int = DEFAULT_MIN_GROUP_SIZE,
-) -> None:
-    """Write per-sensitive-group SHAP summaries beside the global one.
-
-    ``explained_index`` are the row labels SHAP actually explained (a subsample
-    of ``X_global``); the sensitive frame is realigned onto them by label rather
-    than by position, so a mismatch fails loudly here instead of silently
-    attributing rows to the wrong group.
-    """
-    try:
-        aligned = sensitive_global.loc[explained_index]
-    except KeyError as exc:
-        logging.warning(
-            "Subgroup SHAP skipped for %s: sensitive frame does not cover the "
-            "explained rows (%s)",
-            dataset_name,
-            exc,
-        )
-        return
-
-    summary = summarise_subgroup_shap(
-        shap_abs,
-        feature_names,
-        aligned,
-        min_group_size=min_group_size,
-    )
-    if summary is None:
-        logging.info(
-            "Subgroup SHAP produced nothing for %s: no sensitive attribute keeps "
-            "two or more groups of at least %d rows",
-            dataset_name,
-            min_group_size,
-        )
-        return
-
-    for name, frame in (
-        ("subgroup_summary.csv", summary.per_group),
-        ("subgroup_disparity.csv", summary.disparity),
-        ("subgroup_agreement.csv", summary.agreement),
-    ):
-        path = holdout_shap_dir / name
-        frame.to_csv(path, index=False)
-        logging.info(f"[SUCCESS] Holdout subgroup SHAP saved: {path}")
-
-    for attribute, dropped in summary.skipped.items():
-        logging.info(
-            "  Subgroup SHAP dropped small groups for %s: %s (floor=%d rows)",
-            attribute,
-            dropped,
-            min_group_size,
-        )
-
-
 def save_xai_outputs(
     model: Any,
     model_type: str,
@@ -282,7 +222,7 @@ def save_xai_outputs(
             logging.info(f"[SUCCESS] Holdout SHAP summary saved: {shap_global_file}")
 
             if subgroup_enabled and sensitive_global is not None:
-                _save_subgroup_shap(
+                save_subgroup_shap(
                     shap_vals_global,
                     shap_global.feature_names,
                     sensitive_global,

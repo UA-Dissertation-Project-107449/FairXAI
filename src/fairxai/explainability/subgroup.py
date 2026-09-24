@@ -26,11 +26,15 @@ only in ``mean_abs_shap`` is a confidence difference.
 No SHAP values are computed here — the caller has already paid that cost.
 """
 
+import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Sequence
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MIN_GROUP_SIZE = 30
 DEFAULT_TOP_K = 5
@@ -274,3 +278,77 @@ def summarise_subgroup_shap(
         agreement=agreement.reset_index(drop=True),
         skipped=skipped,
     )
+
+
+def save_subgroup_shap(
+    shap_abs: np.ndarray,
+    feature_names: Sequence[str],
+    sensitive: pd.DataFrame,
+    explained_index: pd.Index,
+    out_dir: Path,
+    label: str,
+    min_group_size: int = DEFAULT_MIN_GROUP_SIZE,
+) -> Optional[SubgroupShapSummary]:
+    """Write the three subgroup tables beside whatever global summary ``out_dir`` holds.
+
+    Args:
+        shap_abs: ``|phi|`` matrix over the explained rows.
+        feature_names: Column names for ``shap_abs``.
+        sensitive: Sensitive-attribute frame covering the explained rows, indexed
+            by the same labels.
+        explained_index: The row labels SHAP actually explained (a subsample of
+            the frame handed to the explainer). The sensitive frame is realigned
+            onto them by label rather than by position, so a mismatch fails
+            loudly here instead of silently attributing rows to the wrong group.
+        out_dir: Directory to write into; created if absent.
+        label: Identifier for the log lines (dataset, or dataset plus arm).
+        min_group_size: Groups below this size are dropped, and the drop logged.
+
+    Returns:
+        The summary that was written, or ``None`` when nothing was.
+    """
+    try:
+        aligned = sensitive.loc[explained_index]
+    except KeyError as exc:
+        logger.warning(
+            "Subgroup SHAP skipped for %s: sensitive frame does not cover the "
+            "explained rows (%s)",
+            label,
+            exc,
+        )
+        return None
+
+    summary = summarise_subgroup_shap(
+        shap_abs,
+        feature_names,
+        aligned,
+        min_group_size=min_group_size,
+    )
+    if summary is None:
+        logger.info(
+            "Subgroup SHAP produced nothing for %s: no sensitive attribute keeps "
+            "two or more groups of at least %d rows",
+            label,
+            min_group_size,
+        )
+        return None
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for name, frame in (
+        ("subgroup_summary.csv", summary.per_group),
+        ("subgroup_disparity.csv", summary.disparity),
+        ("subgroup_agreement.csv", summary.agreement),
+    ):
+        path = out_dir / name
+        frame.to_csv(path, index=False)
+        logger.info("[SUCCESS] Subgroup SHAP saved: %s", path)
+
+    for attribute, dropped in summary.skipped.items():
+        logger.info(
+            "  Subgroup SHAP dropped small groups for %s: %s (floor=%d rows)",
+            attribute,
+            dropped,
+            min_group_size,
+        )
+
+    return summary

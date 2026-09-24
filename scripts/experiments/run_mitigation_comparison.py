@@ -45,6 +45,8 @@ from fairxai.experiments.data_io import (
     resolve_dataset_dir,
     resolve_default_binning,
 )
+from fairxai.explainability.subgroup import DEFAULT_MIN_GROUP_SIZE, save_subgroup_shap
+from fairxai.explainability.tabular import shap_explain_tabular
 from fairxai.fairness.metrics import FairnessMetrics
 from fairxai.fairness.mitigation import MitigationEngine
 from fairxai.fairness.uncertainty import (
@@ -266,6 +268,62 @@ def _persist_arm_predictions(
         )
 
 
+def _persist_arm_subgroup_shap(
+    model,
+    X_test,
+    sensitive_test,
+    subgroup_cfg,
+    dataset_name: str,
+    model_type: str,
+    technique_name: str,
+    sensitive_attr: str,
+) -> None:
+    """Subgroup-resolved SHAP for one arm, so RO4 can compare before and after.
+
+    Stage 7 writes these tables for the baseline only, which answers "does the
+    model explain the groups differently?" but not "does mitigating change the
+    answer?". Writing them per arm here, on this stage's own baseline and its own
+    split, makes the before/after pair like-for-like.
+
+    Only arms that expose a single fitted estimator are explained. A
+    post-processing arm reuses its base model and moves the decision threshold,
+    so the attributions are the base model's by construction; a Fairlearn
+    reduction is a randomised ensemble over ``predictors_``, whose mean |phi|
+    would have to be averaged over the ensemble's own distribution to mean
+    anything. Both are logged rather than silently absent.
+    """
+    if not subgroup_cfg or not subgroup_cfg.get("enabled"):
+        return
+
+    arm = f"{dataset_name}/{model_type}/{technique_name}/{sensitive_attr}"
+    estimator = getattr(model, "model", None)
+    if estimator is None:
+        logging.info("Subgroup SHAP skipped for %s: no single fitted estimator on the arm", arm)
+        return
+
+    try:
+        max_samples = int(subgroup_cfg.get("max_samples", 1000))
+        explanation = shap_explain_tabular(estimator, X_test, max_samples=max_samples)
+    except Exception as exc:
+        logging.warning("Subgroup SHAP failed for %s: %s", arm, exc)
+        return
+
+    out_dir = (
+        Path(subgroup_cfg["dir"]) / f"{dataset_name}_{model_type}_{technique_name}_{sensitive_attr}"
+    )
+    save_subgroup_shap(
+        np.abs(explanation.shap_values),
+        explanation.feature_names,
+        sensitive_test,
+        # SHAP may subsample internally; its returned frame is the authoritative
+        # record of which rows were explained.
+        getattr(explanation, "data", X_test).index,
+        out_dir,
+        arm,
+        min_group_size=int(subgroup_cfg.get("min_group_size", DEFAULT_MIN_GROUP_SIZE)),
+    )
+
+
 def _write_paired_effects(
     output_dir,
     prediction_index,
@@ -364,6 +422,7 @@ def apply_mitigation_techniques(
     model_type="logistic_regression",
     model_params=None,
     prediction_index=None,
+    subgroup_cfg=None,
 ):
     """
     Apply all mitigation techniques and collect results.
@@ -484,6 +543,17 @@ def apply_mitigation_techniques(
                     model_type=model_type,
                     technique_name=technique_name,
                     sensitive_attr=sensitive_attr,
+                )
+
+                _persist_arm_subgroup_shap(
+                    result["model"],
+                    X_test,
+                    sensitive_test,
+                    subgroup_cfg,
+                    dataset_name,
+                    model_type,
+                    technique_name,
+                    sensitive_attr,
                 )
 
                 # Calculate fairness metrics across ALL sensitive attrs (measurement
@@ -856,6 +926,28 @@ def run_analysis(
 
     logging.info(f"Techniques to test: {list(implemented.keys())}")
 
+    # Subgroup SHAP per arm (RO4: does mitigating change how the model explains
+    # each group?). Restricted to the two families the chapter reports for RO4;
+    # SVM has no fast exact explainer and is skipped for SHAP everywhere else too.
+    xai_cfg = pipeline_cfg.get("xai", {}) or {}
+    subgroup_families = {
+        str(m).strip().lower()
+        for m in xai_cfg.get(
+            "mitigation_subgroup_shap_model_types", ["logistic_regression", "xgboost"]
+        )
+    }
+    subgroup_cfg_base = {
+        "enabled": bool(xai_cfg.get("subgroup_shap", True)),
+        "min_group_size": int(xai_cfg.get("subgroup_min_size", DEFAULT_MIN_GROUP_SIZE)),
+        "max_samples": int(xai_cfg.get("global_max_samples", 1000)),
+        "dir": output_dir / "subgroup_shap",
+    }
+    logging.info(
+        "Per-arm subgroup SHAP: enabled=%s families=%s",
+        subgroup_cfg_base["enabled"],
+        sorted(subgroup_families),
+    )
+
     # Process each dataset
     all_results = []
     baseline_results = []
@@ -888,6 +980,7 @@ def run_analysis(
                 model_params = _load_model_params(
                     project_root, model_type, dataset=dataset_name, hpo_dir=hpo_dir
                 )
+                subgroup_cfg = subgroup_cfg_base if model_type in subgroup_families else None
 
                 # Train this family's own baseline. Post-processing wraps it, so
                 # it must be the same family as the rows it will be compared to.
@@ -916,6 +1009,18 @@ def run_analysis(
                     model_type=model_type,
                     technique_name="baseline",
                     sensitive_attr="none",
+                )
+
+                # The "before" half of the RO4 pair, from this stage's baseline.
+                _persist_arm_subgroup_shap(
+                    baseline["model"],
+                    X_test,
+                    sensitive_test,
+                    subgroup_cfg,
+                    dataset_name,
+                    model_type,
+                    "baseline",
+                    "none",
                 )
 
                 baseline_results.append(
@@ -950,6 +1055,7 @@ def run_analysis(
                         model_type=model_type,
                         model_params=model_params,
                         prediction_index=prediction_index,
+                        subgroup_cfg=subgroup_cfg,
                     )
                 )
 

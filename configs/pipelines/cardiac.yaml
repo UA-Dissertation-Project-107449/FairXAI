@@ -156,6 +156,13 @@ xai:
   # Groups smaller than this are excluded from the subgroup tables: per-feature
   # percentiles over a handful of rows are noise, not a disparity.
   subgroup_min_size: 30
+  # Stage 10 repeats the subgroup tables on its own baseline and on every
+  # mitigated arm, so RO4 can ask whether mitigating changes how the model
+  # explains each group. Only these families are explained: SVM has no fast exact
+  # explainer, and these two are the ones the chapter reports for RO4.
+  mitigation_subgroup_shap_model_types:
+    - logistic_regression
+    - xgboost
 
 studies:
   skip: false
