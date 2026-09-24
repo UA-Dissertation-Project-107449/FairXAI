@@ -109,13 +109,16 @@ age_binning_sensitivity:
   # sweep answers "is this gap a bucketing artifact?" against every scheme the
   # study describes rather than a four-scheme sample of it. Every name below
   # resolves in BUILTIN_STRATEGIES; a name that does not aborts the sweep.
+  # clinical_adaptive is deliberately absent: it exists only to merge bins that
+  # fall below min_bin_size, and on these cohorts it merges nothing, so it
+  # produced the same bins as clinical and cost a duplicate arm per model.
+  # It stays in the catalogue for cohorts where it would differ.
   strategies:
     - fixed_2
     - fixed_3
     - fixed_5yr
     - fixed_10yr
     - clinical
-    - clinical_adaptive
     - quantile_3
     - quantile_4
     - quantile_5
