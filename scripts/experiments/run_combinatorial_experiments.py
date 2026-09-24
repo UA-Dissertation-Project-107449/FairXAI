@@ -43,6 +43,8 @@ from fairxai.explainability.tabular import (
     build_lime_explainer,
     lime_explain_instance,
     shap_explain_tabular,
+    shap_status_record,
+    write_shap_status,
 )
 from fairxai.fairness.metrics import FairnessMetrics
 from fairxai.fairness.mitigation import MitigationEngine
@@ -842,6 +844,7 @@ def save_experiment_xai(
     xai_model_raw = base_model if base_model is not None else model
     xai_model = _unwrap_for_xai(xai_model_raw) or xai_model_raw
     if shap_enabled:
+        shap_records = []
         try:
             shap_model = _resolve_shap_model(xai_model)
             # Global SHAP (train reference)
@@ -851,6 +854,7 @@ def save_experiment_xai(
                 max_samples=max_samples,
                 allow_svm=allow_svm_shap,
             )
+            shap_records.append(shap_status_record("global", explanation=shap_global))
             mean_abs_global = _mean_abs_shap_values(shap_global.shap_values)
             shap_global_df = pd.DataFrame(
                 {"feature": shap_global.feature_names, "mean_abs_shap": mean_abs_global}
@@ -865,6 +869,7 @@ def save_experiment_xai(
                 max_samples=max_samples,
                 allow_svm=allow_svm_shap,
             )
+            shap_records.append(shap_status_record("local", explanation=shap_local))
             mean_abs_local = _mean_abs_shap_values(shap_local.shap_values)
             shap_local_df = pd.DataFrame(
                 {"feature": shap_local.feature_names, "mean_abs_shap": mean_abs_local}
@@ -873,6 +878,9 @@ def save_experiment_xai(
             shap_local_df.to_csv(shap_local_file, index=False)
         except Exception as exc:
             logging.getLogger(__name__).warning(f"SHAP failed for {exp_id}: {exc}")
+            scope = "local" if shap_records else "global"
+            shap_records.append(shap_status_record(scope, error=exc))
+        write_shap_status(shap_dir, exp_id, shap_records, prefix=f"{exp_id}_")
     else:
         logging.getLogger(__name__).info(
             f"SHAP skipped for exp_id={exp_id} model_type={model_type}"
@@ -955,6 +963,12 @@ def save_cv_experiment_xai(
     lime_dir = cv_xai_dir / "lime"
     shap_dir.mkdir(parents=True, exist_ok=True)
     lime_dir.mkdir(parents=True, exist_ok=True)
+
+    shap_records = [
+        record for fr in fold_results for record in (fr.get("xai") or {}).get("shap_status", [])
+    ]
+    if shap_records:
+        write_shap_status(shap_dir, exp_id, shap_records, prefix=f"{exp_id}_")
 
     # Aggregate SHAP across folds (global = train data, local = val data)
     cv_shap_global = CVTrainer.aggregate_cv_shap(fold_results, scope="global")

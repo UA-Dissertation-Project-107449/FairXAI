@@ -7,9 +7,11 @@ Runtime behavior (sample caps, enable/disable toggles, CV usage) is configured
 by caller scripts via YAML `xai` sections.
 """
 
+import json
 import warnings
 from dataclasses import dataclass
-from typing import Any, Iterable, List, Optional, Union
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -75,6 +77,11 @@ class ShapExplanation:
     expected_value: Any
     feature_names: List[str]
     data: pd.DataFrame
+    # Tree-path-dependent values answer a different question than interventional
+    # ones, so record which algorithm actually ran.
+    explainer: str = ""
+    feature_perturbation: Optional[str] = None
+    fallback_reason: Optional[str] = None
 
 
 def shap_explain_tabular(
@@ -135,10 +142,23 @@ def shap_explain_tabular(
             explainer = shap.Explainer(lambda X: model.predict(X), df)
         else:
             raise
+    fallback_reason = None
     try:
-        shap_values = explainer(df, check_additivity=False)
-    except TypeError:
-        shap_values = explainer(df)
+        shap_values = _call_explainer(explainer, df)
+    except NotImplementedError as exc:
+        # shap 0.52 + xgboost >= 3.3 rejects every XGBoost model under the
+        # interventional algorithm; tree_path_dependent still works.
+        if getattr(explainer, "feature_perturbation", None) != "interventional":
+            raise
+        fallback_reason = str(exc)
+        warnings.warn(
+            f"Interventional TreeExplainer failed ({exc}); "
+            "falling back to feature_perturbation='tree_path_dependent'.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        explainer = shap.TreeExplainer(model, feature_perturbation="tree_path_dependent")
+        shap_values = _call_explainer(explainer, df)
 
     normalized_values = _normalize_shap_values(getattr(shap_values, "values", shap_values))
     return ShapExplanation(
@@ -147,7 +167,17 @@ def shap_explain_tabular(
         expected_value=getattr(shap_values, "expected_value", None),
         feature_names=list(feature_names),
         data=df,
+        explainer=type(explainer).__name__,
+        feature_perturbation=getattr(explainer, "feature_perturbation", None),
+        fallback_reason=fallback_reason,
     )
+
+
+def _call_explainer(explainer: Any, df: pd.DataFrame) -> Any:
+    try:
+        return explainer(df, check_additivity=False)
+    except TypeError:
+        return explainer(df)
 
 
 @dataclass
@@ -290,3 +320,108 @@ def counterfactual_stub(*_: Any, **__: Any) -> None:
         Planned implementation target: Q2 2026.
     """
     raise NotImplementedError("Counterfactual explanations not implemented yet for tabular data.")
+
+
+# --------------------------------------------------------------------------- #
+# SHAP status records
+#
+# Stage 7 and the sweep catch SHAP exceptions so one bad family does not end a
+# multi-hour run. Each caught call leaves a shap_status.json next to its outputs
+# and the pipelines print one report over them, so a missing explanation is
+# visible instead of being a WARNING nobody read. Statuses: ok, fallback
+# (tree_path_dependent ran instead of interventional), failed, skipped.
+# --------------------------------------------------------------------------- #
+
+STATUS_FILENAME = "shap_status.json"
+_SEVERITY = {"skipped": 0, "ok": 1, "fallback": 2, "failed": 3}
+
+
+def shap_status_record(
+    scope: str,
+    explanation: Any = None,
+    error: Optional[BaseException] = None,
+    skipped_reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Describe one SHAP call; *scope* names it, e.g. ``"cv_fold0_local"``."""
+    if skipped_reason is not None:
+        return {"scope": scope, "status": "skipped", "message": skipped_reason}
+    if error is not None or explanation is None:
+        message = f"{type(error).__name__}: {error}" if error is not None else "no explanation"
+        return {"scope": scope, "status": "failed", "message": message}
+    fallback_reason = getattr(explanation, "fallback_reason", None)
+    return {
+        "scope": scope,
+        "status": "fallback" if fallback_reason else "ok",
+        "explainer": getattr(explanation, "explainer", "") or None,
+        "feature_perturbation": getattr(explanation, "feature_perturbation", None),
+        "message": fallback_reason,
+    }
+
+
+def overall_status(records: Iterable[Dict[str, Any]]) -> str:
+    """Worst status among *records*; ``skipped`` when there are none."""
+    statuses = [r.get("status", "failed") for r in records]
+    if not statuses:
+        return "skipped"
+    return max(statuses, key=lambda s: _SEVERITY.get(s, _SEVERITY["failed"]))
+
+
+def write_shap_status(
+    directory: Path, key: str, records: List[Dict[str, Any]], prefix: str = ""
+) -> Path:
+    """Write ``<prefix>shap_status.json``; sweep cells share a directory, hence the prefix."""
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{prefix}{STATUS_FILENAME}"
+    payload = {"key": key, "overall": overall_status(records), "records": records}
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def collect_shap_status(root: Path) -> List[Dict[str, Any]]:
+    """Load every status file under *root*, each tagged with its path."""
+    entries = []
+    for path in sorted(Path(root).rglob(f"*{STATUS_FILENAME}")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            payload = {
+                "key": path.parent.name,
+                "overall": "failed",
+                "records": [{"scope": "status_file", "status": "failed", "message": str(exc)}],
+            }
+        payload["path"] = str(path)
+        entries.append(payload)
+    return entries
+
+
+def format_shap_status_report(entries: List[Dict[str, Any]]) -> str:
+    """One-line tally, plus a line per failing call when there are problems."""
+    counts: Dict[str, int] = {}
+    for entry in entries:
+        counts[entry["overall"]] = counts.get(entry["overall"], 0) + 1
+    tally = ", ".join(f"{counts[s]} {s}" for s in _SEVERITY if s in counts) or "none found"
+    header = f"SHAP status: {len(entries)} model(s) - {tally}"
+
+    problems = [e for e in entries if e["overall"] in {"fallback", "failed"}]
+    if not problems:
+        return header
+
+    bar = "!" * 70
+    lines = [bar, header]
+    for entry in problems:
+        lines.append(f"  [{entry['overall'].upper()}] {entry['key']}  ({entry['path']})")
+        for record in entry.get("records", []):
+            if record.get("status") in {"fallback", "failed"}:
+                lines.append(f"      {record['scope']}: {record.get('message')}")
+    lines.append(
+        "  fallback = tree_path_dependent attributions, not interventional ones; "
+        "failed = no SHAP values."
+    )
+    lines.append(bar)
+    return "\n".join(lines)
+
+
+def has_problems(entries: List[Dict[str, Any]]) -> bool:
+    """True when any model fell back or failed."""
+    return any(e["overall"] in {"fallback", "failed"} for e in entries)

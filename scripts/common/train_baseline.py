@@ -43,6 +43,8 @@ from fairxai.explainability.tabular import (
     build_lime_explainer,
     lime_explain_instance,
     shap_explain_tabular,
+    shap_status_record,
+    write_shap_status,
 )
 from fairxai.models import get_model_class
 from fairxai.models.baseline import generate_predictions_with_metadata
@@ -201,7 +203,7 @@ def save_xai_outputs(
     X_global: Optional[pd.DataFrame] = None,
     xai_cfg: Optional[dict] = None,
     sensitive_global: Optional[pd.DataFrame] = None,
-) -> None:
+) -> list[dict]:
     """Save holdout-based SHAP and LIME outputs.
 
     Outputs are placed under::
@@ -222,12 +224,14 @@ def save_xai_outputs(
     No extra SHAP is computed for this: the per-row attribution matrix is
     already in memory and was previously collapsed to a single cohort-wide
     summary, which cannot show whether the model explains groups differently.
+
+    Returns the SHAP status records for the caller to write with the CV ones.
     """
     if xai_cfg is None:
         xai_cfg = {}
     if not xai_cfg.get("enabled", True):
         logging.info("XAI disabled via config xai.enabled=false")
-        return
+        return []
 
     holdout_shap_dir = output_dir / dataset_name / "holdout" / "shap"
     holdout_lime_dir = output_dir / dataset_name / "holdout" / "lime"
@@ -243,11 +247,16 @@ def save_xai_outputs(
     subgroup_enabled = bool(xai_cfg.get("subgroup_shap", True))
     subgroup_min_size = int(xai_cfg.get("subgroup_min_size", DEFAULT_MIN_GROUP_SIZE))
 
+    shap_records: list[dict] = []
     if not shap_enabled:
         logging.info(f"SHAP skipped for model_type={model_type} via xai.skip_shap_model_types")
+        shap_records.append(
+            shap_status_record("holdout_global", skipped_reason="xai.skip_shap_model_types")
+        )
 
     # Global SHAP summary (dataset-level) with percentiles
     if X_global is not None and shap_enabled:
+        shap_global = None
         try:
             df_global = X_global.copy()
             if len(df_global) > global_max:
@@ -287,6 +296,10 @@ def save_xai_outputs(
                 )
         except Exception as exc:
             logging.warning(f"Global SHAP failed for {dataset_name}: {exc}")
+            if shap_global is None:
+                shap_records.append(shap_status_record("holdout_global", error=exc))
+        if shap_global is not None:
+            shap_records.append(shap_status_record("holdout_global", explanation=shap_global))
 
     # LIME examples
     try:
@@ -357,6 +370,22 @@ def save_xai_outputs(
             logging.warning(f"LIME skipped for {dataset_name}: no predict_proba/decision_function")
     except Exception as exc:
         logging.warning(f"LIME failed for {dataset_name}: {exc}")
+
+    return shap_records
+
+
+def _save_portable_booster(model: Any, path: Path) -> None:
+    """Write an XGBoost booster as JSON next to the pickle: pickles are not
+    portable across xgboost versions. No-op for other families."""
+    estimator = getattr(model, "model", model)
+    get_booster = getattr(estimator, "get_booster", None)
+    if get_booster is None:
+        return
+    try:
+        get_booster().save_model(str(path))
+        logging.info(f"  Portable booster: {path}")
+    except Exception as exc:
+        logging.warning(f"Could not write portable booster {path}: {exc}")
 
 
 def _normalise_model_types(raw_values: Optional[list[Any]]) -> list[str]:
@@ -1347,6 +1376,7 @@ def main():
 
                 model_file = models_dir / f"{dataset_name}_{model_type}.pkl"
                 model.save(str(model_file))
+                _save_portable_booster(model, model_file.with_suffix(".json"))
 
                 train_pred_file = predictions_dir / f"{dataset_name}_{model_type}_train.csv"
                 test_pred_file = predictions_dir / f"{dataset_name}_{model_type}_test.csv"
@@ -1366,7 +1396,7 @@ def main():
                 feature_importance.to_csv(importance_file, index=False)
                 logging.info(f"  Feature importance: {importance_file}")
 
-                save_xai_outputs(
+                shap_records = save_xai_outputs(
                     model,
                     model_type,
                     X_train,
@@ -1462,6 +1492,9 @@ def main():
                             cv_lime_df.to_csv(cv_lime_file, index=False)
                             logging.info(f"[SUCCESS] CV LIME tracked saved: {cv_lime_file}")
 
+                        for fold in cv_xai_results["fold_results"]:
+                            shap_records.extend((fold.get("xai") or {}).get("shap_status", []))
+
                         agg = cv_xai_results["aggregated_metrics"]
                         logging.info(
                             f"  CV performance: "
@@ -1471,6 +1504,11 @@ def main():
                     except Exception as exc:
                         logging.warning(f"CV XAI failed for {dataset_name}/{model_type}: {exc}")
                         logging.debug("CV XAI traceback:", exc_info=True)
+                        if _is_shap_enabled_for_model(model_type, xai_cfg):
+                            shap_records.append(shap_status_record("cv", error=exc))
+
+                if shap_records:
+                    write_shap_status(xai_dir / xai_dataset_key, xai_dataset_key, shap_records)
 
                 model_result.update(
                     {

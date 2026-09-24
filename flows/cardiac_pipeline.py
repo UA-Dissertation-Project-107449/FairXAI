@@ -42,6 +42,19 @@ def _run_script(script_path: Path, args: list, env: dict) -> None:
     subprocess.run(cmd, env=env, check=True, cwd=str(ROOT_DIR))
 
 
+def _report_shap_status(run_root: Path, strict: bool = False) -> None:
+    """Print the SHAP status report; with *strict*, raise on fallback/failure."""
+    script = ROOT_DIR / "scripts" / "common" / "report_shap_status.py"
+    args = ["--run-root", str(run_root)]
+    if strict:
+        args.append("--strict")
+    _run_script(script, args, os.environ.copy())
+
+
+def _strict_shap_from_env() -> bool:
+    return os.getenv("STRICT_SHAP", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _verbose_flags(level: int) -> list[str]:
     """Convert a verbosity int (0/1/2) into CLI flags."""
     if level >= 2:
@@ -317,6 +330,7 @@ def train_baseline_model(
     model_types: Optional[list[str]] = None,
     selector_contract_path: Optional[str] = None,
     verbose: int = 0,
+    run_root: Optional[str] = None,
 ):
     logger = get_run_logger()
     logger.info("[PHASE 7/12] Training baseline model(s)")
@@ -332,6 +346,9 @@ def train_baseline_model(
     env = os.environ.copy()
     env["RUN_ID"] = run_id
     _run_script(script, args, env)
+    # Same gate as bash: report before stage 7 counts as done.
+    if run_root:
+        _report_shap_status(Path(run_root) / "baseline", strict=_strict_shap_from_env())
 
 
 @task
@@ -878,6 +895,7 @@ def cardiac_pipeline(
             model_types,
             selector_contract_task,
             verbose,
+            str(run_root),
             wait_for=wait,
         )
     else:
@@ -1033,6 +1051,8 @@ def cardiac_pipeline(
             f"Log summary: {log_summary['total_warnings']} warning(s), "
             f"{log_summary['total_errors']} error(s) - see {run_log_dir / 'run_summary.json'}"
         )
+
+    _report_shap_status(run_root)
 
     # --- Summary ------------------------------------------------------------
     logger.info("[PHASE] Cardiac fairness pipeline complete")

@@ -397,6 +397,10 @@ export RUN_ID
 export RUN_ID
 
 RUN_ROOT="$BASE_RESULTS/runs/$RUN_ID"
+
+# STRICT_SHAP=1 turns a SHAP fallback or failure into a stop, before stage 7 is done.
+STRICT_SHAP=${STRICT_SHAP:-false}
+[[ "$STRICT_SHAP" =~ ^(1|true|yes|on)$ ]] && STRICT_SHAP_ARGS=(--strict) || STRICT_SHAP_ARGS=()
 CHECKPOINT_DIR="$RUN_ROOT/.checkpoints"
 SELECTOR_CONTRACT_PATH="$RUN_ROOT/recommendations/selector_contract.json"
 
@@ -686,6 +690,8 @@ if should_run 7; then
     python3 "$ROOT_DIR/scripts/cardiac/train_baseline.py" \
         --selector-contract "$SELECTOR_CONTRACT_PATH" \
         "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $VERBOSE_FLAG
+    python3 "$ROOT_DIR/scripts/common/report_shap_status.py" \
+        --run-root "$RUN_ROOT/baseline" "${STRICT_SHAP_ARGS[@]}"
     mark_done 7
     echo ""
 else
@@ -929,6 +935,8 @@ if tw or te:
 else:
     print('Log summary: no warnings or errors recorded.')
 "
+
+python3 "$ROOT_DIR/scripts/common/report_shap_status.py" --run-root "$RUN_ROOT"
 
 # ======================================================================
 # Summary
