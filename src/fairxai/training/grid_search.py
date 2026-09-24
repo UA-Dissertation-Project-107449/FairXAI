@@ -16,10 +16,13 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import pandas as pd
+
+from fairxai.utils.config import load_yaml_config
 
 logger = logging.getLogger(__name__)
 
@@ -245,3 +248,118 @@ def load_hpo_params(hpo_dir: Path, dataset: str, model_type: str) -> Optional[Di
                 return params
 
     return None
+
+
+# --------------------------------------------------------------------------- #
+# Resolving a family's hyperparameters for a stage
+#
+# Stages 7, 10 and 11 each built their own parameter dictionary and disagreed:
+# 7 merged HPO over the model YAML, 10 ignored HPO, 11 merged HPO and then let
+# the sweep's model_variants overwrite it. Every stage now calls
+# resolve_model_params, in one order: model YAML, random_state, HPO best,
+# explicit overrides, hardware (last, so nothing moves a fit to another device).
+# --------------------------------------------------------------------------- #
+
+_LOGGED_HPO: set = set()
+
+
+def _log_once(key: Tuple[Any, ...], message: str, *args: Any) -> None:
+    """Log *message* at info level the first time *key* is seen, debug after."""
+    if key in _LOGGED_HPO:
+        logger.debug(message, *args)
+        return
+    _LOGGED_HPO.add(key)
+    logger.info(message, *args)
+
+
+@dataclass(frozen=True)
+class ResolvedParams:
+    """Resolved hyperparameters plus where the tuned values came from."""
+
+    params: Dict[str, Any] = field(default_factory=dict)
+    hpo_used: bool = False
+    hpo_keys: Tuple[str, ...] = ()
+
+    @property
+    def variant_name(self) -> str:
+        """``tuned`` when HPO supplied the values, else ``default``, so a results
+        table never calls an untuned model tuned."""
+        return "tuned" if self.hpo_used else "default"
+
+
+def hpo_params_dir(project_root: Path, pipeline: str, enabled: bool = True) -> Optional[Path]:
+    """Directory holding ``best_params_<cohort>_<family>.json``, or ``None`` when
+    HPO is off or was never run (callers treat both as "no tuning available")."""
+    if not enabled:
+        return None
+    hpo_dir = Path(project_root) / "output" / pipeline / "studies" / "hpo"
+    return hpo_dir if hpo_dir.exists() else None
+
+
+def load_base_params(project_root: Path, model_type: str) -> Dict[str, Any]:
+    """Base hyperparameters from ``configs/models/<family>.yaml``. A missing file
+    is not fatal: the wrapper class defaults apply instead."""
+    cfg_path = Path(project_root) / "configs" / "models" / f"{model_type}.yaml"
+    if not cfg_path.exists():
+        logger.warning(
+            "No model config at %s - falling back to wrapper class defaults for %s",
+            cfg_path,
+            model_type,
+        )
+        return {}
+    return dict(load_yaml_config(str(cfg_path)).get("hyperparameters", {}) or {})
+
+
+def resolve_model_params(
+    project_root: Path,
+    model_type: str,
+    dataset: Optional[str] = None,
+    hpo_dir: Optional[Path] = None,
+    random_state: Optional[int] = None,
+    overrides: Optional[Mapping[str, Any]] = None,
+    hardware: Optional[Mapping[str, Any]] = None,
+) -> ResolvedParams:
+    """Resolve the hyperparameters for one (cohort, family) pair.
+
+    Args:
+        project_root: Repository root, used to find ``configs/models/``.
+        model_type: Family key, e.g. ``"xgboost"``.
+        dataset: Cohort key the HPO file is named after. HPO is skipped without it.
+        hpo_dir: Directory from :func:`hpo_params_dir`. ``None`` skips HPO.
+        random_state: Applied only when the model config sets no ``random_state``.
+        overrides: Explicit per-experiment params, applied over the tuned ones.
+        hardware: Device/thread params, applied last.
+    """
+    params = load_base_params(project_root, model_type)
+    if random_state is not None:
+        params.setdefault("random_state", random_state)
+
+    hpo_best: Dict[str, Any] = {}
+    if hpo_dir is not None and dataset:
+        hpo_best = load_hpo_params(Path(hpo_dir), dataset, model_type) or {}
+
+    if hpo_best:
+        params.update(hpo_best)
+        # Info, not debug: the smoke gate greps this line. Logged once per pair,
+        # since the sweep resolves the same pair for every cell.
+        _log_once(
+            (model_type, dataset, "loaded"),
+            "[HPO] Loaded best params for %s/%s: %s",
+            model_type,
+            dataset,
+            hpo_best,
+        )
+    elif hpo_dir is not None and dataset:
+        _log_once(
+            (model_type, dataset, "missing"),
+            "[HPO] No saved params for %s/%s; using config defaults.",
+            model_type,
+            dataset,
+        )
+
+    if overrides:
+        params.update(dict(overrides))
+    if hardware:
+        params.update(dict(hardware))
+
+    return ResolvedParams(params=params, hpo_used=bool(hpo_best), hpo_keys=tuple(sorted(hpo_best)))

@@ -50,6 +50,11 @@ from fairxai.fairness.metrics import FairnessMetrics
 from fairxai.fairness.mitigation import MitigationEngine
 from fairxai.models import get_model_class
 from fairxai.models.cv_trainer import CVTrainer
+from fairxai.training.grid_search import (
+    hpo_params_dir,
+    load_base_params,
+    resolve_model_params,
+)
 from fairxai.utils.config import load_yaml_config
 from fairxai.utils.gpu import detect_accelerator
 
@@ -443,10 +448,8 @@ def _select_top_experiments_for_xai(
 
 
 def _load_model_config(project_root: Path, model_type: str) -> Dict[str, Any]:
-    """Load base hyperparameters from configs/models/<model_type>.yaml."""
-    path = project_root / "configs" / "models" / f"{model_type}.yaml"
-    cfg = load_yaml_config(str(path))
-    return dict(cfg.get("hyperparameters", {}))
+    """Load base (untuned) hyperparameters from configs/models/<model_type>.yaml."""
+    return load_base_params(project_root, model_type)
 
 
 def _build_postprocessing_base_model(model_type, model_params=None):
@@ -509,41 +512,49 @@ def _resolve_model_variants(
     dataset: Optional[str] = None,
     hpo_dir: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
-    """Resolve model variants: base params from model file, overrides from config."""
-    from fairxai.training.grid_search import load_hpo_params
+    """Resolve the cells one family contributes for one cohort.
 
-    base_params = _load_model_config(project_root, model_type)
+    Tuned params come from the shared resolver, so a sweep cell fits the same
+    model stages 7 and 10 use. ``model_variants`` in the experiment config is
+    now for explicit sensitivity checks only: a variant's params are applied
+    *over* the tuned ones rather than replacing them, which is how the sweep
+    used to report hand-written hyperparameters as if they were tuned. With no
+    variants configured, the family contributes a single cell, named ``tuned``
+    when an HPO study supplied its params and ``default`` when none existed.
+    """
+    base_params = load_base_params(project_root, model_type)
+    hardware: Dict[str, Any] = {}
     if model_type == "xgboost" and xgb_device is not None:
-        base_params["device"] = xgb_device
+        hardware["device"] = xgb_device
     if model_type == "random_forest" and xgb_device == "cuda":
         # Enable RAPIDS cuML GPU backend when a CUDA device is available.
-        base_params["use_gpu"] = True
+        hardware["use_gpu"] = True
     # Prevent CPU/RAM over-subscription: when outer experiment workers > 1,
     # each model must use a single thread (not all cores).
     if model_type in {"random_forest", "xgboost"} and "n_jobs" in base_params:
-        base_params["n_jobs"] = _resolve_model_n_jobs(outer_n_jobs)
-    # Merge HPO best params when available (override defaults, keep GPU/n_jobs overrides after).
-    if hpo_dir is not None and dataset is not None:
-        hpo_best = load_hpo_params(hpo_dir, dataset, model_type)
-        if hpo_best:
-            logger.debug(f"[HPO] Loaded params for {model_type}/{dataset}: {hpo_best}")
-            base_params.update(hpo_best)
-            # Re-apply hardware overrides that must not be clobbered by HPO.
-            if model_type == "xgboost" and xgb_device is not None:
-                base_params["device"] = xgb_device
-            if model_type in {"random_forest", "xgboost"} and "n_jobs" in base_params:
-                base_params["n_jobs"] = _resolve_model_n_jobs(outer_n_jobs)
+        hardware["n_jobs"] = _resolve_model_n_jobs(outer_n_jobs)
+
+    def _resolve(overrides: Optional[Dict[str, Any]] = None):
+        return resolve_model_params(
+            project_root,
+            model_type,
+            dataset=dataset,
+            hpo_dir=hpo_dir,
+            overrides=overrides,
+            hardware=hardware,
+        )
 
     variants = config.get("model_variants", {}).get(model_type, [])
     if not variants:
-        return [{"name": "default", "params": base_params}]
+        resolved_params = _resolve()
+        return [{"name": resolved_params.variant_name, "params": resolved_params.params}]
 
     resolved = []
     for variant in variants:
         variant_name = str(variant.get("name", "variant")).strip() or "variant"
-        merged_params = dict(base_params)
-        merged_params.update(variant.get("params", {}))
-        resolved.append({"name": variant_name, "params": merged_params})
+        resolved.append(
+            {"name": variant_name, "params": _resolve(variant.get("params", {})).params}
+        )
     return resolved
 
 
@@ -1723,8 +1734,7 @@ def run_combinatorial_analysis(
     # Generate all experiment combinations
     experiments = []
     # HPO: load best params directory (auto-detected; silently skipped when absent).
-    hpo_output_dir = project_root / f"output/{pipeline}/studies/hpo"
-    hpo_dir: Optional[Path] = hpo_output_dir if hpo_output_dir.exists() else None
+    hpo_dir: Optional[Path] = hpo_params_dir(project_root, pipeline)
     if hpo_dir:
         logger.info(f"[HPO] Using pre-computed HPO params from: {hpo_dir}")
     fairness_base_params_cfg = config.get("fairness_base_model_params")

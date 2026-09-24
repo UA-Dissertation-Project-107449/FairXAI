@@ -47,6 +47,7 @@ from fairxai.experiments.data_io import (
 from fairxai.fairness.metrics import FairnessMetrics
 from fairxai.fairness.mitigation import MitigationEngine
 from fairxai.models import generate_predictions_with_metadata, get_model_class
+from fairxai.training.grid_search import hpo_params_dir, resolve_model_params
 from fairxai.utils.config import load_yaml_config
 
 
@@ -613,17 +614,18 @@ def _resolve_model_types(cli_model_types, experiment_cfg):
     return resolved or ["logistic_regression"]
 
 
-def _load_model_params(project_root, model_type):
-    """Base hyperparameters for a family, from configs/models/<model_type>.yaml."""
-    cfg_path = Path(project_root) / "configs" / "models" / f"{model_type}.yaml"
-    if not cfg_path.exists():
-        logging.warning(
-            "No model config at %s - falling back to wrapper class defaults for %s",
-            cfg_path,
-            model_type,
-        )
-        return {}
-    return dict(load_yaml_config(str(cfg_path)).get("hyperparameters", {}))
+def _load_model_params(project_root, model_type, dataset=None, hpo_dir=None):
+    """Hyperparameters for a family, tuned the same way stage 7 tunes them.
+
+    This stage used to stop at configs/models/<model_type>.yaml, so it mitigated
+    an untuned model and compared it to stage 7's tuned baseline.
+    """
+    return resolve_model_params(
+        project_root,
+        model_type,
+        dataset=dataset,
+        hpo_dir=hpo_dir,
+    ).params
 
 
 def run_analysis(
@@ -653,6 +655,14 @@ def run_analysis(
 
     model_types = _resolve_model_types(model_types, experiment_cfg)
     logging.info("Mitigation model families: %s", model_types)
+
+    # Tuned params from stage 5, auto-detected exactly as the sweep does. Absent
+    # HPO output leaves every family on its config defaults.
+    hpo_dir = hpo_params_dir(project_root, pipeline)
+    if hpo_dir:
+        logging.info("[HPO] Using pre-computed HPO params from: %s", hpo_dir)
+    else:
+        logging.info("[HPO] No HPO study found; using configs/models defaults.")
 
     target_col = experiment_cfg.get("data", {}).get("target", "heart_disease")
 
@@ -775,7 +785,9 @@ def run_analysis(
             )
 
             for model_type in model_types:
-                model_params = _load_model_params(project_root, model_type)
+                model_params = _load_model_params(
+                    project_root, model_type, dataset=dataset_name, hpo_dir=hpo_dir
+                )
 
                 # Train this family's own baseline. Post-processing wraps it, so
                 # it must be the same family as the rows it will be compared to.

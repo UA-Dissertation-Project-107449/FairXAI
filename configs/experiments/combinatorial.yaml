@@ -35,7 +35,8 @@ binning_strategies:
 #
 # NOTE on grid_search: this is fairlearn.GridSearchReduction (lambda sweep for
 #   fairness-accuracy trade-off), NOT sklearn GridSearchCV for hyperparameter tuning.
-#   Hyperparameter tuning is handled separately via model_variants below.
+#   Hyperparameter tuning happens in stage 5 (run_hpo.py); this sweep reads its
+#   best params from output/<pipeline>/studies/hpo.
 mitigation_techniques:
   - baseline
   - reweighting
@@ -99,51 +100,13 @@ mitigation_combo_model_types:
   - svm
   - xgboost
 
-# Model variants: experiment-specific overrides merged onto base hyperparameters.
-# Base params are loaded from configs/models/<model_type>.yaml at runtime.
-# Only define keys here that differ from the model file defaults.
-model_variants:
-  logistic_regression:
-    - name: c_1_0
-      params:
-        C: 1.0
-    - name: c_0_5
-      params:
-        C: 0.5
-
-  random_forest:
-    - name: rf_shallow
-      params:
-        n_estimators: 250
-        max_depth: 8
-    - name: rf_deeper
-      params:
-        n_estimators: 350
-        max_depth: 14
-
-  svm:
-    - name: svm_linear
-      params:
-        kernel: linear
-        C: 1.0
-    # svm_rbf is the arm that distinguishes the SVM family from logistic
-    # regression — svm_linear and LR produce near-identical decision
-    # boundaries on this data, so without RBF the family adds little.
-    # The RBF kernel is O(n²) in training: fine at 303/918 rows (a fraction of
-    # a second), hours on cardio70k. Comment this variant back out before
-    # running cardio70k, or gate it on dataset size in the runner.
-    - name: svm_rbf
-      params:
-        kernel: rbf
-        C: 1.0
-        gamma: scale
-
-  xgboost:
-    - name: xgb_small
-      params:
-        n_estimators: 200
-        max_depth: 4
-        learning_rate: 0.05
+# Model variants: deliberate sensitivity checks only. The hand-written params
+# that used to live here (c_1_0, rf_shallow, svm_linear, xgb_small, ...) were
+# merged after the HPO best params and overwrote them, so the sweep reported
+# untuned models. Tuned params now come from output/<pipeline>/studies/hpo, and
+# a family with no variant contributes one cell per combination, named "tuned".
+# The SVM kernel is in the HPO search space, so svm_linear is no longer needed.
+model_variants: {}
 
 # Cross-validation settings
 cv_folds: 5

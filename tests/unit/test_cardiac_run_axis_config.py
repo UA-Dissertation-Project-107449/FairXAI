@@ -85,15 +85,27 @@ class TestMitigationModelFamilies:
         assert families == self._ALL
 
 
-def test_both_svm_variants_are_enabled() -> None:
-    """Linear SVM and logistic regression are near-duplicates on this data.
+def test_sweep_declares_no_hand_written_model_variants() -> None:
+    """The sweep must fit the tuned model, not hand-written hyperparameters.
 
-    The RBF arm is the one that can separate them, so it has to be live for
-    the SVM family to contribute anything the LR family does not.
+    The variants this block used to hold were merged on top of the HPO best
+    params, so every sweep cell silently discarded the tuning that stage 7
+    reported. Tuned params now come from the HPO study; an entry here is a
+    deliberate sensitivity check and has to be added knowingly.
     """
-    variants = _yaml("experiments/combinatorial.yaml")["model_variants"]["svm"]
-    names = {str(v["name"]) for v in variants}
-    assert names == {"svm_linear", "svm_rbf"}
+    assert _yaml("experiments/combinatorial.yaml")["model_variants"] == {}
 
-    kernels = {str(v["name"]): v["params"]["kernel"] for v in variants}
-    assert kernels == {"svm_linear": "linear", "svm_rbf": "rbf"}
+
+def test_hpo_searches_the_svm_kernel() -> None:
+    """The RBF arm stays reachable without a hand-written svm variant.
+
+    Linear SVM and logistic regression are near-duplicates on this data, so the
+    SVM family only contributes something if the RBF kernel can be selected.
+    HPO searches the kernel and drops rbf above max_rows_for_rbf_svm rows, which
+    is what the old svm_linear/svm_rbf pair was standing in for.
+    """
+    hpo = _yaml("experiments/hpo.yaml")
+    kernels = hpo["grids"]["svm"]["params"]["kernel"]
+
+    assert set(kernels) == {"linear", "rbf"}
+    assert int(hpo["max_rows_for_rbf_svm"]) > 0

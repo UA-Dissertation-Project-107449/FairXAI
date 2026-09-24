@@ -50,7 +50,6 @@ from fairxai.models import get_model_class
 from fairxai.models.baseline import generate_predictions_with_metadata
 from fairxai.models.cv_trainer import CVTrainer
 from fairxai.training.vision import train_image_baseline
-from fairxai.utils.config import load_yaml_config
 
 ALLOWED_TRAINING_METHODS = {"single_split", "kfold_cv"}
 
@@ -601,7 +600,6 @@ def _apply_model_thread_override(
 
 def _build_model_params(
     model_type: str,
-    training_cfg: dict,
     random_state: int,
     project_root: Path,
     hpo_dir: Optional[Path] = None,
@@ -612,23 +610,19 @@ def _build_model_params(
     When ``hpo_dir`` and ``dataset_name`` are provided, best params from a
     previous :func:`~fairxai.training.grid_search.run_hpo` run are merged on
     top of the base config, overriding only the searched keys.
+
+    Delegates to :func:`fairxai.training.grid_search.resolve_model_params`
+    so stages 10 and 11 train the same tuned model this stage reports.
     """
-    from fairxai.training.grid_search import load_hpo_params
+    from fairxai.training.grid_search import resolve_model_params
 
-    model_cfg_path = project_root / "configs" / "models" / f"{model_type}.yaml"
-    params = dict(load_yaml_config(str(model_cfg_path)).get("hyperparameters", {}))
-    params.setdefault("random_state", random_state)
-
-    if hpo_dir is not None and dataset_name is not None:
-        hpo_best = load_hpo_params(hpo_dir, dataset_name, model_type)
-        if hpo_best:
-            logging.info(f"  [HPO] Loaded best params for {model_type}/{dataset_name}: {hpo_best}")
-            params.update(hpo_best)
-        else:
-            logging.debug(
-                f"  [HPO] No saved params found for {model_type}/{dataset_name}; " "using defaults."
-            )
-    return params
+    return resolve_model_params(
+        project_root,
+        model_type,
+        dataset=dataset_name,
+        hpo_dir=hpo_dir,
+        random_state=random_state,
+    ).params
 
 
 def _is_shap_enabled_for_model(model_type: str, xai_cfg: dict) -> bool:
@@ -1215,7 +1209,6 @@ def main():
                 hpo_dir = project_root / f"output/{pipeline}/studies/hpo" if use_hpo else None
                 model_params = _build_model_params(
                     model_type,
-                    training_cfg,
                     random_state,
                     project_root,
                     hpo_dir=hpo_dir,

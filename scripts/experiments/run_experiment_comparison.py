@@ -1004,7 +1004,8 @@ def run_comparison_analysis(
     df_success["fairness_gap"] = df_success[fairness_cols].max(axis=1, skipna=True)
 
     # Compute metric-level deltas vs matching baseline.
-    # Exact key includes model_variant so LR c_0_5/c_1_0 baselines do not overwrite each other.
+    # Exact key includes model_variant so sensitivity-check cells do not
+    # overwrite the tuned cell's baseline (and vice versa) for the same family.
     fairness_metric_cols = [
         c for c in df_success.columns if c.startswith("dem_parity_") or c.startswith("eq_odds_")
     ]
