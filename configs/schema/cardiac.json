@@ -146,8 +146,9 @@
       "sensitive_attributes": {
         "age": {
           "type": "continuous",
-          "bins": [0, 40, 50, 60, 70, 120],
-          "labels": ["<40", "40-49", "50-59", "60-69", "70+"]
+          "_bins_note": "60+ instead of 60-69/70+: only 6 of 303 patients are 70+, so a held-out split leaves one 70+ test patient and every fairness gap on that stratum is that one person. four_site_uci keeps the 70+ band (24 patients).",
+          "bins": [0, 40, 50, 60, 120],
+          "labels": ["<40", "40-49", "50-59", "60+"]
         },
         "sex": {
           "type": "categorical",
