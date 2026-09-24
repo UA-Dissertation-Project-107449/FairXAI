@@ -98,6 +98,27 @@ mitigation_strategies:
       n_neighbors: 5
       random_state: 42
   
+  # smote, ros, rus and adasyn above balance the label only: they ignore the
+  # constraint attribute, so they are label-balancing controls, not fairness
+  # techniques. The two below balance every (group x label) cell instead.
+  
+  uniform_sampling:
+    stage: "pre-processing"
+    method: "group_uniform_oversampling"
+    library: "imblearn"
+    description: "Duplicate rows until every (group x label) cell has the same size"
+    parameters:
+      random_state: 42
+  
+  smote_group:
+    stage: "pre-processing"
+    method: "group_aware_synthetic_oversampling"
+    library: "imblearn"
+    description: "Synthesise rows until every (group x label) cell has the same size"
+    parameters:
+      k_neighbors: 5
+      random_state: 42
+  
   # === In-processing Techniques ===
   # Fairness-aware training algorithms
   

@@ -16,7 +16,9 @@ MITIGATION_LABELS = {
     "smote+exponentiated_gradient": "SMOTE + EG",
     "smote+exponentiated_gradient+threshold_optimizer": "SMOTE + EG + TO",
     "smote+threshold_optimizer": "SMOTE + TO",
+    "smote_group": "Group SMOTE",
     "threshold_optimizer": "Threshold Opt.",
+    "uniform_sampling": "Group-uniform",
 }
 
 

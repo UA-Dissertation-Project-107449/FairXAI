@@ -5,7 +5,8 @@ Run fairness mitigation comparison experiment.
 This script:
 1. Loads preprocessed train/test datasets
 2. Trains baseline models (no mitigation)
-3. Applies pre-processing mitigation techniques (SMOTE, ROS, RUS, ADASYN, reweighting)
+3. Applies pre-processing mitigation techniques (SMOTE, ROS, RUS, ADASYN, reweighting,
+   and the group-aware uniform_sampling and smote_group)
 4. Applies in-processing techniques (ExponentiatedGradient, GridSearch)
 5. Applies post-processing techniques (ThresholdOptimizer)
 6. Computes fairness metrics for each technique
@@ -760,6 +761,8 @@ def run_analysis(
         "ros": techniques["ros"],
         "rus": techniques["rus"],
         "adasyn": techniques["adasyn"],
+        "uniform_sampling": techniques["uniform_sampling"],
+        "smote_group": techniques["smote_group"],
         "reweighting": techniques["reweighting"],
         "exponentiated_gradient": techniques["exponentiated_gradient"],
         "grid_search": techniques["grid_search"],

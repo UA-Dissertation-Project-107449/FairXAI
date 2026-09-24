@@ -305,6 +305,120 @@ class PreProcessingMitigation:
             y_resampled, name=y_train.name
         )
 
+    # SMOTE, ADASYN, ROS and RUS balance the label and ignore the attribute they
+    # are reported under, so on near-balanced cohorts they change nothing. The two
+    # methods below resample every (group x label) cell instead, which targets the
+    # attribute the technique is constrained on.
+
+    @staticmethod
+    def _group_label_codes(
+        y_train: pd.Series, sensitive_features: pd.DataFrame, sensitive_attr: str
+    ) -> Tuple[np.ndarray, Dict[int, Any]]:
+        """Encode each (group, label) cell as one integer code.
+
+        Returns the per-row codes and a map back to the original label, so a
+        sampler balancing the codes balances the cells.
+        """
+        if sensitive_attr not in sensitive_features.columns:
+            raise ValueError(
+                f"Group-aware resampling needs '{sensitive_attr}' in the sensitive "
+                f"columns: {list(sensitive_features.columns)}"
+            )
+
+        groups = np.asarray(sensitive_features[sensitive_attr]).astype(str)
+        labels = np.asarray(y_train)
+        pairs = list(zip(groups, labels.tolist()))
+        code_of = {pair: code for code, pair in enumerate(dict.fromkeys(pairs))}
+        codes = np.array([code_of[pair] for pair in pairs])
+        label_of = {code: pair[1] for pair, code in code_of.items()}
+        return codes, label_of
+
+    @classmethod
+    def apply_group_uniform_sampling(
+        cls,
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        sensitive_features: pd.DataFrame,
+        sensitive_attr: str = "sex",
+        random_state: int = 42,
+    ) -> Tuple[pd.DataFrame, pd.Series]:
+        """Duplicate rows until every (group x label) cell has the same size.
+
+        Args:
+            X_train: Training features
+            y_train: Training labels
+            sensitive_features: DataFrame with sensitive attributes
+            sensitive_attr: Attribute whose groups are balanced against the label
+            random_state: Random seed
+
+        Returns:
+            Tuple of (X_resampled, y_resampled)
+        """
+        logger.info(f"Applying group-uniform over-sampling on {sensitive_attr}")
+        codes, label_of = cls._group_label_codes(y_train, sensitive_features, sensitive_attr)
+        logger.info(f"  Before: {len(X_train)} samples, {len(label_of)} group x label cells")
+
+        sampler = RandomOverSampler(sampling_strategy="all", random_state=random_state)
+        X_resampled, codes_resampled = sampler.fit_resample(X_train, codes)
+
+        y_resampled = pd.Series(
+            [label_of[code] for code in codes_resampled], name=y_train.name
+        ).astype(y_train.dtype)
+        logger.info(f"  After: {len(X_resampled)} samples")
+
+        return pd.DataFrame(X_resampled, columns=X_train.columns), y_resampled
+
+    @classmethod
+    def apply_smote_group(
+        cls,
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        sensitive_features: pd.DataFrame,
+        sensitive_attr: str = "sex",
+        k_neighbors: int = 5,
+        random_state: int = 42,
+    ) -> Tuple[pd.DataFrame, pd.Series]:
+        """Synthesise rows until every (group x label) cell has the same size.
+
+        Args:
+            X_train: Training features
+            y_train: Training labels
+            sensitive_features: DataFrame with sensitive attributes
+            sensitive_attr: Attribute whose groups are balanced against the label
+            k_neighbors: Number of nearest neighbors for synthesis
+            random_state: Random seed
+
+        Returns:
+            Tuple of (X_resampled, y_resampled)
+        """
+        logger.info(f"Applying group-aware SMOTE on {sensitive_attr} (k={k_neighbors})")
+        codes, label_of = cls._group_label_codes(y_train, sensitive_features, sensitive_attr)
+        logger.info(f"  Before: {len(X_train)} samples, {len(label_of)} group x label cells")
+
+        min_count = int(pd.Series(codes).value_counts().min()) if len(codes) else 0
+        if min_count < 2:
+            logger.warning("Group-aware SMOTE skipped: a group x label cell has < 2 samples")
+            return X_train.copy(), y_train.copy()
+
+        sampler = SMOTE(
+            sampling_strategy="all",
+            k_neighbors=min(k_neighbors, max(min_count - 1, 1)),
+            random_state=random_state,
+        )
+
+        try:
+            X_resampled, codes_resampled = sampler.fit_resample(X_train, codes)
+        except ValueError as e:
+            logger.warning(f"Group-aware SMOTE failed ({e}); falling back to no resampling")
+            return X_train.copy(), y_train.copy()
+
+        y_resampled = pd.Series(
+            [label_of[code] for code in codes_resampled], name=y_train.name
+        ).astype(y_train.dtype)
+        logger.info(f"  After: {len(X_resampled)} samples")
+
+        return pd.DataFrame(X_resampled, columns=X_train.columns), y_resampled
+
 
 class InProcessingMitigation:
     """In-processing fairness mitigation techniques.
@@ -500,7 +614,15 @@ class MitigationEngine:
 
     # Valid stages and constraints
     VALID_STAGES = ["pre-processing", "in-processing", "post-processing"]
-    VALID_PREPROCESSING = ["reweighting", "smote", "ros", "rus", "adasyn"]
+    VALID_PREPROCESSING = [
+        "reweighting",
+        "smote",
+        "ros",
+        "rus",
+        "adasyn",
+        "uniform_sampling",
+        "smote_group",
+    ]
     VALID_INPROCESSING = ["exponentiated_gradient", "grid_search"]
     VALID_POSTPROCESSING = ["threshold_optimizer"]
 
@@ -966,6 +1088,21 @@ class MitigationEngine:
                 self._new_model(), X_train, y_train, sample_weights
             )
             X_train_processed, y_train_processed = X_train, y_train
+
+        elif technique_name in ("uniform_sampling", "smote_group"):
+            resampler = {
+                "uniform_sampling": self.preprocessing.apply_group_uniform_sampling,
+                "smote_group": self.preprocessing.apply_smote_group,
+            }[technique_name]
+            X_train_processed, y_train_processed = resampler(
+                X_train,
+                y_train,
+                sensitive_train,
+                sensitive_attr,
+                random_state=self.random_state,
+            )
+            model = self._new_model()
+            model.train(X_train_processed, y_train_processed)
 
         elif technique_name in ("smote", "ros", "rus", "adasyn"):
             resampler = {
