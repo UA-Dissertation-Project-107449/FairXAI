@@ -773,8 +773,8 @@ def main():
         default=None,
         help=(
             "Extract frozen-backbone features once and train only the head over them "
-            "(requires --freeze-backbone). Much faster, but uses an eval-mode backbone "
-            "so BatchNorm/dropout differ from the default train-mode path."
+            "(requires --freeze-backbone). Much faster; the frozen backbone runs in "
+            "eval mode either way, so the trained model is the same."
         ),
     )
     parser.add_argument(

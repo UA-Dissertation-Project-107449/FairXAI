@@ -650,10 +650,13 @@ def train_image_baseline(
     When ``cache_frozen_features`` is True *and* ``freeze_backbone`` is True, the
     backbone is run once in eval mode to cache pooled features, and only the linear
     head is trained over those cached vectors. This skips per-epoch image decode and
-    backbone forwards, so cost becomes near-independent of epoch count. Note: this
-    uses the pretrained backbone's frozen BatchNorm stats with dropout disabled, so
-    results differ from the default path, which keeps the backbone in train mode and
-    lets its BatchNorm running stats adapt across epochs.
+    backbone forwards, so cost becomes near-independent of epoch count.
+
+    Both paths train the same model: a frozen backbone is kept in eval mode, so
+    BatchNorm uses the pretrained running statistics and dropout is off whether
+    the features are cached or recomputed each epoch. Caching is then a speed-up
+    and nothing else, and an augmented arm (which cannot cache) differs from a
+    cached arm by augmentation alone.
     """
     torch, nn, Image, DataLoader, Dataset, models, transforms = _require_torch()
 
@@ -911,11 +914,14 @@ def train_image_baseline(
         epochs_run = 0
         for epoch in range(epochs):
             epoch_start = time.perf_counter()
-            # Standard (non-cache) path: backbone runs in train() so frozen-weight
-            # BatchNorm running stats still adapt to the (augmented) train distribution.
-            # This is the documented behavior of this path and is kept intentionally under
-            # augmentation — accepted as a methodological choice, not an oversight.
-            model.train()
+            # A frozen backbone stays in eval() so BatchNorm keeps the ImageNet
+            # running statistics and the dropout inside the classifier block is
+            # off. model.train() froze the weights but not the statistics: they
+            # drifted toward PAD-UFES-20 batch by batch, so this path trained a
+            # different model from the cached one and the augmentation comparison
+            # carried that difference as well as augmentation. eval() does not
+            # stop gradients; only the head has requires_grad.
+            model.train(mode=not freeze_backbone)
             total_loss = 0.0
             total_seen = 0
             for images, labels, _ in fit_loader:
@@ -1024,6 +1030,9 @@ def train_image_baseline(
             "image_size": image_size,
             "pretrained": pretrained,
             "freeze_backbone": freeze_backbone,
+            # eval when the backbone is frozen, so BatchNorm kept the pretrained
+            # statistics. Recorded because it decides which model was trained.
+            "backbone_train_mode": "train" if not freeze_backbone else "eval",
             "feature_cache": feature_cache,
             "device_requested": device_request,
             "device_resolved": resolved,
@@ -1067,6 +1076,7 @@ def train_image_baseline(
             "image_size": image_size,
             "pretrained": pretrained,
             "freeze_backbone": freeze_backbone,
+            "backbone_train_mode": "train" if not freeze_backbone else "eval",
             "num_workers": num_workers,
             "cache_frozen_features": cache_frozen_features,
             "use_augmentation": use_augmentation,
