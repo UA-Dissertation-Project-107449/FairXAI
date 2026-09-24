@@ -205,12 +205,16 @@ class ClusteringEngine:
             )
 
         group_cluster = pd.Series(best_labels, index=df.index, name="group_cluster", dtype=int)
+        n_noise = int(best_diag.n_noise or 0)
+        noise_fraction = n_noise / n_samples if n_samples else 0.0
 
         logger.info(
-            "[SUCCESS] Best clustering: method=%s n_clusters=%d silhouette=%.4f",
+            "[SUCCESS] Best clustering: method=%s n_clusters=%d silhouette=%.4f noise=%d (%.1f%%)",
             best_diag.method,
             best_diag.n_clusters,
             best_sil,
+            n_noise,
+            noise_fraction * 100,
         )
 
         return ClusterResult(
@@ -220,6 +224,8 @@ class ClusteringEngine:
             silhouette=best_sil,
             feature_cols=cols,
             diagnostics=all_diagnostics,
+            n_noise=n_noise,
+            noise_fraction=noise_fraction,
         )
 
     def save_diagnostics(self, result: ClusterResult, output_dir: Path) -> Path:
@@ -445,20 +451,31 @@ class ClusteringEngine:
                             params={"eps": eps, "min_samples": min_s},
                             n_clusters=n_clusters,
                             silhouette=None,
+                            n_noise=int(n_noise),
                             note=f"only {n_clusters} cluster(s) + {n_noise} noise",
                         )
                         diagnostics.append(diag)
                         continue
 
-                    # Re-label so cluster ids are 0..k-1 (noise stays excluded)
-                    labels_clean = labels_raw[mask]
-                    sil = silhouette_score(X[mask], labels_clean)
+                    # Keep DBSCAN noise separate instead of folding it into the
+                    # largest cluster; the noise label is one of the groups
+                    # downstream, so it is one of the groups the score is about.
+                    relabeled = labels_raw.copy()
+                    if n_noise > 0:
+                        relabeled[~mask] = n_clusters
+
+                    # Score every point, noise included. Scoring the kept points
+                    # alone paid DBSCAN for discarding the rows it fitted worst,
+                    # so a solution that called 18% of the cohort noise beat a
+                    # KMeans partition of all of it.
+                    sil = silhouette_score(X, relabeled)
                     if noise_fraction > max_noise_fraction:
                         diag = ClusterDiagnostics(
                             method="dbscan",
                             params={"eps": eps, "min_samples": min_s},
                             n_clusters=n_clusters,
                             silhouette=sil,
+                            n_noise=int(n_noise),
                             note=(
                                 f"rejected: noise_fraction={noise_fraction:.1%} "
                                 f"> max_noise_fraction={max_noise_fraction:.1%}"
@@ -472,18 +489,15 @@ class ClusteringEngine:
                         params={"eps": eps, "min_samples": min_s},
                         n_clusters=n_clusters + int(n_noise > 0),
                         silhouette=sil,
+                        n_noise=int(n_noise),
                         note=(
-                            f"{n_noise} noise points kept as noise cluster"
+                            f"{n_noise} noise points ({noise_fraction:.1%}) kept "
+                            f"as noise cluster and scored"
                             if n_noise > 0
                             else "no noise"
                         ),
                     )
                     diagnostics.append(diag)
-
-                    # Keep DBSCAN noise separate instead of folding it into the largest cluster.
-                    relabeled = labels_raw.copy()
-                    if n_noise > 0:
-                        relabeled[~mask] = n_clusters
 
                     if best is None or sil > best[0]:
                         best = (sil, relabeled, diag)

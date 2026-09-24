@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from sklearn.metrics import silhouette_score
 
 from fairxai.clustering import ClusteringEngine, ClusteringError
 
@@ -412,3 +413,70 @@ class TestClusteringEngineDbscanMemoryBudget:
             engine.fit(df, feature_cols=["feat_a", "feat_b"])
 
         assert "No clustering method produced a valid solution" in str(excinfo.value)
+
+
+def _blobs_with_planted_noise(n_noise=9, seed=11):
+    """Two tight blobs plus scattered points no blob can claim.
+
+    The noise points are the whole question: DBSCAN sets them aside, KMeans has
+    to absorb them. Scored on the kept points only, DBSCAN was paid for the
+    discarding; scored on all of them it is not.
+    """
+    rng = np.random.default_rng(seed)
+    cluster_a = rng.normal(0.0, 0.05, size=(21, 2))
+    cluster_b = rng.normal(4.0, 0.05, size=(20, 2))
+    noise = rng.uniform(-8.0, 12.0, size=(n_noise, 2))
+    X = np.vstack([cluster_a, cluster_b, noise])
+    return pd.DataFrame(X, columns=["feat_a", "feat_b"])
+
+
+class TestDbscanNoiseIsScored:
+    """DBSCAN is scored on every point, with noise as the label it really is."""
+
+    _DBSCAN_CFG = {
+        "dbscan": {"parameters": {"eps": [0.4], "min_samples": [3], "max_noise_fraction": 0.30}}
+    }
+
+    def test_silhouette_is_the_all_points_score(self):
+        from sklearn.preprocessing import StandardScaler
+
+        df = _blobs_with_planted_noise()
+        engine = ClusteringEngine(config=self._DBSCAN_CFG)
+        result = engine.fit(df, feature_cols=["feat_a", "feat_b"])
+
+        assert result.method == "dbscan"
+        assert result.n_noise > 0
+
+        X = StandardScaler().fit_transform(df[["feat_a", "feat_b"]].values)
+        labels = result.group_cluster.to_numpy()
+        noise_label = labels.max()
+        kept = labels != noise_label
+
+        all_points = silhouette_score(X, labels)
+        kept_only = silhouette_score(X[kept], labels[kept])
+
+        assert result.silhouette == pytest.approx(all_points)
+        # The old rule; kept here so the test fails if the score drifts back to it.
+        assert kept_only > all_points
+
+    def test_a_partition_of_every_point_wins_over_one_that_discards(self):
+        df = _blobs_with_planted_noise()
+        cfg = {
+            "kmeans": {"parameters": {"n_clusters": [2, 3], "n_init": 10, "random_state": 0}},
+            **self._DBSCAN_CFG,
+        }
+        engine = ClusteringEngine(config=cfg)
+        result = engine.fit(df, feature_cols=["feat_a", "feat_b"])
+
+        assert result.method == "kmeans"
+        assert result.n_noise == 0
+
+    def test_noise_count_is_reported(self, tmp_path):
+        df = _blobs_with_planted_noise()
+        engine = ClusteringEngine(config=self._DBSCAN_CFG)
+        result = engine.fit(df, feature_cols=["feat_a", "feat_b"])
+
+        assert result.noise_fraction == pytest.approx(result.n_noise / len(df))
+        saved = pd.read_csv(engine.save_diagnostics(result, tmp_path))
+        assert "n_noise" in saved.columns
+        assert saved["n_noise"].max() == result.n_noise
