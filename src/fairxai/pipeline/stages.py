@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -9,7 +10,7 @@ import socket
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -393,3 +394,100 @@ def validate_prior_stages(
             f"Hint: re-run the full pipeline or an earlier --resume-from to "
             f"generate the missing checkpoint markers."
         )
+
+
+# ---------------------------------------------------------------------------
+# Run manifest
+# ---------------------------------------------------------------------------
+# Checkpoint markers prove a stage finished; they say nothing about what it
+# finished *on*. Resuming a run after editing a config, or with a narrower
+# --datasets, silently mixes two experiments under one run ID, and the mixture
+# is only visible later as results that do not add up. The manifest records the
+# inputs stage 1 ran with so a resume can refuse the mismatch.
+
+RUN_MANIFEST_FILENAME = "run_manifest.json"
+
+# Fields compared on resume, in the order differences are reported.
+_MANIFEST_COMPARED_FIELDS = ("pipeline", "datasets", "model_types", "config_hashes", "flags")
+
+
+def _file_digest(path: Path) -> str:
+    """Short content hash for a config file, or a marker when it is absent."""
+    if not path.is_file():
+        return "missing"
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+
+def build_run_manifest(
+    pipeline: str,
+    datasets: Sequence[str],
+    model_types: Sequence[str],
+    config_paths: Sequence[Path],
+    flags: Optional[Dict[str, str]] = None,
+    project_root: Optional[Path] = None,
+) -> Dict:
+    """Describe the inputs one invocation of the pipeline is running with."""
+    root = Path(project_root) if project_root else None
+    hashes = {}
+    for raw in config_paths:
+        path = Path(raw)
+        try:
+            key = str(path.relative_to(root)) if root else path.name
+        except ValueError:
+            key = path.name
+        hashes[key] = _file_digest(path)
+
+    return {
+        "pipeline": pipeline,
+        "datasets": sorted(str(d) for d in datasets),
+        "model_types": sorted(str(m) for m in model_types),
+        "config_hashes": dict(sorted(hashes.items())),
+        "flags": dict(sorted((str(k), str(v)) for k, v in (flags or {}).items())),
+    }
+
+
+def write_run_manifest(run_root: Path, manifest: Dict) -> Path:
+    """Record the manifest under ``run_root``, stamped with when it was written."""
+    run_root = Path(run_root)
+    run_root.mkdir(parents=True, exist_ok=True)
+    path = run_root / RUN_MANIFEST_FILENAME
+    payload = {**manifest, "written_at": datetime.now().isoformat()}
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+    logger.debug("Run manifest written: %s", path)
+    return path
+
+
+def read_run_manifest(run_root: Path) -> Optional[Dict]:
+    """Return the recorded manifest, or None when the run predates it."""
+    path = Path(run_root) / RUN_MANIFEST_FILENAME
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError:
+        logger.warning("Run manifest at %s is not readable JSON; treating it as absent", path)
+        return None
+
+
+def compare_run_manifests(recorded: Dict, current: Dict) -> List[str]:
+    """Human-readable differences between a recorded manifest and this run.
+
+    Config hashes and flags are compared key by key, because "the hashes
+    differ" does not say which config was edited, which is the one thing the
+    operator needs in order to decide whether the resume is safe.
+    """
+    differences: List[str] = []
+    for field_name in _MANIFEST_COMPARED_FIELDS:
+        was, now = recorded.get(field_name), current.get(field_name)
+        if was == now:
+            continue
+        if isinstance(was, dict) and isinstance(now, dict):
+            for key in sorted(set(was) | set(now)):
+                if was.get(key) != now.get(key):
+                    differences.append(
+                        f"{field_name}[{key}]: run started with "
+                        f"{was.get(key, '<unset>')}, now {now.get(key, '<unset>')}"
+                    )
+        else:
+            differences.append(f"{field_name}: run started with {was}, now {now}")
+    return differences

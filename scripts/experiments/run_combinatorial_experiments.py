@@ -59,7 +59,7 @@ from fairxai.training.grid_search import (
     load_base_params,
     resolve_model_params,
 )
-from fairxai.utils.config import load_yaml_config
+from fairxai.utils.config import dataset_excluded_model_types, load_yaml_config
 from fairxai.utils.gpu import detect_accelerator
 
 logger = logging.getLogger(__name__)
@@ -1758,10 +1758,19 @@ def run_combinatorial_analysis(
             fairness_base_params = fairness_base_params_cfg
         if not fairness_base_params:
             fairness_base_params = _load_model_config(project_root, "logistic_regression")
+        excluded_here = dataset_excluded_model_types(config, dataset)
+        if excluded_here:
+            logger.info(
+                "Dataset %s excludes model families %s per dataset_overrides",
+                dataset,
+                sorted(excluded_here),
+            )
         for binning in config["binning_strategies"]:
             for mitigation in config["mitigation_techniques"]:
                 for training_method in config["training_methods"]:
                     for model_type in model_types:
+                        if model_type in excluded_here:
+                            continue
                         # Skip mitigation for models not in the supported set (baseline always runs).
                         if (
                             mitigation != "baseline"
@@ -1817,9 +1826,12 @@ def run_combinatorial_analysis(
                 fairness_base_params = fairness_base_params_cfg
             if not fairness_base_params:
                 fairness_base_params = _load_model_config(project_root, "logistic_regression")
+            excluded_here = dataset_excluded_model_types(config, dataset)
             for binning in config["binning_strategies"]:
                 for training_method in config["training_methods"]:
                     for model_type in combo_model_types:
+                        if model_type in excluded_here:
+                            continue
                         for variant in _resolve_model_variants(
                             config,
                             model_type,

@@ -186,6 +186,16 @@ VERBOSE_FLAG=""
 (( VERBOSE >= 2 )) && VERBOSE_FLAG="-vv"
 (( VERBOSE == 1 )) && VERBOSE_FLAG="-v"
 
+# Run manifest — what this run is running on, not just how far it got.
+_MANIFEST_RESUMING=0
+[[ -f "$RUN_ROOT/run_manifest.json" ]] && _MANIFEST_RESUMING=1
+run_manifest_guard \
+    "$ROOT_DIR" "$RUN_ROOT" dermatology "$_MANIFEST_RESUMING" \
+    "$(IFS=,; echo "${DATASETS[*]:-}")" \
+    "$(IFS=,; echo "${MODEL_TYPES[*]:-}")" \
+    "device=${DEVICE:-default},epochs=${EPOCHS:-default},batch_size=${BATCH_SIZE:-default}" \
+    "$ROOT_DIR/configs/pipelines/dermatology.yaml"
+
 DATASET_ARGS=()
 (( ${#DATASETS[@]} > 0 )) && DATASET_ARGS=(--datasets "${DATASETS[@]}")
 MODEL_TYPE_ARGS=()

@@ -219,6 +219,13 @@ evaluation:
     - recall_vs_equalized_odds
     - calibration_vs_demographic_parity
 
+# Per-cohort family exclusions, same key the sweep reads. SVM's RBF kernel is
+# O(n^2) in rows and the resamplers add rows, so cardio70k drops it.
+dataset_overrides:
+  cardio70k:
+    exclude_model_types:
+      - svm
+
 # Paired bootstrap over the change each arm makes against its own baseline.
 # Both arms predict the same test rows, so one resample serves both and the
 # shared cohort noise cancels.

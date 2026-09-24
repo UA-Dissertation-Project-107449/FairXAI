@@ -53,7 +53,7 @@ from fairxai.fairness.uncertainty import (
 )
 from fairxai.models import generate_predictions_with_metadata, get_model_class
 from fairxai.training.grid_search import hpo_params_dir, resolve_model_params
-from fairxai.utils.config import load_yaml_config
+from fairxai.utils.config import dataset_excluded_model_types, load_yaml_config
 
 
 def load_dataset(
@@ -872,7 +872,19 @@ def run_analysis(
                 load_dataset(dataset_name, dataset_dir, schema_cfg, target_col, sensitive_attrs)
             )
 
+            # Families this cohort must not run, recorded in config rather than
+            # remembered: SVM's RBF kernel is O(n^2) in rows and the resamplers
+            # add rows, so cardio70k drops it.
+            excluded_here = dataset_excluded_model_types(experiment_cfg, dataset_name)
+            if excluded_here:
+                logging.info(
+                    "Dataset %s excludes model families %s per dataset_overrides",
+                    dataset_name,
+                    sorted(excluded_here),
+                )
             for model_type in model_types:
+                if model_type in excluded_here:
+                    continue
                 model_params = _load_model_params(
                     project_root, model_type, dataset=dataset_name, hpo_dir=hpo_dir
                 )

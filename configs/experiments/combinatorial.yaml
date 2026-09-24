@@ -100,6 +100,14 @@ mitigation_combo_model_types:
   - svm
   - xgboost
 
+# Per-cohort family exclusions. The SVM caveats above were comments an operator
+# had to remember; here they are part of the run, so re-enabling cardio70k does
+# not also need three edits elsewhere.
+dataset_overrides:
+  cardio70k:
+    exclude_model_types:
+      - svm
+
 # Model variants: deliberate sensitivity checks only. The hand-written params
 # that used to live here (c_1_0, rf_shallow, svm_linear, xgb_small, ...) were
 # merged after the HPO best params and overwrote them, so the sweep reported

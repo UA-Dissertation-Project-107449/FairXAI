@@ -462,6 +462,30 @@ if [[ -n "$RESUME_FROM" ]] && (( START_NUM > 1 )); then
 fi
 
 # ======================================================================
+# Run manifest — what this run is running on, not just how far it got
+# ======================================================================
+_MANIFEST_RESUMING=0
+[[ -f "$RUN_ROOT/run_manifest.json" ]] && _MANIFEST_RESUMING=1
+_MANIFEST_FLAGS="hpo_study=$RUN_HPO_STUDY,feature_selection_study=$RUN_FEATURE_SELECTION_STUDY"
+_MANIFEST_FLAGS+=",attribute_binning=$RUN_ATTRIBUTE_BINNING,mitigation=$RUN_MITIGATION"
+_MANIFEST_FLAGS+=",combinatorial=$RUN_COMBINATORIAL,comparison=$RUN_COMPARISON"
+_MANIFEST_FLAGS+=",recommendations=$RUN_RECOMMENDATIONS,max_samples=${MAX_SAMPLES:-default}"
+_MANIFEST_FLAGS+=",strict_shap=$STRICT_SHAP"
+run_manifest_guard \
+    "$ROOT_DIR" "$RUN_ROOT" cardiac "$_MANIFEST_RESUMING" \
+    "$(IFS=,; echo "${DATASETS[*]:-}")" \
+    "$(IFS=,; echo "${MODEL_TYPES[*]:-}")" \
+    "$_MANIFEST_FLAGS" \
+    "$ROOT_DIR/configs/pipelines/cardiac.yaml" \
+    "$ATTRIBUTE_BINNING_CONFIG" \
+    "$GROUPING_CONFIG" \
+    "$MITIGATION_CONFIG" \
+    "$COMBINATORIAL_CONFIG" \
+    "$HPO_CONFIG" \
+    "$FEATURE_SELECTION_STUDY_CONFIG" \
+    "$COMPARISON_CONFIG"
+
+# ======================================================================
 # Banner
 # ======================================================================
 echo "======================================================================"
