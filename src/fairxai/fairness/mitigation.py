@@ -114,6 +114,30 @@ def _fit_with_sample_weight(model, X_train, y_train, sample_weight):
     return model, True
 
 
+def resolve_single_estimator(model: Any) -> Optional[Any]:
+    """The one fitted estimator behind a mitigated arm, or ``None`` if there is none.
+
+    Only used by callers that need to inspect an arm's model rather than its
+    predictions — SHAP, for instance. The arm shapes are:
+
+    - a fairxai wrapper (pre-processing, baseline), which keeps sklearn in ``.model``;
+    - ``GridSearch``, which fits a grid and then predicts with a single chosen
+      member, ``predictors_[best_idx_]``, so it does have one estimator;
+    - ``ExponentiatedGradient``, which predicts by drawing a member of
+      ``predictors_`` per row from the distribution ``weights_``. No single
+      member is the model, so this returns ``None``;
+    - a post-processor, which holds no estimator of its own.
+    """
+    wrapped = getattr(model, "model", None)
+    if wrapped is not None and wrapped is not model:
+        return wrapped
+    predictors = getattr(model, "predictors_", None)
+    best_idx = getattr(model, "best_idx_", None)
+    if predictors is not None and best_idx is not None:
+        return predictors[best_idx]
+    return None
+
+
 class PreProcessingMitigation:
     """Pre-processing fairness mitigation techniques.
 

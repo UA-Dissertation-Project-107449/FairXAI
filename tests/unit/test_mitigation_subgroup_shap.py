@@ -38,11 +38,20 @@ class _Wrapped:
         self.model = estimator
 
 
-class _Reduction:
-    """A Fairlearn reduction: an ensemble in ``predictors_``, no single estimator."""
+class _Randomised:
+    """``ExponentiatedGradient``: predicts by drawing from ``predictors_`` per row."""
 
     def __init__(self, predictors):
         self.predictors_ = predictors
+        self.weights_ = np.full(len(predictors), 1.0 / len(predictors))
+
+
+class _GridSearch:
+    """``GridSearch``: fits a grid, then predicts with ``predictors_[best_idx_]``."""
+
+    def __init__(self, predictors, best_idx):
+        self.predictors_ = predictors
+        self.best_idx_ = best_idx
 
 
 def _fitted(n: int = 120, seed: int = 0):
@@ -111,12 +120,12 @@ def test_baseline_and_mitigated_arms_do_not_collide(stage_module, tmp_path):
 
 
 def test_arm_without_a_single_estimator_is_skipped(stage_module, tmp_path, caplog):
-    """A Fairlearn reduction has no one model whose attributions to report."""
+    """ExponentiatedGradient has no one model whose attributions to report."""
     estimator, X = _fitted()
 
     with caplog.at_level("INFO"):
         stage_module._persist_arm_subgroup_shap(
-            _Reduction([estimator]),
+            _Randomised([estimator]),
             X,
             _sensitive(X),
             _cfg(tmp_path),
@@ -163,3 +172,24 @@ def test_toggle_off_writes_nothing(stage_module, tmp_path):
     )
 
     assert not (tmp_path / "sg").exists()
+
+
+def test_grid_search_arm_is_explained_through_its_chosen_member(stage_module, tmp_path):
+    """GridSearch predicts with one grid member, so that member is the arm's model."""
+    chosen, X = _fitted(seed=1)
+    other, _ = _fitted(seed=2)
+
+    stage_module._persist_arm_subgroup_shap(
+        _GridSearch([other, chosen], best_idx=1),
+        X,
+        _sensitive(X),
+        _cfg(tmp_path),
+        "cleveland_uci",
+        "logistic_regression",
+        "grid_search",
+        "sex",
+    )
+
+    arm_dir = tmp_path / "sg" / "cleveland_uci_logistic_regression_grid_search_sex"
+    for name in TABLES:
+        assert (arm_dir / name).exists(), name

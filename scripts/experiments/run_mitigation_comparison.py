@@ -48,7 +48,7 @@ from fairxai.experiments.data_io import (
 from fairxai.explainability.subgroup import DEFAULT_MIN_GROUP_SIZE, save_subgroup_shap
 from fairxai.explainability.tabular import shap_explain_tabular
 from fairxai.fairness.metrics import FairnessMetrics
-from fairxai.fairness.mitigation import MitigationEngine
+from fairxai.fairness.mitigation import MitigationEngine, resolve_single_estimator
 from fairxai.fairness.uncertainty import (
     adaptive_bootstrap_replicates,
     paired_arm_differences,
@@ -285,18 +285,20 @@ def _persist_arm_subgroup_shap(
     answer?". Writing them per arm here, on this stage's own baseline and its own
     split, makes the before/after pair like-for-like.
 
-    Only arms that expose a single fitted estimator are explained. A
-    post-processing arm reuses its base model and moves the decision threshold,
-    so the attributions are the base model's by construction; a Fairlearn
-    reduction is a randomised ensemble over ``predictors_``, whose mean |phi|
-    would have to be averaged over the ensemble's own distribution to mean
-    anything. Both are logged rather than silently absent.
+    Only arms that expose a single fitted estimator are explained, which
+    ``resolve_single_estimator`` decides. A post-processing arm reuses its base
+    model and only moves the decision threshold, so its attributions are the base
+    model's by construction. ``ExponentiatedGradient`` predicts by drawing a
+    member of ``predictors_`` per row from ``weights_``, so no single member is
+    the model. ``GridSearch`` is explained like any other arm: it picks one grid
+    member, ``predictors_[best_idx_]``, and predicts with that alone. Skips are
+    logged rather than silently absent.
     """
     if not subgroup_cfg or not subgroup_cfg.get("enabled"):
         return
 
     arm = f"{dataset_name}/{model_type}/{technique_name}/{sensitive_attr}"
-    estimator = getattr(model, "model", None)
+    estimator = resolve_single_estimator(model)
     if estimator is None:
         logging.info("Subgroup SHAP skipped for %s: no single fitted estimator on the arm", arm)
         return
