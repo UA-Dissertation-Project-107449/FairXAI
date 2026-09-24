@@ -846,6 +846,88 @@ def _promote_top_n_models(versioning, df_success: "pd.DataFrame", save_top_n: in
         logging.warning("[TOP_N] No temp models found to promote")
 
 
+def pareto_criterion_columns(df: pd.DataFrame) -> list[str]:
+    """Fairness columns that are a criterion on their own.
+
+    One column per (attribute, criterion): demographic parity, the equalized
+    odds TPR gap and the FPR gap. ``dp_max_diff``/``eq_odds_max_diff`` are
+    deliberately excluded — they are maxima over attributes and over the two
+    equalized odds gaps, so the criterion they describe changes from row to row.
+    """
+    dp = [c for c in df.columns if c.startswith("dem_parity_") and c.endswith("_max_diff")]
+    eq = [
+        c
+        for c in df.columns
+        if c.startswith("eq_odds_") and (c.endswith("_tpr_diff") or c.endswith("_fpr_diff"))
+    ]
+    return sorted(dp) + sorted(eq)
+
+
+def _nondominated(perf: np.ndarray, gap: np.ndarray) -> np.ndarray:
+    """True where no other cell has perf >= and gap <=, with one of them strict."""
+    keep = np.ones(len(perf), dtype=bool)
+    for i in range(len(perf)):
+        dominates = (perf >= perf[i]) & (gap <= gap[i]) & ((perf > perf[i]) | (gap < gap[i]))
+        keep[i] = not dominates.any()
+    return keep
+
+
+def build_pareto_frontiers(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
+    """Non-dominated sets, one per (dataset, evaluation protocol, criterion).
+
+    F1 is the predictive axis and each fairness criterion is taken on its own,
+    with ``single_split`` and ``kfold_cv`` kept apart: their F1 columns are a
+    held-out score and a cross-validated mean, which do not belong on one
+    frontier. The old single flag ranked the composite ``score_value`` against
+    ``max(dp_max_diff, eq_odds_max_diff)``, so a cell could reach the frontier
+    on a criterion nothing was mitigated for, and a CV mean could dominate a
+    test score.
+
+    Returns the frontier rows in long form and, per input row, the number of
+    frontiers that row is on.
+    """
+    criteria = pareto_criterion_columns(df)
+    counts = pd.Series(0, index=df.index, dtype=int)
+    if not criteria:
+        logging.warning("[WARNING] No per-attribute fairness columns; no pareto frontiers written")
+        return pd.DataFrame(), counts
+
+    identity = [
+        "experiment_id",
+        "model_type",
+        "model_variant",
+        "binning_strategy",
+        "mitigation_technique",
+        "constraint_attribute",
+    ]
+    identity = [c for c in identity if c in df.columns]
+    frames = []
+    for (dataset, protocol), group in df.groupby(["dataset", "training_method"], dropna=False):
+        for criterion in criteria:
+            cells = group.dropna(subset=["f1_value", criterion])
+            if cells.empty:
+                continue
+            keep = _nondominated(cells["f1_value"].to_numpy(), cells[criterion].to_numpy())
+            front = cells[keep]
+            counts.loc[front.index] += 1
+            out = front[identity].copy()
+            out.insert(0, "dataset", dataset)
+            out.insert(1, "protocol", protocol)
+            out.insert(2, "criterion", criterion)
+            out["f1_value"] = front["f1_value"]
+            # The spread of the CV mean, so a frontier cell can be read with its
+            # uncertainty rather than as a point.
+            out["f1_score_std"] = front.get("f1_score_std", pd.Series(np.nan, index=front.index))
+            out["criterion_value"] = front[criterion]
+            out["n_candidates"] = len(cells)
+            frames.append(out.sort_values("f1_value", ascending=False))
+
+    if not frames:
+        logging.warning("[WARNING] Every pareto criterion was empty; no frontiers written")
+        return pd.DataFrame(), counts
+    return pd.concat(frames, ignore_index=True), counts
+
+
 def run_comparison_analysis(
     results_dir: str = None,
     pipeline: str = "cardiac",
@@ -1119,22 +1201,12 @@ def run_comparison_analysis(
             if base_gap and base_gap > 0:
                 df_success.at[idx, "fairness_gain_pct"] = gain_score / base_gap
 
-    # Mark pareto-optimal experiments per dataset (non-dominated on score_value vs fairness_gap)
-    df_success["is_pareto"] = False
-    for dataset in df_success["dataset"].unique():
-        mask = df_success["dataset"] == dataset
-        sub = df_success.loc[mask, ["score_value", "fairness_gap"]].copy()
-        for idx in sub.index:
-            sv, fg = sub.at[idx, "score_value"], sub.at[idx, "fairness_gap"]
-            if pd.isna(sv) or pd.isna(fg):
-                continue
-            dominated = sub[
-                (sub["score_value"] >= sv)
-                & (sub["fairness_gap"] <= fg)
-                & ~((sub["score_value"] == sv) & (sub["fairness_gap"] == fg))
-            ]
-            if dominated.empty:
-                df_success.at[idx, "is_pareto"] = True
+    # Non-dominated sets, one fairness criterion at a time and the two evaluation
+    # protocols kept apart. The single is_pareto flag it replaces compared the
+    # composite score against max(dp_max_diff, eq_odds_max_diff), which is a
+    # different criterion per row and mixed CV means with held-out scores.
+    pareto_df, pareto_counts = build_pareto_frontiers(df_success)
+    df_success["n_pareto_fronts"] = pareto_counts
 
     # Save full results table (in data/ subdir)
     full_results_file = data_dir / "full_comparison.csv"
@@ -1168,11 +1240,10 @@ def run_comparison_analysis(
         tradeoff_csv = data_dir / f"tradeoff_{dataset}.csv"
         subset.to_csv(tradeoff_csv, index=False)
 
-        pareto_subset = (
-            subset[subset["is_pareto"]].copy() if "is_pareto" in subset.columns else subset
-        )
-        pareto_csv = data_dir / f"pareto_{dataset}.csv"
-        pareto_subset.to_csv(pareto_csv, index=False)
+        if not pareto_df.empty:
+            front = pareto_df[pareto_df["dataset"] == dataset]
+            if not front.empty:
+                front.to_csv(data_dir / f"pareto_{dataset}.csv", index=False)
 
     # Summary outputs
     summary_rows = []
