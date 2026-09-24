@@ -536,7 +536,7 @@ fi
 if should_run 3; then
     if [[ "$RUN_RECOMMENDATIONS" == "true" ]]; then
         echo "[PHASE 3/12] Generating fairness triage recommendations"
-        python3 "$ROOT_DIR/scripts/cardiac/generate_recommendations.py" --run-id "$RUN_ID" $VERBOSE_FLAG
+        python3 "$ROOT_DIR/scripts/cardiac/generate_recommendations.py" --run-id "$RUN_ID" "${DATASET_ARGS[@]}" $VERBOSE_FLAG
         mark_done 3
         echo ""
     else

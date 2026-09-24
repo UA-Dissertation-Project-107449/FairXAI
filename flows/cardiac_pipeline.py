@@ -126,12 +126,15 @@ def profile_data(run_id: str, datasets: Optional[list[str]] = None, verbose: int
 
 
 @task
-def generate_recommendations(run_id: str, verbose: int = 0):
+def generate_recommendations(run_id: str, datasets: Optional[list[str]] = None, verbose: int = 0):
     """Generate fairness triage recommendations (Phase 3)."""
     logger = get_run_logger()
     logger.info("[PHASE 3/12] Generating fairness triage recommendations")
     script = ROOT_DIR / "scripts" / "cardiac" / "generate_recommendations.py"
-    args = ["--run-id", run_id] + _verbose_flags(verbose)
+    args = ["--run-id", run_id]
+    if datasets:
+        args.extend(["--datasets", *datasets])
+    args += _verbose_flags(verbose)
     env = os.environ.copy()
     env["RUN_ID"] = run_id
     _run_script(script, args, env)
@@ -778,7 +781,9 @@ def cardiac_pipeline(
     # Stage 3 - Recommendations
     if _should_run(3):
         wait = [profile_task] if profile_task else []
-        recommendations_task = generate_recommendations.submit(run_id, verbose, wait_for=wait)
+        recommendations_task = generate_recommendations.submit(
+            run_id, datasets, verbose, wait_for=wait
+        )
     else:
         logger.info("[3/12] recommend - skipped (outside active range)")
 
