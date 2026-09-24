@@ -31,7 +31,11 @@ from fairxai.cli.runner_utils import (
     update_latest_pointer,
 )
 from fairxai.data.preprocessors import FoldPreprocessor, apply_fold_preprocessing
-from fairxai.data.schemas import available_sensitive, preferred_sensitive
+from fairxai.data.schemas import (
+    available_sensitive,
+    preferred_sensitive,
+    resolve_constraint_attribute,
+)
 from fairxai.experiments.data_io import (
     build_schema_excludes,
     default_exclude_columns,
@@ -198,6 +202,7 @@ _SIGNATURE_FIELDS = (
     "dataset",
     "binning_strategy",
     "mitigation_technique",
+    "constraint_attribute",
     "training_method",
     "model_type",
     "model_variant",
@@ -1067,6 +1072,7 @@ def run_single_experiment(
         logger.info(
             f"[EXPERIMENT] id={exp_id} dataset={config['dataset']} "
             f"binning={config['binning_strategy']} mitigation={config['mitigation_technique']} "
+            f"constraint={config.get('constraint_attribute') or 'auto'} "
             f"training={config['training_method']} "
             f"model={config.get('model_type', 'logistic_regression')}[{config.get('model_variant', 'default')}]"
         )
@@ -1163,13 +1169,10 @@ def run_single_split_experiment(
     if mitigation == "baseline":
         stage = "baseline"
     base_model = None
-    sensitive_attr = next(
-        (
-            c
-            for c in config["sensitive_attributes"]
-            if c in splits["sensitive_train"].columns and c != "age_group"
-        ),
-        next((c for c in splits["sensitive_train"].columns), None),
+    sensitive_attr = resolve_constraint_attribute(
+        splits["sensitive_train"].columns,
+        config.get("constraint_attribute"),
+        config["sensitive_attributes"],
     )
 
     if mitigation != "baseline" and sensitive_attr is None:
@@ -1424,13 +1427,10 @@ def run_cv_experiment(
         fold_results = []
         all_predictions = []
 
-        sensitive_attr = next(
-            (
-                c
-                for c in config["sensitive_attributes"]
-                if c in sensitive_full.columns and c != "age_group"
-            ),
-            next((c for c in sensitive_full.columns), None),
+        sensitive_attr = resolve_constraint_attribute(
+            sensitive_full.columns,
+            config.get("constraint_attribute"),
+            config["sensitive_attributes"],
         )
 
         if sensitive_attr is None:
@@ -1697,6 +1697,10 @@ def run_combinatorial_analysis(
     logger.info(f"Loaded configuration from: {config_path}")
 
     sensitive_attrs = preferred_sensitive(config.get("sensitive_attributes"))
+    # Which attribute each mitigation technique is made fair about. Without the
+    # axis every cell constrained on sex, so the binning axis only changed how
+    # the age gap was measured afterwards.
+    constraint_attrs = list(config.get("constraint_attributes") or [None])
 
     # Load pipeline config
     pipeline_cfg = load_yaml_config(str(project_root / f"configs/pipelines/{pipeline}.yaml"))
@@ -1778,23 +1782,29 @@ def run_combinatorial_analysis(
                             dataset=dataset,
                             hpo_dir=hpo_dir,
                         ):
-                            exp_id = versioning.generate_experiment_id()
-                            exp_config = {
-                                "dataset": dataset,
-                                "binning_strategy": binning,
-                                "mitigation_technique": mitigation,
-                                "training_method": training_method,
-                                "cv_folds": config.get("cv_folds", 5),
-                                "random_seed": config.get("random_seed", 42),
-                                "model_type": model_type,
-                                "model_variant": variant["name"],
-                                "model_params": variant["params"],
-                                "fairness_base_model_params": fairness_base_params or None,
-                                "sensitive_attributes": sensitive_attrs,
-                                "xai": config.get("xai", {}),
-                            }
+                            # Baseline constrains nothing, so it runs once.
+                            cell_constraints = (
+                                [None] if mitigation == "baseline" else constraint_attrs
+                            )
+                            for constraint_attr in cell_constraints:
+                                exp_id = versioning.generate_experiment_id()
+                                exp_config = {
+                                    "dataset": dataset,
+                                    "binning_strategy": binning,
+                                    "mitigation_technique": mitigation,
+                                    "constraint_attribute": constraint_attr,
+                                    "training_method": training_method,
+                                    "cv_folds": config.get("cv_folds", 5),
+                                    "random_seed": config.get("random_seed", 42),
+                                    "model_type": model_type,
+                                    "model_variant": variant["name"],
+                                    "model_params": variant["params"],
+                                    "fairness_base_model_params": fairness_base_params or None,
+                                    "sensitive_attributes": sensitive_attrs,
+                                    "xai": config.get("xai", {}),
+                                }
 
-                            experiments.append((exp_id, exp_config))
+                                experiments.append((exp_id, exp_config))
 
     # Combo experiments: pre to in to post chains, per configured family.
     combo_model_types = _resolve_combo_model_types(config, selected_model_types)
@@ -1819,23 +1829,25 @@ def run_combinatorial_analysis(
                             dataset=dataset,
                             hpo_dir=hpo_dir,
                         ):
-                            exp_id = versioning.generate_experiment_id()
-                            exp_config = {
-                                "dataset": dataset,
-                                "binning_strategy": binning,
-                                "mitigation_technique": "+".join(combo),
-                                "mitigation_combo": combo,
-                                "training_method": training_method,
-                                "cv_folds": config.get("cv_folds", 5),
-                                "random_seed": config.get("random_seed", 42),
-                                "model_type": model_type,
-                                "model_variant": variant["name"],
-                                "model_params": variant["params"],
-                                "fairness_base_model_params": fairness_base_params or None,
-                                "sensitive_attributes": sensitive_attrs,
-                                "xai": config.get("xai", {}),
-                            }
-                            experiments.append((exp_id, exp_config))
+                            for constraint_attr in constraint_attrs:
+                                exp_id = versioning.generate_experiment_id()
+                                exp_config = {
+                                    "dataset": dataset,
+                                    "binning_strategy": binning,
+                                    "mitigation_technique": "+".join(combo),
+                                    "mitigation_combo": combo,
+                                    "constraint_attribute": constraint_attr,
+                                    "training_method": training_method,
+                                    "cv_folds": config.get("cv_folds", 5),
+                                    "random_seed": config.get("random_seed", 42),
+                                    "model_type": model_type,
+                                    "model_variant": variant["name"],
+                                    "model_params": variant["params"],
+                                    "fairness_base_model_params": fairness_base_params or None,
+                                    "sensitive_attributes": sensitive_attrs,
+                                    "xai": config.get("xai", {}),
+                                }
+                                experiments.append((exp_id, exp_config))
 
     planned_experiments = len(experiments)
 

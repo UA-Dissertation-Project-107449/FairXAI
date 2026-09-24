@@ -151,6 +151,7 @@ def load_all_results(versioning: ExperimentVersioning) -> pd.DataFrame:
                 "dataset": config["dataset"],
                 "binning_strategy": config["binning_strategy"],
                 "mitigation_technique": config["mitigation_technique"],
+                "constraint_attribute": config.get("constraint_attribute") or "",
                 "training_method": config["training_method"],
                 "model_type": config.get("model_type", "logistic_regression"),
                 "model_variant": config.get("model_variant", "default"),

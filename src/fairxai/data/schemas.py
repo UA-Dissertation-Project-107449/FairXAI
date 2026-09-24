@@ -200,3 +200,28 @@ def preferred_sensitive(preferred: Iterable[str] | None = None) -> list[str]:
 def available_sensitive(df: pd.DataFrame, preferred: Iterable[str] | None = None) -> list[str]:
     """Return sensitive/group columns that exist in the dataframe."""
     return [col for col in preferred_sensitive(preferred) if col in df.columns]
+
+
+def resolve_constraint_attribute(
+    columns: Iterable[str],
+    requested: str | None = None,
+    preferred: Iterable[str] | None = None,
+) -> str | None:
+    """Return the sensitive column a mitigation technique should be fair about.
+
+    ``requested`` comes from the sweep's constraint axis and must be present.
+    Without it, fall back to the first preferred non-age column, then to any
+    available column, which is what the sweep hard-coded before the axis existed.
+    """
+    available = list(columns)
+    if requested is not None:
+        if requested not in available:
+            raise ValueError(
+                f"Constraint attribute '{requested}' is not among the available "
+                f"sensitive columns: {available}"
+            )
+        return requested
+    for col in preferred_sensitive(preferred):
+        if col in available and col != "age_group":
+            return col
+    return available[0] if available else None

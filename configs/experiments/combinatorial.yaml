@@ -118,6 +118,12 @@ sensitive_attributes:
   - sex
   - group_cluster
 
+# Attribute each mitigation technique is made fair about, one sweep axis. With
+# age_group here, every binning strategy becomes a different fairness target.
+constraint_attributes:
+  - sex
+  - age_group
+
 # Fairness evaluation thresholds (for filtering results).
 # These override the canonical thresholds.yaml values for this experiment.
 # Keys consumed by _gates.load_gate_thresholds(): min_recall, recall_hard_floor,
@@ -177,18 +183,18 @@ order_cheap_first: true
 #   V_mit = sum of variants over mitigation_supported_model_types
 #   V_combo = sum of variants over mitigation_combo_model_types
 #   V_base = sum of variants over models in model_types but NOT mitigation-supported
+#   K = number of constraint_attributes (baseline cells ignore it and run once)
 #
 # Base experiments (mitigated families run every technique, the rest baseline only):
-#   D * B * T * (V_mit * M + V_base)
+#   D * B * T * (V_mit * (1 + (M - 1) * K) + V_base)
 # Combo experiments:
-#   D * B * T * (V_combo * C)
-# Total experiments:
-#   D * B * T * (V_mit * M + V_base + V_combo * C)
+#   D * B * T * (V_combo * C * K)
 #
 # Example A (this config: 2 datasets, 5 bins, 2 training types, 7 mitigations
-#            incl. baseline, 6 combos, variants LR=2 RF=2 SVM=2 XGB=1;
-#            every family is mitigated => V_mit=7, V_base=0, V_combo=7):
-#   2 * 5 * 2 * (7*7 + 0 + 7*6) = 1820
+#            incl. baseline, 6 combos, 2 constraint attributes, one variant per
+#            family => V_mit=4, V_base=0, V_combo=4, K=2):
+#   base  2 * 5 * 2 * (4 * (1 + 6*2) + 0) = 1040
+#   combo 2 * 5 * 2 * (4 * 6 * 2)         =  960
 #
 # Example A' (same config with cardio70k re-enabled, and svm dropped back out
 #             of both mitigation lists as the comments there instruct:
@@ -197,3 +203,6 @@ order_cheap_first: true
 #
 # Example B (the pre-2026-08 LR-only setup: V_mit=2, V_base=4, V_combo=2):
 #   3 * 5 * 2 * (2*7 + 4 + 2*6) = 900
+#
+# Examples A' and B predate both the single variant per family and K; their
+# mitigated and combo terms multiply by K.
