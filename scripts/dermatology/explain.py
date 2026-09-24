@@ -94,7 +94,11 @@ def main() -> None:
     n_samples = args.n_samples or xai_cfg.get("n_samples", 12)
     per_cell = xai_cfg.get("per_cell", 1)
     num_samples_lime = xai_cfg.get("lime_num_samples", 1000)
-    sensitive_attrs = fairness_cfg.get("sensitive_attributes", ["sex", "fitzpatrick_group"])
+    # xai.sensitive_attributes overrides the fairness list so the explanation
+    # budget can be spent on the attribute this stage is about; order is priority.
+    sensitive_attrs = xai_cfg.get("sensitive_attributes") or fairness_cfg.get(
+        "sensitive_attributes", ["fitzpatrick_group", "sex"]
+    )
     image_col = image_cfg.get("image_column", "image_path")
     device = image_cfg.get("device", "cpu")
     if device == "auto":
