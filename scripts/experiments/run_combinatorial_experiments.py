@@ -226,12 +226,17 @@ def _load_completed_signatures(results_root: Path, logger) -> set:
     interrupted leaves a usable record of everything it finished. Matching on the
     configuration rather than the experiment ID is what makes that record
     reusable across invocations.
+
+    A failed cell writes a result JSON too (status "failed", results null), so
+    only successful ones count as complete — otherwise a rerun after a fix
+    plans zero experiments and the failures are never retried.
     """
     completed = set()
     if not results_root.exists():
         return completed
 
     unreadable = 0
+    failed = 0
     for path in results_root.rglob("*.json"):
         try:
             with open(path) as handle:
@@ -242,11 +247,17 @@ def _load_completed_signatures(results_root: Path, logger) -> set:
             unreadable += 1
             continue
         configuration = payload.get("configuration")
-        if isinstance(configuration, dict):
-            completed.add(_experiment_signature(configuration))
+        if not isinstance(configuration, dict):
+            continue
+        if (payload.get("execution") or {}).get("status") != "success":
+            failed += 1
+            continue
+        completed.add(_experiment_signature(configuration))
 
     if unreadable:
         logger.warning(f"[RESUME] Skipped {unreadable} unreadable result file(s) while scanning")
+    if failed:
+        logger.info(f"[RESUME] {failed} previously failed cell(s) will be retried")
     return completed
 
 
