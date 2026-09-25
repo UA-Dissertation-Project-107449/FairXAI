@@ -5,6 +5,7 @@ Provides pre-processing, in-processing, and post-processing methods to improve
 fairness metrics while maintaining model performance.
 """
 
+import inspect
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -1216,8 +1217,13 @@ class MitigationEngine:
         else:
             raise ValueError(f"Unknown in-processing technique: {technique_name}")
 
-        # Predict on test set
-        y_pred = model.predict(X_test)
+        # Predict on test set. ExponentiatedGradient draws a member of predictors_
+        # per row, so an unseeded predict returns different labels — and different
+        # metrics — on every call. GridSearch's predict takes no seed.
+        if "random_state" in inspect.signature(model.predict).parameters:
+            y_pred = model.predict(X_test, random_state=self.random_state)
+        else:
+            y_pred = model.predict(X_test)
 
         # Get probability/score values (Fairlearn models may have multiple predictors).
         y_proba = self._positive_class_scores(model, X_test)
