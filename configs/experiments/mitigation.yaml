@@ -29,6 +29,20 @@ data:
 # heaviest combos may fall back to a single split — a documented limitation.
 constraint_attrs: all
 
+# Protocols this stage reports. `single_split` is the one held-out split;
+# `kfold_cv` reruns every arm out of fold and pools the validation predictions,
+# so each patient is scored exactly once by a model that did not train on them.
+# CV is the primary read for these two small cohorts (a 61-row Cleveland test
+# split puts one patient in the oldest age band), and it costs one extra fit per
+# fold per arm. Results land in summary_cv.csv / predictions_cv/ /
+# paired_effects_cv.csv; the holdout files are unchanged. Per-arm subgroup SHAP
+# stays holdout-only.
+training_methods:
+  - single_split
+  - kfold_cv
+cv_folds: 5
+random_seed: 42
+
 # Model families that mitigation runs for. Every family gets its own baseline
 # row plus one row per technique x constraint attribute.
 # Base hyperparameters per family come from configs/models/<family>.yaml.
