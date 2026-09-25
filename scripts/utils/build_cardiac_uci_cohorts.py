@@ -31,6 +31,10 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cardiac_overlap_matrix import UCI_DIR, UCI_RAW_COLUMNS, canonical_common  # noqa: E402
 
+# Age bands for the site-confounding report come from the pipeline's own schema,
+# so the report bins patients exactly as the fairness runs do.
+SCHEMA_PATH = Path(__file__).resolve().parents[2] / "configs" / "schema" / "cardiac.json"
+
 # Concat order matters: Cleveland first so it is fully retained under keep="first".
 SITE_FILES = {
     "cleveland": "processed.cleveland.data",
@@ -98,6 +102,74 @@ def _missing_report(df: pd.DataFrame) -> dict[str, dict[str, float]]:
     return report
 
 
+def _age_bands(dataset: str = "four_site_uci") -> tuple[list[float], list[str]]:
+    """Read one dataset's age bands from the cardiac schema."""
+    schema = json.loads(SCHEMA_PATH.read_text())
+    age = schema["datasets"][dataset]["sensitive_attributes"]["age"]
+    return list(age["bins"]), list(age["labels"])
+
+
+def _site_confounding_report(df: pd.DataFrame) -> dict:
+    """Positive rate per site against the age mix per site.
+
+    The pooled cohort mixes four hospitals whose referral populations differ, so
+    a fairness gap reported across age bands may partly be reporting which
+    hospital the patients came from. Three tables answer that: the positive rate
+    and age mix per site, the positive rate per age band, and the positive rate
+    per band *within* each site. If the age gradient holds inside every site,
+    age is not standing in for site; if it only holds in the pooled table, it is.
+    """
+    bins, labels = _age_bands()
+    data = pd.DataFrame(
+        {
+            "site": df["source_site"],
+            "positive": (pd.to_numeric(df["num"], errors="coerce") > 0).astype(float),
+            # include_lowest matches how loaders.py bins age_group, so the bands
+            # here are the same strata the fairness runs report on.
+            "band": pd.cut(
+                pd.to_numeric(df["age"], errors="coerce"),
+                bins=bins,
+                labels=labels,
+                include_lowest=True,
+            ),
+        }
+    )
+
+    def _rate(frame: pd.DataFrame) -> dict:
+        return {
+            "n": int(len(frame)),
+            "positive_rate_pct": round(100 * float(frame["positive"].mean()), 1),
+        }
+
+    per_site = {}
+    for site, frame in data.groupby("site", sort=False):
+        mix = frame["band"].value_counts(normalize=True).reindex(labels, fill_value=0.0)
+        per_site[str(site)] = {
+            **_rate(frame),
+            "mean_age": round(float(pd.to_numeric(df.loc[frame.index, "age"]).mean()), 1),
+            "age_mix_pct": {band: round(100 * float(share), 1) for band, share in mix.items()},
+        }
+
+    def _by_band(frame: pd.DataFrame) -> dict:
+        # Ordered by the schema's bands so the age gradient reads left to right.
+        grouped = dict(list(frame.groupby("band", observed=False, sort=False)))
+        return {
+            band: _rate(grouped[band]) for band in labels if band in grouped and len(grouped[band])
+        }
+
+    per_band = _by_band(data)
+    per_site_band = {
+        str(site): _by_band(site_frame) for site, site_frame in data.groupby("site", sort=False)
+    }
+
+    return {
+        "age_bands": labels,
+        "per_site": per_site,
+        "per_age_band": per_band,
+        "per_site_and_age_band": per_site_band,
+    }
+
+
 def _validate(site_rows: dict[str, int], four_site_rows: int) -> None:
     """Refuse to write cohorts if the raw sources drift from known invariants."""
     if site_rows != EXPECTED_SITE_ROWS:
@@ -147,7 +219,12 @@ def build(uci_dir: Path = UCI_DIR, out_dir: Path = DEFAULT_OUT_DIR) -> dict:
         ),
         "cleveland_missing": _missing_report(cleveland),
         "four_site_missing": _missing_report(four_site),
-        "outputs": {"cleveland_uci": str(cleveland_out), "four_site_uci": str(four_site_out)},
+        "four_site_site_confounding": _site_confounding_report(four_site),
+        "outputs": {
+            "cleveland_uci": str(cleveland_out),
+            "four_site_uci": str(four_site_out),
+            "manifest": str(manifest_out),
+        },
     }
     manifest_out.write_text(json.dumps(manifest, indent=2, default=str))
     return manifest
@@ -170,6 +247,19 @@ def main(argv: list[str] | None = None) -> int:
         f"({m['four_site_dedup_removed']} dup removed) -> {m['outputs']['four_site_uci']}"
     )
     print(f"Per-site after dedup: {m['four_site_rows_per_site']}")
+    conf = m["four_site_site_confounding"]
+    print("Site vs age (four-site): positive rate, mean age, age mix")
+    for site, stats in conf["per_site"].items():
+        mix = " ".join(f"{band}={pct}%" for band, pct in stats["age_mix_pct"].items())
+        print(
+            f"  {site:<12} n={stats['n']:<4} pos={stats['positive_rate_pct']}%  "
+            f"mean_age={stats['mean_age']}  {mix}"
+        )
+    pooled = " ".join(
+        f"{band}={stats['positive_rate_pct']}%" for band, stats in conf["per_age_band"].items()
+    )
+    print(f"  pooled positive rate by band: {pooled}")
+    print(f"  per-site rates by band are in {m['outputs']['manifest']}")
     return 0
 
 
