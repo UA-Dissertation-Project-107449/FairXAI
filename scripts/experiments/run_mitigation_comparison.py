@@ -952,24 +952,18 @@ def run_analysis(
         default_binning,
     )
 
-    # Techniques to test (from config)
+    # Techniques to test (from config). A hardcoded allow-list used to filter this
+    # down silently, so a technique the engine never implemented stayed in the YAML
+    # looking pending instead of failing. Check the config against the engine.
     techniques = experiment_cfg["mitigation_strategies"]
+    unknown = sorted(set(techniques) - set(MitigationEngine.valid_techniques()))
+    if unknown:
+        raise ValueError(
+            f"mitigation_strategies names techniques the engine does not implement: {unknown}. "
+            "Implement them in MitigationEngine or drop them from the config."
+        )
 
-    # Filter to implemented techniques
-    implemented = {
-        "smote": techniques["smote"],
-        "ros": techniques["ros"],
-        "rus": techniques["rus"],
-        "adasyn": techniques["adasyn"],
-        "uniform_sampling": techniques["uniform_sampling"],
-        "smote_group": techniques["smote_group"],
-        "reweighting": techniques["reweighting"],
-        "exponentiated_gradient": techniques["exponentiated_gradient"],
-        "grid_search": techniques["grid_search"],
-        "threshold_optimizer": techniques["threshold_optimizer"],
-    }
-
-    logging.info(f"Techniques to test: {list(implemented.keys())}")
+    logging.info(f"Techniques to test: {list(techniques.keys())}")
 
     # Subgroup SHAP per arm (RO4: does mitigating change how the model explains
     # each group?). Restricted to the two families the chapter reports for RO4;
@@ -1092,7 +1086,7 @@ def run_analysis(
                         sensitive_test,
                         dataset_name,
                         baseline["model"],
-                        implemented,
+                        techniques,
                         base_model_params=model_params,
                         constraint_attrs=constraint_attrs_cfg,
                         meta_test=meta_test,

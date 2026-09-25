@@ -109,3 +109,31 @@ def test_hpo_searches_the_svm_kernel() -> None:
 
     assert set(kernels) == {"linear", "rbf"}
     assert int(hpo["max_rows_for_rbf_svm"]) > 0
+
+
+def test_every_configured_mitigation_technique_is_implemented() -> None:
+    """Stage 10 and the sweep may only name arms the engine can apply.
+
+    Stage 10 used to filter the config through a hardcoded allow-list, so three
+    techniques (adversarial debiasing, calibrated equalized odds, reject option
+    classification) sat in the YAML for the whole study without ever producing a
+    row. The list is gone and the stage now refuses unknown techniques, which
+    only helps if the shipped configs agree with the engine.
+    """
+    from fairxai.fairness.mitigation import MitigationEngine
+
+    valid = set(MitigationEngine.valid_techniques())
+
+    stage10 = set(_yaml("experiments/mitigation.yaml")["mitigation_strategies"])
+    assert stage10 <= valid, sorted(stage10 - valid)
+
+    # The sweep adds "baseline" as the unmitigated arm, which is not a technique.
+    sweep = set(_yaml("experiments/combinatorial.yaml")["mitigation_techniques"]) - {"baseline"}
+    assert sweep <= valid, sorted(sweep - valid)
+
+    combos = {
+        technique
+        for combo in _yaml("experiments/combinatorial.yaml")["mitigation_combos"]
+        for technique in combo
+    }
+    assert combos <= valid, sorted(combos - valid)

@@ -146,7 +146,10 @@ mitigation_strategies:
       grid_limit: 2.0
   
   # === Post-processing Techniques ===
-  # Applied to model predictions
+  # Applied to model predictions. The Fairlearn threshold optimiser below is the
+  # only post-processing arm: the two aif360 arms (calibrated equalized odds,
+  # reject option classification) were planned and never built, so they are out
+  # of scope rather than pending.
   
   threshold_optimizer:
     stage: "post-processing"
@@ -158,29 +161,6 @@ mitigation_strategies:
       objective: "balanced_accuracy_score"
       grid_size: 100
   
-  calibrated_equalized_odds:
-    stage: "post-processing"
-    method: "calibration_adjustment"
-    library: "aif360"
-    description: "Adjust predictions to satisfy equalized odds while maintaining calibration"
-    parameters:
-      cost_constraint: "fnr"  # false negative rate
-      unprivileged_groups: [{"sex": 0}]
-      privileged_groups: [{"sex": 1}]
-  
-  reject_option_classification:
-    stage: "post-processing"
-    method: "reject_option_boundary"
-    library: "aif360"
-    description: "Give favorable outcomes to unprivileged groups near decision boundary"
-    parameters:
-      unprivileged_groups: [{"sex": 0}]
-      privileged_groups: [{"sex": 1}]
-      low_class_thresh: 0.01
-      high_class_thresh: 0.99
-      num_class_thresh: 100
-      metric_name: "Statistical parity difference"
-
 evaluation:
   # Metrics to track for each technique
   performance_metrics:

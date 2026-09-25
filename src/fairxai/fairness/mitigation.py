@@ -679,6 +679,11 @@ class MitigationEngine:
     VALID_INPROCESSING = ["exponentiated_gradient", "grid_search"]
     VALID_POSTPROCESSING = ["threshold_optimizer"]
 
+    @classmethod
+    def valid_techniques(cls) -> List[str]:
+        """Every technique the engine can actually apply, across the three stages."""
+        return [*cls.VALID_PREPROCESSING, *cls.VALID_INPROCESSING, *cls.VALID_POSTPROCESSING]
+
     def __init__(
         self,
         random_state: int = 42,
