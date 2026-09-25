@@ -709,11 +709,22 @@ class MitigationEngine:
         self.inprocessing = InProcessingMitigation()
         self.postprocessing = PostProcessingMitigation()
 
-    def _new_model(self):
-        """Build a fresh, untrained model of the configured family."""
+    def _new_model(self, weighted_fit: bool = False):
+        """Build a fresh, untrained model of the configured family.
+
+        ``weighted_fit`` drops the cuML GPU backend: cuML's RandomForest fits
+        with ``(X, y, convert_dtype)`` and rejects ``sample_weight``, so every
+        caller that needs weights (reweighting, the fairlearn reductions) must
+        get the sklearn estimator instead of silently losing the technique.
+        """
         model_class = get_model_class(self.model_type)
         params = dict(self.model_params)
         params.setdefault("random_state", self.random_state)
+        if weighted_fit and params.pop("use_gpu", False):
+            logger.info(
+                "[MITIGATION] %s needs sample_weight; using the CPU backend instead of cuML",
+                self.model_type,
+            )
         return model_class(**params)
 
     def build_model(self):
@@ -1096,7 +1107,7 @@ class MitigationEngine:
             # Train the configured family on the pre-processed data
             # (needed as the base model for any post-processing step).
             logger.info("  [baseline] training %s on pre-processed data", self.model_type)
-            trained_model = self._new_model()
+            trained_model = self._new_model(weighted_fit=sample_weights is not None)
             if sample_weights is not None:
                 trained_model, _ = _fit_with_sample_weight(
                     trained_model, X_curr, y_curr, sample_weights
@@ -1165,7 +1176,7 @@ class MitigationEngine:
                 X_train, y_train, sensitive_train, sensitive_attr
             )
             model, sample_weight_applied = _fit_with_sample_weight(
-                self._new_model(), X_train, y_train, sample_weights
+                self._new_model(weighted_fit=True), X_train, y_train, sample_weights
             )
             X_train_processed, y_train_processed = X_train, y_train
 
@@ -1240,12 +1251,13 @@ class MitigationEngine:
     ) -> Dict:
         """Apply in-processing technique."""
         base_model_params = kwargs.pop("base_model_params", None)
-        # fairlearn reductions need the raw sklearn estimator, not our wrapper.
+        # fairlearn reductions need the raw sklearn estimator, not our wrapper,
+        # and they fit it with sample_weight — so ask for the weighted-fit build.
         # Left as None for logistic regression so the historical base_model_params
         # path stays byte-identical and published LR results still reproduce.
         base_estimator = None
         if self.model_type != "logistic_regression":
-            base_estimator = self._new_model().model
+            base_estimator = self._new_model(weighted_fit=True).model
 
         if technique_name == "exponentiated_gradient":
             model = self.inprocessing.apply_exponentiated_gradient(

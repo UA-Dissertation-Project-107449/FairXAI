@@ -312,3 +312,82 @@ def test_techniques_without_weights_report_none(tiny_split):
         sensitive_attr="sex",
     )
     assert result["metadata"]["sample_weight_applied"] is None
+
+
+def test_weighted_fit_drops_the_gpu_backend(monkeypatch):
+    """cuML's RandomForest fit takes no sample_weight, so weighted paths need CPU.
+
+    Recorded against a fake family so the assertion holds whether or not cuML is
+    installed on the machine running the tests.
+    """
+    from fairxai.fairness import mitigation as mit
+
+    seen = []
+
+    class _Recorder:
+        def __init__(self, **kwargs):
+            seen.append(kwargs)
+
+    monkeypatch.setattr(mit, "get_model_class", lambda _: _Recorder, raising=True)
+    engine = MitigationEngine(
+        model_type="random_forest", model_params={"n_estimators": 5, "use_gpu": True}
+    )
+
+    engine._new_model()
+    engine._new_model(weighted_fit=True)
+
+    assert seen[0]["use_gpu"] is True, "plain fits must keep the GPU backend"
+    assert "use_gpu" not in seen[1], "weighted fits must fall back to the CPU estimator"
+
+
+def test_gpu_random_forest_still_runs_the_fairlearn_reductions(tiny_split):
+    """Regression: use_gpu=True used to kill every RF reduction cell in the sweep.
+
+    The sweep sets use_gpu on a CUDA host; the reductions fit their base
+    estimator with sample_weight, which cuML rejects, so the cell failed with
+    "got an unexpected keyword argument 'sample_weight'".
+    """
+    X, y, sensitive = tiny_split
+    engine = MitigationEngine(
+        model_type="random_forest",
+        model_params={"n_estimators": 5, "max_depth": 2, "use_gpu": True},
+    )
+    for technique, kwargs in (
+        ("exponentiated_gradient", {"max_iter": 2}),
+        ("grid_search", {"grid_size": 3}),
+    ):
+        result = engine.apply_technique(
+            technique_name=technique,
+            stage="in-processing",
+            X_train=X,
+            y_train=y,
+            X_test=X,
+            y_test=y,
+            sensitive_train=sensitive,
+            sensitive_test=sensitive,
+            sensitive_attr="sex",
+            **kwargs,
+        )
+        assert result["metadata"]["model_type"] == "random_forest"
+        assert len(result["predictions"]["y_pred"]) == len(X)
+
+
+def test_gpu_random_forest_reweighting_is_not_silently_dropped(tiny_split):
+    """Same root cause on the pre-processing side: weights must reach the fit."""
+    X, y, sensitive = tiny_split
+    engine = MitigationEngine(
+        model_type="random_forest",
+        model_params={"n_estimators": 5, "max_depth": 2, "use_gpu": True},
+    )
+    result = engine.apply_technique(
+        technique_name="reweighting",
+        stage="pre-processing",
+        X_train=X,
+        y_train=y,
+        X_test=X,
+        y_test=y,
+        sensitive_train=sensitive,
+        sensitive_test=sensitive,
+        sensitive_attr="sex",
+    )
+    assert result["metadata"]["sample_weight_applied"] is True

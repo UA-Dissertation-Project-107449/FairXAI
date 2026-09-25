@@ -1977,6 +1977,26 @@ def run_combinatorial_analysis(
             results.append(result)
             logger.info(f"[SAVED] {finished}/{total_experiments} exp_id={result['experiment_id']}")
 
+    # Failure tally in the parent process. Workers log through joblib's loky
+    # backend, whose child processes have none of the stage's handlers, so a
+    # failed cell only ever reached the console as a bare "ERROR:__main__" line
+    # and sweep_errors.log stayed empty. Re-log from the collected results so
+    # the stage log carries the count and one line per lost cell.
+    failed = [r for r in results if (r.get("execution") or {}).get("status") == "failed"]
+    if failed:
+        logger.error("[FAILED] %d of %d experiments failed", len(failed), total_experiments)
+        for result in failed:
+            cfg = result.get("configuration") or {}
+            logger.error(
+                "  exp_id=%s model=%s mitigation=%s attr=%s method=%s: %s",
+                result.get("experiment_id"),
+                cfg.get("model_type"),
+                cfg.get("mitigation_technique"),
+                cfg.get("constraint_attribute"),
+                cfg.get("training_method"),
+                (result.get("execution") or {}).get("error"),
+            )
+
     # Deferred XAI pass: run only for top-ranked configurations.
     if xai_cfg_global.get("enabled", True) and xai_mode == "top_configs":
         top_k = int(xai_cfg_global.get("top_k", 5))
