@@ -139,6 +139,34 @@ def resolve_single_estimator(model: Any) -> Optional[Any]:
     return None
 
 
+def resolve_estimator_mixture(model: Any) -> Optional[List[Tuple[float, Any]]]:
+    """The weighted members behind a randomised arm, or ``None`` if it is not one.
+
+    ``ExponentiatedGradient`` has no single fitted estimator — see
+    ``resolve_single_estimator`` — but its score is the linear combination
+    ``sum_t weights_[t] * h_t(X)`` over ``predictors_``. Anything linear in the model
+    output can therefore be computed per member and recombined with these weights
+    instead of skipping the arm, which is how the subgroup SHAP tables cover EG.
+
+    Zero-weight members are dropped, since fairlearn never predicts with them, and
+    the weights are renormalised so the combination stays a weighted mean.
+    """
+    weights = getattr(model, "weights_", None)
+    predictors = getattr(model, "predictors_", None)
+    if weights is None or predictors is None:
+        return None
+    if not callable(getattr(model, "_pmf_predict", None)):
+        return None
+
+    mixture = [
+        (float(weights[idx]), predictors[idx]) for idx in weights.index if float(weights[idx]) > 0
+    ]
+    total = sum(weight for weight, _ in mixture)
+    if not mixture or total <= 0:
+        return None
+    return [(weight / total, member) for weight, member in mixture]
+
+
 class PreProcessingMitigation:
     """Pre-processing fairness mitigation techniques.
 

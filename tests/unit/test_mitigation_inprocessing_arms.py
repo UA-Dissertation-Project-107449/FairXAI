@@ -9,7 +9,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from fairxai.fairness.mitigation import MitigationEngine
+from fairxai.fairness.mitigation import (
+    MitigationEngine,
+    resolve_estimator_mixture,
+    resolve_single_estimator,
+)
 
 
 @pytest.fixture
@@ -79,3 +83,23 @@ def test_grid_search_is_scored_by_its_chosen_member(biased_split):
     if model.best_idx_ != 0:
         first = model.predictors_[0].predict_proba(X)[:, 1]
         assert not np.allclose(chosen, first)
+
+
+def test_mixture_is_resolved_only_for_the_randomised_reduction(biased_split):
+    """GridSearch has one model; EG has a weighted set of them. Neither answer fits both."""
+    X, _, _ = biased_split
+    eg = _arm("exponentiated_gradient", biased_split, eps=0.01)["model"]
+    gs = _arm("grid_search", biased_split)["model"]
+
+    assert resolve_single_estimator(eg) is None
+    assert resolve_estimator_mixture(gs) is None
+
+    mixture = resolve_estimator_mixture(eg)
+    assert mixture is not None
+    # Zero-weight members are never predicted with, so they are not in the mixture.
+    assert len(mixture) == int((eg.weights_ > 0).sum()) < len(eg.weights_)
+    assert sum(weight for weight, _ in mixture) == pytest.approx(1.0)
+
+    # The mixture reproduces the ensemble's own score from its members' hard labels.
+    combined = sum(weight * np.asarray(member.predict(X)) for weight, member in mixture)
+    np.testing.assert_allclose(combined, eg._pmf_predict(X)[:, 1])

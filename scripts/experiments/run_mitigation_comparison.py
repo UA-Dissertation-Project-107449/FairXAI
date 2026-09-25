@@ -48,7 +48,11 @@ from fairxai.experiments.data_io import (
 from fairxai.explainability.subgroup import DEFAULT_MIN_GROUP_SIZE, save_subgroup_shap
 from fairxai.explainability.tabular import shap_explain_tabular
 from fairxai.fairness.metrics import FairnessMetrics
-from fairxai.fairness.mitigation import MitigationEngine, resolve_single_estimator
+from fairxai.fairness.mitigation import (
+    MitigationEngine,
+    resolve_estimator_mixture,
+    resolve_single_estimator,
+)
 from fairxai.fairness.uncertainty import (
     adaptive_bootstrap_replicates,
     paired_arm_differences,
@@ -268,6 +272,51 @@ def _persist_arm_predictions(
         )
 
 
+def _arm_shap_attributions(model, X_test, max_samples: int):
+    """Absolute SHAP values for one arm, with the rows they were computed on.
+
+    Most arms have a single fitted estimator — ``resolve_single_estimator`` finds
+    it — and are explained directly. ``ExponentiatedGradient`` has none: it draws a
+    member of ``predictors_`` per row from ``weights_``. Its score is nonetheless
+    the linear combination ``sum_t weights_[t] * h_t(X)``, and SHAP is linear in the
+    model output for a fixed background, so the arm's attributions are the same
+    weighted combination of its members' attributions. Each member is explained on
+    one fixed sample of rows so the per-member values line up before they are
+    combined. Note the members are explained on the score the explainer gives them
+    (probability or margin), where EG mixes their hard labels, so this describes the
+    weighted soft mixture — the same output space the baseline arm is explained in,
+    which is what makes the before/after pair comparable.
+
+    Returns ``None`` when the arm exposes nothing to explain, such as a
+    post-processor.
+    """
+    estimator = resolve_single_estimator(model)
+    if estimator is not None:
+        explanation = shap_explain_tabular(estimator, X_test, max_samples=max_samples)
+        return (
+            np.abs(explanation.shap_values),
+            explanation.feature_names,
+            # SHAP may subsample internally; its returned frame is the authoritative
+            # record of which rows were explained.
+            getattr(explanation, "data", X_test).index,
+        )
+
+    mixture = resolve_estimator_mixture(model)
+    if not mixture:
+        return None
+
+    rows = X_test if len(X_test) <= max_samples else X_test.sample(n=max_samples, random_state=42)
+    combined = None
+    feature_names = None
+    for weight, member in mixture:
+        explanation = shap_explain_tabular(member, rows, max_samples=len(rows))
+        weighted = weight * np.asarray(explanation.shap_values, dtype=float)
+        combined = weighted if combined is None else combined + weighted
+        feature_names = explanation.feature_names
+    logging.info("Subgroup SHAP combined %d weighted predictors for a mixture arm", len(mixture))
+    return np.abs(combined), feature_names, rows.index
+
+
 def _persist_arm_subgroup_shap(
     model,
     X_test,
@@ -285,41 +334,35 @@ def _persist_arm_subgroup_shap(
     answer?". Writing them per arm here, on this stage's own baseline and its own
     split, makes the before/after pair like-for-like.
 
-    Only arms that expose a single fitted estimator are explained, which
-    ``resolve_single_estimator`` decides. A post-processing arm reuses its base
-    model and only moves the decision threshold, so its attributions are the base
-    model's by construction. ``ExponentiatedGradient`` predicts by drawing a
-    member of ``predictors_`` per row from ``weights_``, so no single member is
-    the model. ``GridSearch`` is explained like any other arm: it picks one grid
-    member, ``predictors_[best_idx_]``, and predicts with that alone. Skips are
+    A post-processing arm reuses its base model and only moves the decision
+    threshold, so its attributions are the base model's by construction and it is
+    skipped. Every other arm is explained by ``_arm_shap_attributions``; skips are
     logged rather than silently absent.
     """
     if not subgroup_cfg or not subgroup_cfg.get("enabled"):
         return
 
     arm = f"{dataset_name}/{model_type}/{technique_name}/{sensitive_attr}"
-    estimator = resolve_single_estimator(model)
-    if estimator is None:
-        logging.info("Subgroup SHAP skipped for %s: no single fitted estimator on the arm", arm)
-        return
-
     try:
-        max_samples = int(subgroup_cfg.get("max_samples", 1000))
-        explanation = shap_explain_tabular(estimator, X_test, max_samples=max_samples)
+        attributions = _arm_shap_attributions(
+            model, X_test, int(subgroup_cfg.get("max_samples", 1000))
+        )
     except Exception as exc:
         logging.warning("Subgroup SHAP failed for %s: %s", arm, exc)
         return
+    if attributions is None:
+        logging.info("Subgroup SHAP skipped for %s: the arm exposes no estimator to explain", arm)
+        return
+    values, feature_names, explained_index = attributions
 
     out_dir = (
         Path(subgroup_cfg["dir"]) / f"{dataset_name}_{model_type}_{technique_name}_{sensitive_attr}"
     )
     save_subgroup_shap(
-        np.abs(explanation.shap_values),
-        explanation.feature_names,
+        values,
+        feature_names,
         sensitive_test,
-        # SHAP may subsample internally; its returned frame is the authoritative
-        # record of which rows were explained.
-        getattr(explanation, "data", X_test).index,
+        explained_index,
         out_dir,
         arm,
         min_group_size=int(subgroup_cfg.get("min_group_size", DEFAULT_MIN_GROUP_SIZE)),

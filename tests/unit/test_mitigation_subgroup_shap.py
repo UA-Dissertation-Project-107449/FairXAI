@@ -39,11 +39,29 @@ class _Wrapped:
 
 
 class _Randomised:
-    """``ExponentiatedGradient``: predicts by drawing from ``predictors_`` per row."""
+    """``ExponentiatedGradient``: predicts by drawing from ``predictors_`` per row.
 
-    def __init__(self, predictors):
-        self.predictors_ = predictors
-        self.weights_ = np.full(len(predictors), 1.0 / len(predictors))
+    ``weights_`` and ``predictors_`` are pandas Series over a shared index, as
+    fairlearn builds them, and the score is their weighted combination.
+    """
+
+    def __init__(self, predictors, weights):
+        self.predictors_ = pd.Series(list(predictors))
+        self.weights_ = pd.Series(list(weights))
+
+    def _pmf_predict(self, X):
+        positive = sum(
+            weight * np.asarray(member.predict(X))
+            for weight, member in zip(self.weights_, self.predictors_)
+        )
+        return np.column_stack([1.0 - positive, positive])
+
+
+class _PostProcessor:
+    """``ThresholdOptimizer``: holds no estimator of its own, only a threshold."""
+
+    def predict(self, X, sensitive_features=None):
+        return np.zeros(len(X), dtype=int)
 
 
 class _GridSearch:
@@ -119,24 +137,55 @@ def test_baseline_and_mitigated_arms_do_not_collide(stage_module, tmp_path):
     ]
 
 
-def test_arm_without_a_single_estimator_is_skipped(stage_module, tmp_path, caplog):
-    """ExponentiatedGradient has no one model whose attributions to report."""
-    estimator, X = _fitted()
+def test_arm_with_no_estimator_at_all_is_skipped(stage_module, tmp_path, caplog):
+    """A post-processor only moves the threshold, so there is nothing of its own to explain."""
+    _, X = _fitted()
 
     with caplog.at_level("INFO"):
         stage_module._persist_arm_subgroup_shap(
-            _Randomised([estimator]),
+            _PostProcessor(),
             X,
             _sensitive(X),
             _cfg(tmp_path),
             "cleveland_uci",
             "logistic_regression",
-            "exponentiated_gradient",
+            "threshold_optimizer",
             "sex",
         )
 
     assert not (tmp_path / "sg").exists()
-    assert "no single fitted estimator" in caplog.text
+    assert "no estimator to explain" in caplog.text
+
+
+def test_randomised_arm_is_explained_as_a_weighted_mixture(stage_module, tmp_path):
+    """ExponentiatedGradient has no one model, but its score is linear in its members."""
+    first, X = _fitted(seed=1)
+    second, _ = _fitted(seed=2)
+    arm = _Randomised([first, second], weights=[0.25, 0.75])
+
+    values, feature_names, index = stage_module._arm_shap_attributions(arm, X, max_samples=1000)
+
+    expected = np.abs(
+        0.25 * stage_module.shap_explain_tabular(first, X, max_samples=len(X)).shap_values
+        + 0.75 * stage_module.shap_explain_tabular(second, X, max_samples=len(X)).shap_values
+    )
+    np.testing.assert_allclose(values, expected)
+    assert feature_names == FEATURES
+    assert list(index) == list(X.index)
+
+    stage_module._persist_arm_subgroup_shap(
+        arm,
+        X,
+        _sensitive(X),
+        _cfg(tmp_path),
+        "cleveland_uci",
+        "logistic_regression",
+        "exponentiated_gradient",
+        "sex",
+    )
+    arm_dir = tmp_path / "sg" / "cleveland_uci_logistic_regression_exponentiated_gradient_sex"
+    for name in TABLES:
+        assert (arm_dir / name).exists(), name
 
 
 def test_family_not_selected_writes_nothing(stage_module, tmp_path):
