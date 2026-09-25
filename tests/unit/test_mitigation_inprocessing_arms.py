@@ -54,3 +54,28 @@ def test_exponentiated_gradient_labels_are_reproducible(biased_split):
 
     np.testing.assert_array_equal(first["predictions"]["y_pred"], second["predictions"]["y_pred"])
     assert first["test_metrics"]["accuracy"] == second["test_metrics"]["accuracy"]
+
+
+def test_exponentiated_gradient_is_scored_by_its_own_ensemble(biased_split):
+    """The AUC has to score the mixture, not one member of it."""
+    X, _, _ = biased_split
+    result = _arm("exponentiated_gradient", biased_split, eps=0.01)
+    model = result["model"]
+
+    assert (model.weights_ > 0).sum() > 1, "fixture no longer exercises a mixed EG"
+    np.testing.assert_allclose(
+        result["predictions"]["y_proba"], model._pmf_predict(X)[:, 1].astype(float)
+    )
+
+
+def test_grid_search_is_scored_by_its_chosen_member(biased_split):
+    """GridSearch predicts with predictors_[best_idx_]; predictors_[0] is a different model."""
+    X, _, _ = biased_split
+    result = _arm("grid_search", biased_split)
+    model = result["model"]
+
+    chosen = model.predictors_[model.best_idx_].predict_proba(X)[:, 1]
+    np.testing.assert_allclose(result["predictions"]["y_proba"], chosen)
+    if model.best_idx_ != 0:
+        first = model.predictors_[0].predict_proba(X)[:, 1]
+        assert not np.allclose(chosen, first)

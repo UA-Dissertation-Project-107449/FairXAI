@@ -695,7 +695,12 @@ class MitigationEngine:
 
     @staticmethod
     def _positive_class_scores(model, X_test) -> np.ndarray | None:
-        """Extract usable positive-class scores for AUC, if available."""
+        """Positive-class scores for AUC, from whatever the arm predicts with.
+
+        The scores have to come from the same model as the labels, or the AUC and
+        the accuracy in one row of the comparison table describe two different
+        classifiers. The reductions each need their own branch for that to hold.
+        """
         if model is None:
             return None
 
@@ -706,8 +711,25 @@ class MitigationEngine:
             if scores is not None:
                 return scores
 
-        # Fairlearn in-processing models keep fitted base estimators in predictors_.
+        # ExponentiatedGradient's score is the weights_-weighted vote of predictors_,
+        # which is exactly what its own predict() thresholds. Any single member is a
+        # different classifier from the arm.
+        pmf_predict = getattr(model, "_pmf_predict", None)
+        if callable(pmf_predict) and getattr(model, "weights_", None) is not None:
+            try:
+                return np.asarray(pmf_predict(X_test))[:, 1].astype(float)
+            except Exception as exc:
+                logger.warning("Could not extract ensemble positive-class scores: %s", exc)
+
+        # GridSearch fits a grid and then predicts with one chosen member.
         predictors = getattr(model, "predictors_", None)
+        best_idx = getattr(model, "best_idx_", None)
+        if predictors is not None and best_idx is not None:
+            scores = MitigationEngine._positive_class_scores(predictors[best_idx], X_test)
+            if scores is not None:
+                return scores
+
+        # Last resort for a fairlearn-like object of neither shape.
         if predictors is not None:
             for predictor in predictors:
                 scores = MitigationEngine._positive_class_scores(predictor, X_test)
