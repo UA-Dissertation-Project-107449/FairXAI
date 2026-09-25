@@ -51,7 +51,11 @@ from fairxai.explainability.tabular import (
     write_shap_status,
 )
 from fairxai.fairness.metrics import FairnessMetrics
-from fairxai.fairness.mitigation import MitigationEngine
+from fairxai.fairness.mitigation import (
+    MitigationEngine,
+    resolve_estimator_mixture,
+    resolve_single_estimator,
+)
 from fairxai.models import get_model_class
 from fairxai.models.cv_trainer import CVTrainer
 from fairxai.training.grid_search import (
@@ -704,31 +708,89 @@ def prepare_data_splits(
     }
 
 
+def _wrap_decision_function(df_model: Any):
+    """Read a margin-only estimator as probabilities, for XAI that needs them."""
+
+    class _DecisionFunctionWrapper:
+        def __init__(self, base_model: Any):
+            self.base_model = base_model
+
+        def predict_proba(self, X):
+            scores = self.base_model.decision_function(X)
+            scores = np.asarray(scores)
+            if scores.ndim == 1:
+                prob_pos = 1.0 / (1.0 + np.exp(-scores))
+                return np.vstack([1 - prob_pos, prob_pos]).T
+            exp_scores = np.exp(scores - np.max(scores, axis=1, keepdims=True))
+            return exp_scores / np.sum(exp_scores, axis=1, keepdims=True)
+
+    return _DecisionFunctionWrapper(df_model)
+
+
+def _positive_class_proba(estimator: Any, X: pd.DataFrame) -> np.ndarray:
+    """One estimator's positive-class score, however it exposes one."""
+    candidate = getattr(estimator, "model", estimator)
+    if hasattr(candidate, "predict_proba"):
+        return np.asarray(candidate.predict_proba(X))[:, 1].astype(float)
+    if hasattr(candidate, "decision_function"):
+        return _wrap_decision_function(candidate).predict_proba(X)[:, 1]
+    return np.asarray(candidate.predict(X), dtype=float)
+
+
+class _MixtureProba:
+    """A randomised reduction's score, behind one ``predict_proba``.
+
+    ``ExponentiatedGradient`` has no single fitted estimator: it draws a member of
+    ``predictors_`` per row from ``weights_``, so explaining any one member would
+    describe a different classifier from the arm. Its score is the linear
+    combination ``sum_t weights_[t] * h_t(X)``, so the arm is explained through the
+    same weighted combination of its members' scores. As in stage 10's subgroup
+    SHAP, the members contribute probabilities where fairlearn mixes their hard
+    labels: this is the weighted soft mixture, which is the output space the
+    baseline arm is explained in and therefore the comparable one.
+    """
+
+    def __init__(self, mixture: List[Tuple[float, Any]]) -> None:
+        self.mixture = mixture
+
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        positive = np.zeros(len(X), dtype=float)
+        for weight, member in self.mixture:
+            positive += weight * _positive_class_proba(member, X)
+        return np.vstack([1.0 - positive, positive]).T
+
+    # SHAP explains a callable directly; LIME wants predict_proba.
+    __call__ = predict_proba
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        return (self.predict_proba(X)[:, 1] >= 0.5).astype(int)
+
+
 def _unwrap_for_xai(raw_model: Any) -> Optional[Any]:
-    """Extract a sklearn-compatible estimator from fairlearn/wrapper models.
+    """Extract something explainable from fairlearn/wrapper models.
 
     ``_run_xai_for_fold`` only does ``getattr(model, 'model', model)`` which
-    is insufficient for fairlearn in-processing models.  This helper digs
-    into ``predictors_`` / ``.model`` to find a real sklearn estimator that
-    exposes ``predict_proba`` (or at least ``predict``).
+    is insufficient for fairlearn in-processing models. The two reductions need
+    different treatment, for the reasons ``resolve_single_estimator`` sets out:
+    ``GridSearch`` predicts with ``predictors_[best_idx_]``, so that member is the
+    arm, while ``ExponentiatedGradient`` mixes its members and is explained through
+    ``_MixtureProba``. Taking the first member of ``predictors_`` instead, as this
+    did, explains a model neither arm predicts with.
 
     Returns:
-        A sklearn-like estimator, or *None* if nothing usable is found.
+        A sklearn-like estimator or mixture, or *None* if nothing usable is found.
     """
     candidate = raw_model
-    # Fairlearn in-processing (ExponentiatedGradient, GridSearch)
-    # Prefer fitted predictors_ first; estimator_/estimator can be unfitted
-    # base templates in some fairlearn objects.
+    # Fairlearn in-processing (ExponentiatedGradient, GridSearch).
+    # Reductions are handled here and never fall through to estimator_/estimator,
+    # which can be the unfitted base template.
     if hasattr(candidate, "predictors_"):
-        predictor = next(
-            (p for p in candidate.predictors_ if hasattr(p, "predict_proba")),
-            next(
-                (p for p in candidate.predictors_ if hasattr(p, "predict")),
-                None,
-            ),
-        )
-        if predictor is not None:
-            candidate = predictor
+        single = resolve_single_estimator(candidate)
+        if single is not None:
+            candidate = single
+        else:
+            mixture = resolve_estimator_mixture(candidate)
+            return _MixtureProba(mixture) if mixture else None
     # Fairlearn post-processing wrappers (e.g. ThresholdOptimizer)
     elif hasattr(candidate, "estimator_"):
         candidate = candidate.estimator_
@@ -794,18 +856,8 @@ def save_experiment_xai(
         return _reduce(np.asarray(shap_values))
 
     def _resolve_shap_model(raw_model: Any) -> Any:
+        # _unwrap_for_xai already picked the reduction's own model or its mixture.
         candidate = _unwrap_for_xai(raw_model) or raw_model
-        if hasattr(candidate, "predictors_"):
-            predictor = next(
-                (
-                    p
-                    for p in candidate.predictors_
-                    if hasattr(p, "predict_proba") or hasattr(p, "predict")
-                ),
-                None,
-            )
-            if predictor is not None:
-                candidate = predictor
         if hasattr(candidate, "model"):
             candidate = candidate.model
 
@@ -818,39 +870,12 @@ def save_experiment_xai(
             return lambda X: candidate.predict(X)
         return candidate
 
-    def _wrap_decision_function(df_model: Any):
-        class _DecisionFunctionWrapper:
-            def __init__(self, base_model: Any):
-                self.base_model = base_model
-
-            def predict_proba(self, X):
-                scores = self.base_model.decision_function(X)
-                scores = np.asarray(scores)
-                if scores.ndim == 1:
-                    prob_pos = 1.0 / (1.0 + np.exp(-scores))
-                    return np.vstack([1 - prob_pos, prob_pos]).T
-                exp_scores = np.exp(scores - np.max(scores, axis=1, keepdims=True))
-                return exp_scores / np.sum(exp_scores, axis=1, keepdims=True)
-
-        return _DecisionFunctionWrapper(df_model)
-
     def _resolve_lime_model(raw_model: Any) -> Optional[Any]:
         candidate = _unwrap_for_xai(raw_model) or raw_model
         if hasattr(candidate, "predict_proba"):
             return candidate
         if hasattr(candidate, "decision_function"):
             return _wrap_decision_function(candidate)
-        if hasattr(candidate, "predictors_"):
-            predictor = next(
-                (
-                    p
-                    for p in candidate.predictors_
-                    if hasattr(p, "predict_proba") or hasattr(p, "decision_function")
-                ),
-                None,
-            )
-            if predictor is not None:
-                return predictor
         if hasattr(candidate, "model") and hasattr(candidate.model, "predict_proba"):
             return candidate.model
         if hasattr(candidate, "model") and hasattr(candidate.model, "decision_function"):
@@ -1280,10 +1305,14 @@ def run_single_split_experiment(
     if stage == "post-processing" and base_model is not None:
         model_for_xai = base_model
     if model_for_xai is not None and xai_enabled:
-        model_for_xai = _unwrap_for_xai(model_for_xai) or model_for_xai
+        xai_model = _unwrap_for_xai(model_for_xai) or model_for_xai
+        # The mixture is an explanation surface defined in this script, so it is
+        # not what gets pickled below; the arm's own fitted model is.
+        if not isinstance(xai_model, _MixtureProba):
+            model_for_xai = xai_model
         save_experiment_xai(
             exp_id,
-            model_for_xai,
+            xai_model,
             splits["X_train"],
             splits["X_test"],
             versioning,
