@@ -217,7 +217,7 @@ paired_effects:
   enabled: true
   alpha: 0.05
   n_boot: null      # null follows adaptive_bootstrap_replicates (1000 small, 200 large)
-  n_jobs: 4
+  n_jobs: -1        # was 4; seeds are per replicate, so this changes speed only
 
 comparison:
   baseline_comparison: true

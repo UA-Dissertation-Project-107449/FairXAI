@@ -173,7 +173,7 @@ scheduling:
   cpu_fraction: 0.75
   parallel_studies: true
   parallel_experiments: false
-  fs_jobs: 1
+  fs_jobs: 7                  # was 1; the 2026-09-26 cold run used 7 (--fs-jobs 7, --max-cores 14)
   hpo_search_n_jobs: null
   hpo_model_n_jobs: null
   warn_rows_threshold: 50000
