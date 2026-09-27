@@ -32,6 +32,7 @@ from fairxai.data.preprocessors import CardiacPreprocessor, DermatologyPreproces
 from fairxai.data.profilers import DataProfiler
 from fairxai.data.schemas import available_sensitive, get_age_unit, preferred_sensitive
 from fairxai.experiments.attribute_binning import apply_binning, create_binning_strategy
+from fairxai.experiments.data_io import resolve_default_binning
 
 
 def _stringify(obj):
@@ -85,6 +86,37 @@ def _apply_schema_rules(df: pd.DataFrame, schema_cfg: dict, dataset_name: str) -
         df = df.drop(columns=drop_cols)
 
     return df
+
+
+def _resolve_age_bins(
+    df: pd.DataFrame,
+    dataset_schema: dict,
+    binning_strategy: str,
+    default_binning: str,
+    age_unit: str = "years",
+) -> tuple[list, list, str]:
+    """Return ``(bins, labels, source)`` for one dataset under one binning strategy.
+
+    The default strategy's folder is what training, mitigation and the sweep
+    read, so there the age bands the schema declares for the cohort win over the
+    built-in strategy. Without this, a cohort whose bands differ from
+    ``fixed_10yr`` (cleveland_uci merges 70+ into 60+) was silently re-cut into
+    the built-in bands. Every other strategy is an explicit alternative binning
+    and is applied as defined. Schema bins declared in days are converted to
+    years, because ``age_raw`` is normalised to years before binning.
+    """
+    if binning_strategy == default_binning:
+        for name, spec in (dataset_schema.get("sensitive_attributes") or {}).items():
+            if name.lower() != "age" or spec.get("type") != "continuous":
+                continue
+            if not spec.get("bins") or not spec.get("labels"):
+                continue
+            bins = [float(edge) for edge in spec["bins"]]
+            if age_unit == "days":
+                bins = [round(edge / 365.25, 2) for edge in bins]
+            return bins, list(spec["labels"]), "schema"
+    bins, labels = create_binning_strategy(df, binning_strategy)
+    return bins, labels, "strategy"
 
 
 def _load_domain_config(project_root: Path, pipeline: str) -> dict:
@@ -325,6 +357,7 @@ def main():
         binning_strategies = [args.binning_strategy]
     else:
         binning_strategies = [None]  # No binning, use existing age_group
+    default_binning = resolve_default_binning(pipeline_cfg)
 
     logging.info("Configuration:")
     logging.info(f"  Train/Test split: {(1-test_size):.0%}/{test_size:.0%}")
@@ -453,14 +486,21 @@ def main():
                     continue
 
             # Apply age binning if specified
+            age_bins_source = None
             if binning_strategy:
                 logging.info("Age binning strategy: %s", binning_strategy)
                 if "age_raw" not in df.columns:
                     logging.error("'age_raw' column not found. Cannot apply binning.")
                     continue
 
-                # Create binning strategy
-                bins, labels = create_binning_strategy(df, binning_strategy)
+                bins, labels, age_bins_source = _resolve_age_bins(
+                    df,
+                    dataset_schema,
+                    binning_strategy,
+                    default_binning,
+                    age_unit=get_age_unit(dataset_name),
+                )
+                logging.info("Age bins from %s: %s", age_bins_source, labels)
 
                 # Apply binning (overwrite canonical age_group)
                 df = apply_binning(df, bins, labels, col="age_raw", output_col="age_group")
@@ -570,6 +610,7 @@ def main():
                         "missing_value_actions": actions,
                         "split_verification": verification,
                         "binning_strategy": binning_strategy,
+                        "age_bins_source": age_bins_source,
                         "modality": modality,
                         "output_dir": str(data_processed),
                     }
@@ -732,6 +773,7 @@ def main():
                     "missing_value_actions": actions,
                     "split_verification": verification,
                     "binning_strategy": binning_strategy,
+                    "age_bins_source": age_bins_source,
                     "output_dir": str(data_processed),
                 }
             )
