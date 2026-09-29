@@ -536,6 +536,10 @@ def write_canonical_comparison_outputs(
             "group_metric_deltas.csv",
             "fairness_evidence_summary.csv",
             "fairness_evidence_summary_by_model.csv",
+            # One non-dominated set per (evaluation protocol, fairness criterion),
+            # with F1 as the predictive axis. Canonical because it no longer
+            # ranks against an aggregate gap.
+            "pareto_<dataset>.csv",
         ],
         "compatibility_outputs": [
             "full_comparison.csv",
@@ -545,7 +549,6 @@ def write_canonical_comparison_outputs(
             "dataset_summary.csv",
             "cross_model_summary.csv",
             "tradeoff_<dataset>.csv",
-            "pareto_<dataset>.csv",
             "top_configs.csv",
         ],
         "dissertation_evidence_policy": (

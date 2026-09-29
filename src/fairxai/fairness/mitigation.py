@@ -5,6 +5,7 @@ Provides pre-processing, in-processing, and post-processing methods to improve
 fairness metrics while maintaining model performance.
 """
 
+import inspect
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -112,6 +113,58 @@ def _fit_with_sample_weight(model, X_train, y_train, sample_weight):
         model.train(X_train, y_train)
         return model, False
     return model, True
+
+
+def resolve_single_estimator(model: Any) -> Optional[Any]:
+    """The one fitted estimator behind a mitigated arm, or ``None`` if there is none.
+
+    Only used by callers that need to inspect an arm's model rather than its
+    predictions — SHAP, for instance. The arm shapes are:
+
+    - a fairxai wrapper (pre-processing, baseline), which keeps sklearn in ``.model``;
+    - ``GridSearch``, which fits a grid and then predicts with a single chosen
+      member, ``predictors_[best_idx_]``, so it does have one estimator;
+    - ``ExponentiatedGradient``, which predicts by drawing a member of
+      ``predictors_`` per row from the distribution ``weights_``. No single
+      member is the model, so this returns ``None``;
+    - a post-processor, which holds no estimator of its own.
+    """
+    wrapped = getattr(model, "model", None)
+    if wrapped is not None and wrapped is not model:
+        return wrapped
+    predictors = getattr(model, "predictors_", None)
+    best_idx = getattr(model, "best_idx_", None)
+    if predictors is not None and best_idx is not None:
+        return predictors[best_idx]
+    return None
+
+
+def resolve_estimator_mixture(model: Any) -> Optional[List[Tuple[float, Any]]]:
+    """The weighted members behind a randomised arm, or ``None`` if it is not one.
+
+    ``ExponentiatedGradient`` has no single fitted estimator — see
+    ``resolve_single_estimator`` — but its score is the linear combination
+    ``sum_t weights_[t] * h_t(X)`` over ``predictors_``. Anything linear in the model
+    output can therefore be computed per member and recombined with these weights
+    instead of skipping the arm, which is how the subgroup SHAP tables cover EG.
+
+    Zero-weight members are dropped, since fairlearn never predicts with them, and
+    the weights are renormalised so the combination stays a weighted mean.
+    """
+    weights = getattr(model, "weights_", None)
+    predictors = getattr(model, "predictors_", None)
+    if weights is None or predictors is None:
+        return None
+    if not callable(getattr(model, "_pmf_predict", None)):
+        return None
+
+    mixture = [
+        (float(weights[idx]), predictors[idx]) for idx in weights.index if float(weights[idx]) > 0
+    ]
+    total = sum(weight for weight, _ in mixture)
+    if not mixture or total <= 0:
+        return None
+    return [(weight / total, member) for weight, member in mixture]
 
 
 class PreProcessingMitigation:
@@ -304,6 +357,120 @@ class PreProcessingMitigation:
         return pd.DataFrame(X_resampled, columns=X_train.columns), pd.Series(
             y_resampled, name=y_train.name
         )
+
+    # SMOTE, ADASYN, ROS and RUS balance the label and ignore the attribute they
+    # are reported under, so on near-balanced cohorts they change nothing. The two
+    # methods below resample every (group x label) cell instead, which targets the
+    # attribute the technique is constrained on.
+
+    @staticmethod
+    def _group_label_codes(
+        y_train: pd.Series, sensitive_features: pd.DataFrame, sensitive_attr: str
+    ) -> Tuple[np.ndarray, Dict[int, Any]]:
+        """Encode each (group, label) cell as one integer code.
+
+        Returns the per-row codes and a map back to the original label, so a
+        sampler balancing the codes balances the cells.
+        """
+        if sensitive_attr not in sensitive_features.columns:
+            raise ValueError(
+                f"Group-aware resampling needs '{sensitive_attr}' in the sensitive "
+                f"columns: {list(sensitive_features.columns)}"
+            )
+
+        groups = np.asarray(sensitive_features[sensitive_attr]).astype(str)
+        labels = np.asarray(y_train)
+        pairs = list(zip(groups, labels.tolist()))
+        code_of = {pair: code for code, pair in enumerate(dict.fromkeys(pairs))}
+        codes = np.array([code_of[pair] for pair in pairs])
+        label_of = {code: pair[1] for pair, code in code_of.items()}
+        return codes, label_of
+
+    @classmethod
+    def apply_group_uniform_sampling(
+        cls,
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        sensitive_features: pd.DataFrame,
+        sensitive_attr: str = "sex",
+        random_state: int = 42,
+    ) -> Tuple[pd.DataFrame, pd.Series]:
+        """Duplicate rows until every (group x label) cell has the same size.
+
+        Args:
+            X_train: Training features
+            y_train: Training labels
+            sensitive_features: DataFrame with sensitive attributes
+            sensitive_attr: Attribute whose groups are balanced against the label
+            random_state: Random seed
+
+        Returns:
+            Tuple of (X_resampled, y_resampled)
+        """
+        logger.info(f"Applying group-uniform over-sampling on {sensitive_attr}")
+        codes, label_of = cls._group_label_codes(y_train, sensitive_features, sensitive_attr)
+        logger.info(f"  Before: {len(X_train)} samples, {len(label_of)} group x label cells")
+
+        sampler = RandomOverSampler(sampling_strategy="all", random_state=random_state)
+        X_resampled, codes_resampled = sampler.fit_resample(X_train, codes)
+
+        y_resampled = pd.Series(
+            [label_of[code] for code in codes_resampled], name=y_train.name
+        ).astype(y_train.dtype)
+        logger.info(f"  After: {len(X_resampled)} samples")
+
+        return pd.DataFrame(X_resampled, columns=X_train.columns), y_resampled
+
+    @classmethod
+    def apply_smote_group(
+        cls,
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        sensitive_features: pd.DataFrame,
+        sensitive_attr: str = "sex",
+        k_neighbors: int = 5,
+        random_state: int = 42,
+    ) -> Tuple[pd.DataFrame, pd.Series]:
+        """Synthesise rows until every (group x label) cell has the same size.
+
+        Args:
+            X_train: Training features
+            y_train: Training labels
+            sensitive_features: DataFrame with sensitive attributes
+            sensitive_attr: Attribute whose groups are balanced against the label
+            k_neighbors: Number of nearest neighbors for synthesis
+            random_state: Random seed
+
+        Returns:
+            Tuple of (X_resampled, y_resampled)
+        """
+        logger.info(f"Applying group-aware SMOTE on {sensitive_attr} (k={k_neighbors})")
+        codes, label_of = cls._group_label_codes(y_train, sensitive_features, sensitive_attr)
+        logger.info(f"  Before: {len(X_train)} samples, {len(label_of)} group x label cells")
+
+        min_count = int(pd.Series(codes).value_counts().min()) if len(codes) else 0
+        if min_count < 2:
+            logger.warning("Group-aware SMOTE skipped: a group x label cell has < 2 samples")
+            return X_train.copy(), y_train.copy()
+
+        sampler = SMOTE(
+            sampling_strategy="all",
+            k_neighbors=min(k_neighbors, max(min_count - 1, 1)),
+            random_state=random_state,
+        )
+
+        try:
+            X_resampled, codes_resampled = sampler.fit_resample(X_train, codes)
+        except ValueError as e:
+            logger.warning(f"Group-aware SMOTE failed ({e}); falling back to no resampling")
+            return X_train.copy(), y_train.copy()
+
+        y_resampled = pd.Series(
+            [label_of[code] for code in codes_resampled], name=y_train.name
+        ).astype(y_train.dtype)
+        logger.info(f"  After: {len(X_resampled)} samples")
+
+        return pd.DataFrame(X_resampled, columns=X_train.columns), y_resampled
 
 
 class InProcessingMitigation:
@@ -500,9 +667,22 @@ class MitigationEngine:
 
     # Valid stages and constraints
     VALID_STAGES = ["pre-processing", "in-processing", "post-processing"]
-    VALID_PREPROCESSING = ["reweighting", "smote", "ros", "rus", "adasyn"]
+    VALID_PREPROCESSING = [
+        "reweighting",
+        "smote",
+        "ros",
+        "rus",
+        "adasyn",
+        "uniform_sampling",
+        "smote_group",
+    ]
     VALID_INPROCESSING = ["exponentiated_gradient", "grid_search"]
     VALID_POSTPROCESSING = ["threshold_optimizer"]
+
+    @classmethod
+    def valid_techniques(cls) -> List[str]:
+        """Every technique the engine can actually apply, across the three stages."""
+        return [*cls.VALID_PREPROCESSING, *cls.VALID_INPROCESSING, *cls.VALID_POSTPROCESSING]
 
     def __init__(
         self,
@@ -529,11 +709,22 @@ class MitigationEngine:
         self.inprocessing = InProcessingMitigation()
         self.postprocessing = PostProcessingMitigation()
 
-    def _new_model(self):
-        """Build a fresh, untrained model of the configured family."""
+    def _new_model(self, weighted_fit: bool = False):
+        """Build a fresh, untrained model of the configured family.
+
+        ``weighted_fit`` drops the cuML GPU backend: cuML's RandomForest fits
+        with ``(X, y, convert_dtype)`` and rejects ``sample_weight``, so every
+        caller that needs weights (reweighting, the fairlearn reductions) must
+        get the sklearn estimator instead of silently losing the technique.
+        """
         model_class = get_model_class(self.model_type)
         params = dict(self.model_params)
         params.setdefault("random_state", self.random_state)
+        if weighted_fit and params.pop("use_gpu", False):
+            logger.info(
+                "[MITIGATION] %s needs sample_weight; using the CPU backend instead of cuML",
+                self.model_type,
+            )
         return model_class(**params)
 
     def build_model(self):
@@ -548,7 +739,12 @@ class MitigationEngine:
 
     @staticmethod
     def _positive_class_scores(model, X_test) -> np.ndarray | None:
-        """Extract usable positive-class scores for AUC, if available."""
+        """Positive-class scores for AUC, from whatever the arm predicts with.
+
+        The scores have to come from the same model as the labels, or the AUC and
+        the accuracy in one row of the comparison table describe two different
+        classifiers. The reductions each need their own branch for that to hold.
+        """
         if model is None:
             return None
 
@@ -559,8 +755,25 @@ class MitigationEngine:
             if scores is not None:
                 return scores
 
-        # Fairlearn in-processing models keep fitted base estimators in predictors_.
+        # ExponentiatedGradient's score is the weights_-weighted vote of predictors_,
+        # which is exactly what its own predict() thresholds. Any single member is a
+        # different classifier from the arm.
+        pmf_predict = getattr(model, "_pmf_predict", None)
+        if callable(pmf_predict) and getattr(model, "weights_", None) is not None:
+            try:
+                return np.asarray(pmf_predict(X_test))[:, 1].astype(float)
+            except Exception as exc:
+                logger.warning("Could not extract ensemble positive-class scores: %s", exc)
+
+        # GridSearch fits a grid and then predicts with one chosen member.
         predictors = getattr(model, "predictors_", None)
+        best_idx = getattr(model, "best_idx_", None)
+        if predictors is not None and best_idx is not None:
+            scores = MitigationEngine._positive_class_scores(predictors[best_idx], X_test)
+            if scores is not None:
+                return scores
+
+        # Last resort for a fairlearn-like object of neither shape.
         if predictors is not None:
             for predictor in predictors:
                 scores = MitigationEngine._positive_class_scores(predictor, X_test)
@@ -894,7 +1107,7 @@ class MitigationEngine:
             # Train the configured family on the pre-processed data
             # (needed as the base model for any post-processing step).
             logger.info("  [baseline] training %s on pre-processed data", self.model_type)
-            trained_model = self._new_model()
+            trained_model = self._new_model(weighted_fit=sample_weights is not None)
             if sample_weights is not None:
                 trained_model, _ = _fit_with_sample_weight(
                     trained_model, X_curr, y_curr, sample_weights
@@ -963,9 +1176,24 @@ class MitigationEngine:
                 X_train, y_train, sensitive_train, sensitive_attr
             )
             model, sample_weight_applied = _fit_with_sample_weight(
-                self._new_model(), X_train, y_train, sample_weights
+                self._new_model(weighted_fit=True), X_train, y_train, sample_weights
             )
             X_train_processed, y_train_processed = X_train, y_train
+
+        elif technique_name in ("uniform_sampling", "smote_group"):
+            resampler = {
+                "uniform_sampling": self.preprocessing.apply_group_uniform_sampling,
+                "smote_group": self.preprocessing.apply_smote_group,
+            }[technique_name]
+            X_train_processed, y_train_processed = resampler(
+                X_train,
+                y_train,
+                sensitive_train,
+                sensitive_attr,
+                random_state=self.random_state,
+            )
+            model = self._new_model()
+            model.train(X_train_processed, y_train_processed)
 
         elif technique_name in ("smote", "ros", "rus", "adasyn"):
             resampler = {
@@ -1023,12 +1251,13 @@ class MitigationEngine:
     ) -> Dict:
         """Apply in-processing technique."""
         base_model_params = kwargs.pop("base_model_params", None)
-        # fairlearn reductions need the raw sklearn estimator, not our wrapper.
+        # fairlearn reductions need the raw sklearn estimator, not our wrapper,
+        # and they fit it with sample_weight — so ask for the weighted-fit build.
         # Left as None for logistic regression so the historical base_model_params
         # path stays byte-identical and published LR results still reproduce.
         base_estimator = None
         if self.model_type != "logistic_regression":
-            base_estimator = self._new_model().model
+            base_estimator = self._new_model(weighted_fit=True).model
 
         if technique_name == "exponentiated_gradient":
             model = self.inprocessing.apply_exponentiated_gradient(
@@ -1055,8 +1284,13 @@ class MitigationEngine:
         else:
             raise ValueError(f"Unknown in-processing technique: {technique_name}")
 
-        # Predict on test set
-        y_pred = model.predict(X_test)
+        # Predict on test set. ExponentiatedGradient draws a member of predictors_
+        # per row, so an unseeded predict returns different labels — and different
+        # metrics — on every call. GridSearch's predict takes no seed.
+        if "random_state" in inspect.signature(model.predict).parameters:
+            y_pred = model.predict(X_test, random_state=self.random_state)
+        else:
+            y_pred = model.predict(X_test)
 
         # Get probability/score values (Fairlearn models may have multiple predictors).
         y_proba = self._positive_class_scores(model, X_test)

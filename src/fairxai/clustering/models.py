@@ -34,6 +34,12 @@ class ClusterResult:
     diagnostics: List["ClusterDiagnostics"] = field(default_factory=list)
     """Per-method diagnostics from the full grid search."""
 
+    n_noise: int = 0
+    """Rows the winning solution put in the noise cluster (DBSCAN only)."""
+
+    noise_fraction: float = 0.0
+    """``n_noise`` as a share of the rows clustered."""
+
     def to_assignments_df(self) -> pd.DataFrame:
         """Return a DataFrame suitable for writing as cluster_assignments.csv."""
         return pd.DataFrame(
@@ -62,6 +68,8 @@ class ClusterDiagnostics:
     silhouette: Optional[float]
     bic: Optional[float] = None
     note: Optional[str] = None
+    n_noise: Optional[int] = None
+    """Rows this candidate labelled noise. ``None`` for methods that assign every row."""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -69,6 +77,7 @@ class ClusterDiagnostics:
             "n_clusters": self.n_clusters,
             "silhouette": round(self.silhouette, 4) if self.silhouette is not None else None,
             "bic": round(self.bic, 4) if self.bic is not None else None,
+            "n_noise": self.n_noise,
             "note": self.note,
             **{f"param_{k}": v for k, v in self.params.items()},
         }

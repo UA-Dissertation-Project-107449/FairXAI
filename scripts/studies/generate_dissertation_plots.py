@@ -678,27 +678,147 @@ def _generate_model_stability_plots(
             overfit_csv,
         )
 
-    # --- baseline-only comparison table ---
+    # --- baseline comparison table ---
+    # Built from stage 7, not from the sweep. The sweep's baseline cells are
+    # seventy variations on a binning strategy and a training method, and taking
+    # the best of them by test F1 both selected on the test split and reported a
+    # number no single model ever scored (four-site LR came out at 0.820 against
+    # the real baseline's 0.776). The stage-7 baseline is one model per dataset
+    # and family, which is what the chapter means by "the baseline".
+    training_results = run_dir / "baseline" / "results" / "training_results.json"
+    _write_baseline_model_comparison(training_results, overfit_csv, out_dir)
+
+    # --- sweep baseline, selected on cross-validation ---
     if full_df is None or full_df.empty:
-        logger.warning("[WARNING] baseline_model_comparison: full_df missing")
+        logger.warning("[WARNING] best_sweep_baseline_by_cv: full_df missing")
+        return
+    _write_best_sweep_baseline_by_cv(full_df, out_dir)
+
+
+def _merge_overfit_risk(table: pd.DataFrame, overfit_csv: Path) -> pd.DataFrame:
+    """Attach overfit_risk from the gap table, by dataset and model when possible."""
+    if not overfit_csv.exists():
+        return table
+    odf = _safe_read_csv(overfit_csv)
+    if odf is None or "overfit_risk" not in odf.columns:
+        return table
+    if {"dataset", "model"}.issubset(odf.columns) and {"dataset", "model_type"}.issubset(
+        table.columns
+    ):
+        return table.merge(
+            odf[["dataset", "model", "overfit_risk"]]
+            .drop_duplicates(subset=["dataset", "model"])
+            .rename(columns={"model": "model_type"}),
+            on=["dataset", "model_type"],
+            how="left",
+        )
+    if "model" in odf.columns:
+        return table.merge(
+            odf[["model", "overfit_risk"]]
+            .drop_duplicates(subset=["model"])
+            .rename(columns={"model": "model_type"}),
+            on="model_type",
+            how="left",
+        )
+    return table
+
+
+def _write_baseline_model_comparison(
+    training_results_path: Path, overfit_csv: Path, out_dir: Path
+) -> None:
+    """Write baseline_model_comparison.csv from the stage-7 training results."""
+    if not training_results_path.exists():
+        logger.warning(
+            "[WARNING] baseline_model_comparison: training_results.json not found at %s",
+            training_results_path,
+        )
+        return
+    try:
+        payload = json.loads(training_results_path.read_text())
+    except (OSError, ValueError) as exc:
+        logger.warning(
+            "[WARNING] baseline_model_comparison: cannot read %s (%s)", training_results_path, exc
+        )
         return
 
-    mit_col = "mitigation_technique" if "mitigation_technique" in full_df.columns else None
-    if mit_col is None:
-        logger.warning("[WARNING] baseline_model_comparison: no mitigation_technique column")
+    rows = []
+    for dataset, models in (payload or {}).items():
+        if not isinstance(models, dict):
+            continue
+        for model_type, entry in models.items():
+            if not isinstance(entry, dict):
+                continue
+            test_metrics = entry.get("test_metrics") or {}
+            # Both protocols are reported side by side rather than one standing
+            # in for the other: the cohorts here are small enough that the
+            # single test split and the CV mean disagree by more than the
+            # differences the chapter discusses.
+            cv_f1 = ((entry.get("cv_results") or {}).get("metrics") or {}).get("f1_score") or {}
+            rows.append(
+                {
+                    "dataset": dataset,
+                    "model_type": model_type,
+                    "f1_value": test_metrics.get("f1_score"),
+                    "recall_value": test_metrics.get("recall"),
+                    "precision_value": test_metrics.get("precision"),
+                    "auc_value": test_metrics.get("auc_roc"),
+                    "accuracy_value": test_metrics.get("accuracy"),
+                    "cv_f1_mean": cv_f1.get("mean"),
+                    "cv_f1_std": cv_f1.get("std"),
+                    "cv_folds": (entry.get("cv_results") or {}).get("n_folds"),
+                    "source": "stage_7_training_results",
+                }
+            )
+
+    if not rows:
+        logger.warning(
+            "[WARNING] baseline_model_comparison: no model entries in %s", training_results_path
+        )
         return
 
-    baseline_df = full_df[full_df[mit_col].astype(str).str.lower() == "baseline"].copy()
+    table = _merge_overfit_risk(pd.DataFrame(rows), overfit_csv)
+    out_csv = out_dir / "baseline_model_comparison.csv"
+    table.to_csv(out_csv, index=False)
+    _report("baseline_model_comparison", out_csv)
+
+
+def _write_best_sweep_baseline_by_cv(full_df: pd.DataFrame, out_dir: Path) -> None:
+    """Write the best sweep baseline cell per family, selected on CV F1.
+
+    Named for what it is. The selection runs on the cross-validated mean so the
+    winning cell is not chosen on the same split it is then quoted from; rows
+    from the single-split arm are dropped rather than compared against it,
+    because there the sweep's f1_value *is* the test score.
+    """
+    if "mitigation_technique" not in full_df.columns:
+        logger.warning("[WARNING] best_sweep_baseline_by_cv: no mitigation_technique column")
+        return
+    baseline_df = full_df[full_df["mitigation_technique"].astype(str).str.lower() == "baseline"]
     if baseline_df.empty:
-        logger.warning("[WARNING] baseline_model_comparison: no baseline rows in full_df")
+        logger.warning("[WARNING] best_sweep_baseline_by_cv: no baseline rows in full_df")
+        return
+    if "training_method" not in baseline_df.columns:
+        logger.warning("[WARNING] best_sweep_baseline_by_cv: no training_method column")
         return
 
+    cv_df = baseline_df[baseline_df["training_method"].astype(str) == "kfold_cv"].copy()
+    if cv_df.empty:
+        logger.warning(
+            "[WARNING] best_sweep_baseline_by_cv: the sweep ran no kfold_cv baseline cells, "
+            "so no cell can be selected without selecting on the test split"
+        )
+        return
+
+    score_col = "f1_score_mean" if "f1_score_mean" in cv_df.columns else "f1_value"
     keep_cols = [
         c
         for c in [
             "dataset",
             "model_type",
-            "f1_value",
+            "binning_strategy",
+            "constraint_attribute",
+            score_col,
+            "f1_score_std",
             "recall_value",
             "precision_value",
             "auc_value",
@@ -706,43 +826,19 @@ def _generate_model_stability_plots(
             "dem_parity_age_group_max_diff",
             "dem_parity_sex_max_diff",
         ]
-        if c in baseline_df.columns
+        if c in cv_df.columns
     ]
     best_rows = (
-        baseline_df.sort_values("f1_value", ascending=False)
+        cv_df.sort_values(score_col, ascending=False)
         .groupby(["dataset", "model_type"], as_index=False)
         .first()
     )
-    table = best_rows[keep_cols].copy()
+    table = best_rows[keep_cols].drop_duplicates(subset=["dataset", "model_type"]).copy()
+    table["selected_on"] = score_col
 
-    # Merge overfit_risk if overfit_gap_table was loaded
-    if overfit_csv.exists():
-        odf = _safe_read_csv(overfit_csv)
-        if odf is not None and "overfit_risk" in odf.columns:
-            if {"dataset", "model"}.issubset(odf.columns) and {"dataset", "model_type"}.issubset(
-                table.columns
-            ):
-                table = table.merge(
-                    odf[["dataset", "model", "overfit_risk"]]
-                    .drop_duplicates(subset=["dataset", "model"])
-                    .rename(columns={"model": "model_type"}),
-                    on=["dataset", "model_type"],
-                    how="left",
-                )
-            elif "model" in odf.columns:
-                table = table.merge(
-                    odf[["model", "overfit_risk"]]
-                    .drop_duplicates(subset=["model"])
-                    .rename(columns={"model": "model_type"}),
-                    on="model_type",
-                    how="left",
-                )
-
-    table = table.drop_duplicates(subset=["dataset", "model_type"])
-
-    out_csv = out_dir / "baseline_model_comparison.csv"
+    out_csv = out_dir / "best_sweep_baseline_by_cv.csv"
     table.to_csv(out_csv, index=False)
-    _report("baseline_model_comparison", out_csv)
+    _report("best_sweep_baseline_by_cv", out_csv)
 
 
 # ---------------------------------------------------------------------------

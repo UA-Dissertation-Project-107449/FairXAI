@@ -397,6 +397,18 @@ def run_dataset(
             cluster_result = engine.fit(cluster_input, feature_cols=feature_cols or None)
             engine.save_diagnostics(cluster_result, ds_out)
 
+            # Record what won and how much of the cohort it set aside as noise.
+            # The silhouette alone does not say whether a solution covers the
+            # cohort or only the part of it that clustered cleanly.
+            align_meta["selected_clustering"] = {
+                "method": cluster_result.method,
+                "n_clusters": cluster_result.n_clusters,
+                "silhouette": round(cluster_result.silhouette, 4),
+                "n_noise": cluster_result.n_noise,
+                "noise_fraction": round(cluster_result.noise_fraction, 4),
+            }
+            (ds_out / "clustering_features.json").write_text(json.dumps(align_meta, indent=2))
+
             # Write cluster_assignments.csv
             assignments = cluster_result.to_assignments_df()
             assignments.to_csv(ds_out / "cluster_assignments.csv")

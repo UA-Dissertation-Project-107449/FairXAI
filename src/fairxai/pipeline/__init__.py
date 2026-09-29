@@ -8,16 +8,21 @@ from fairxai.pipeline.stages import (
     DERMATOLOGY_STAGE_BY_NUMBER,
     DERMATOLOGY_STAGES,
     PIPELINE_STAGES,
+    RUN_MANIFEST_FILENAME,
     STAGE_BY_NAME,
     STAGE_BY_NUMBER,
     STAGES,
     PipelineStage,
+    build_run_manifest,
+    compare_run_manifests,
     get_completed_stages,
     get_stage_range,
     get_stages,
     mark_stage_complete,
+    read_run_manifest,
     resolve_stage,
     validate_prior_stages,
+    write_run_manifest,
 )
 
 __all__ = [
@@ -38,4 +43,9 @@ __all__ = [
     "validate_prior_stages",
     "mark_stage_complete",
     "get_completed_stages",
+    "RUN_MANIFEST_FILENAME",
+    "build_run_manifest",
+    "write_run_manifest",
+    "read_run_manifest",
+    "compare_run_manifests",
 ]

@@ -29,6 +29,20 @@ data:
 # heaviest combos may fall back to a single split — a documented limitation.
 constraint_attrs: all
 
+# Protocols this stage reports. `single_split` is the one held-out split;
+# `kfold_cv` reruns every arm out of fold and pools the validation predictions,
+# so each patient is scored exactly once by a model that did not train on them.
+# CV is the primary read for these two small cohorts (a 61-row Cleveland test
+# split puts one patient in the oldest age band), and it costs one extra fit per
+# fold per arm. Results land in summary_cv.csv / predictions_cv/ /
+# paired_effects_cv.csv; the holdout files are unchanged. Per-arm subgroup SHAP
+# stays holdout-only.
+training_methods:
+  - single_split
+  - kfold_cv
+cv_folds: 5
+random_seed: 42
+
 # Model families that mitigation runs for. Every family gets its own baseline
 # row plus one row per technique x constraint attribute.
 # Base hyperparameters per family come from configs/models/<family>.yaml.
@@ -98,8 +112,31 @@ mitigation_strategies:
       n_neighbors: 5
       random_state: 42
   
+  # smote, ros, rus and adasyn above balance the label only: they ignore the
+  # constraint attribute, so they are label-balancing controls, not fairness
+  # techniques. The two below balance every (group x label) cell instead.
+  
+  uniform_sampling:
+    stage: "pre-processing"
+    method: "group_uniform_oversampling"
+    library: "imblearn"
+    description: "Duplicate rows until every (group x label) cell has the same size"
+    parameters:
+      random_state: 42
+  
+  smote_group:
+    stage: "pre-processing"
+    method: "group_aware_synthetic_oversampling"
+    library: "imblearn"
+    description: "Synthesise rows until every (group x label) cell has the same size"
+    parameters:
+      k_neighbors: 5
+      random_state: 42
+  
   # === In-processing Techniques ===
-  # Fairness-aware training algorithms
+  # Fairness-aware training algorithms. The two Fairlearn reductions below are the
+  # only in-processing arms: adversarial debiasing was planned and never built, so
+  # it is out of scope rather than pending.
   
   exponentiated_gradient:
     stage: "in-processing"
@@ -122,20 +159,11 @@ mitigation_strategies:
       grid_size: 10  # 20 for full run; halved for tractable timing on large datasets
       grid_limit: 2.0
   
-  adversarial_debiasing:
-    stage: "in-processing"
-    method: "adversarial_network"
-    library: "aif360"
-    description: "Learn fair representations via adversarial training"
-    parameters:
-      privileged_groups: [{"sex": 1}]
-      unprivileged_groups: [{"sex": 0}]
-      scope_name: "debiased_classifier"
-      debias: true
-      adversary_loss_weight: 0.1
-  
   # === Post-processing Techniques ===
-  # Applied to model predictions
+  # Applied to model predictions. The Fairlearn threshold optimiser below is the
+  # only post-processing arm: the two aif360 arms (calibrated equalized odds,
+  # reject option classification) were planned and never built, so they are out
+  # of scope rather than pending.
   
   threshold_optimizer:
     stage: "post-processing"
@@ -147,29 +175,6 @@ mitigation_strategies:
       objective: "balanced_accuracy_score"
       grid_size: 100
   
-  calibrated_equalized_odds:
-    stage: "post-processing"
-    method: "calibration_adjustment"
-    library: "aif360"
-    description: "Adjust predictions to satisfy equalized odds while maintaining calibration"
-    parameters:
-      cost_constraint: "fnr"  # false negative rate
-      unprivileged_groups: [{"sex": 0}]
-      privileged_groups: [{"sex": 1}]
-  
-  reject_option_classification:
-    stage: "post-processing"
-    method: "reject_option_boundary"
-    library: "aif360"
-    description: "Give favorable outcomes to unprivileged groups near decision boundary"
-    parameters:
-      unprivileged_groups: [{"sex": 0}]
-      privileged_groups: [{"sex": 1}]
-      low_class_thresh: 0.01
-      high_class_thresh: 0.99
-      num_class_thresh: 100
-      metric_name: "Statistical parity difference"
-
 evaluation:
   # Metrics to track for each technique
   performance_metrics:
@@ -197,6 +202,22 @@ evaluation:
     - accuracy_vs_fairness_pareto
     - recall_vs_equalized_odds
     - calibration_vs_demographic_parity
+
+# Per-cohort family exclusions, same key the sweep reads. SVM's RBF kernel is
+# O(n^2) in rows and the resamplers add rows, so cardio70k drops it.
+dataset_overrides:
+  cardio70k:
+    exclude_model_types:
+      - svm
+
+# Paired bootstrap over the change each arm makes against its own baseline.
+# Both arms predict the same test rows, so one resample serves both and the
+# shared cohort noise cancels.
+paired_effects:
+  enabled: true
+  alpha: 0.05
+  n_boot: null      # null follows adaptive_bootstrap_replicates (1000 small, 200 large)
+  n_jobs: -1        # was 4; seeds are per replicate, so this changes speed only
 
 comparison:
   baseline_comparison: true

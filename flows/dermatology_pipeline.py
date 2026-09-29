@@ -290,9 +290,9 @@ def dermatology_pipeline(
         Enabling it disables frozen-feature caching, so an augmented run pays
         the pixels->features cost every epoch.
     cache_frozen_features : ``None`` defers to
-        ``training.image.cache_frozen_features``. Caching extracts features once
-        through an eval-mode backbone, so BatchNorm statistics stay frozen where
-        the uncached path lets them drift; the two are not interchangeable.
+        ``training.image.cache_frozen_features``. With a frozen backbone both
+        paths run it in eval mode, so caching changes the cost and not the
+        model.
     """
     flow_logger = get_run_logger()
 
@@ -664,9 +664,9 @@ Examples:
         dest="cache_frozen_features",
         action="store_true",
         help=(
-            "Extract frozen-backbone features once and reuse them. Uses an "
-            "eval-mode backbone, so BatchNorm and dropout differ from the "
-            "default train-mode path."
+            "Extract frozen-backbone features once and reuse them. The frozen "
+            "backbone runs in eval mode either way, so this is a speed-up and "
+            "not a different model."
         ),
     )
     feature_cache_group.add_argument(

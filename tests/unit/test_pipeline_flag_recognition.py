@@ -384,3 +384,54 @@ def test_dermatology_bash_forwards_augmentation_only_to_train() -> None:
         assert (
             "AUGMENTATION_ARGS" not in arrays
         ), f"{script_name} must not receive AUGMENTATION_ARGS"
+
+
+# Scripts that read a whole run's outputs rather than a dataset list, so the
+# scope reaches them through what earlier stages wrote.
+_RUN_WIDE_SCRIPTS = {
+    "scripts/common/report_shap_status.py",
+    "scripts/cardiac/compare.py",
+    "scripts/studies/generate_dissertation_plots.py",
+}
+
+
+def _bash_script_calls(source: str) -> list[tuple[str, str]]:
+    """(script path, full joined call) for every ``python3 "$ROOT_DIR/..."`` call."""
+    calls = []
+    lines = source.splitlines()
+    i = 0
+    while i < len(lines):
+        match = re.search(r'python3 "\$ROOT_DIR/([^"]+\.py)"', lines[i])
+        if match:
+            call = lines[i]
+            while call.rstrip().endswith("\\") and i + 1 < len(lines):
+                i += 1
+                call = call.rstrip()[:-1] + " " + lines[i].strip()
+            calls.append((match.group(1), call))
+        i += 1
+    return calls
+
+
+def test_bash_forwards_dataset_scope_to_every_per_dataset_stage() -> None:
+    """A --datasets run must not write outputs for cohorts outside the scope.
+
+    Stage 3 once dropped the scope and wrote triage for every configured
+    cohort.
+    """
+    calls = _bash_script_calls(BASH_PIPELINE.read_text(encoding="utf-8"))
+    assert any(path.endswith("generate_recommendations.py") for path, _ in calls)
+
+    unscoped = [
+        path for path, call in calls if path not in _RUN_WIDE_SCRIPTS and "DATASET_ARGS" not in call
+    ]
+    assert unscoped == []
+
+
+def test_prefect_recommendations_task_forwards_dataset_scope() -> None:
+    source = PREFECT_FLOW.read_text(encoding="utf-8")
+    task = source.split("def generate_recommendations(", 1)[1].split("\n@task", 1)[0]
+
+    assert "datasets: Optional[list[str]] = None" in task
+    assert 'args.extend(["--datasets", *datasets])' in task
+    submit = source.split("generate_recommendations.submit(", 1)[1].split(")", 1)[0]
+    assert [a.strip() for a in submit.split(",")[:3]] == ["run_id", "datasets", "verbose"]

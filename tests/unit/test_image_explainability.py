@@ -108,6 +108,44 @@ def test_select_images_stratifies_and_caps() -> None:
     assert sel["sex"].nunique() == 2
 
 
+def _first_cell_index(df: pd.DataFrame, attr: str) -> int:
+    """Index of the row ``select_images`` draws for ``attr``'s first cell."""
+    work = df.copy()
+    work["_outcome"] = [
+        xai._outcome(int(t), int(p)) for t, p in zip(work["y_true"], work["y_pred"])
+    ]
+    _key, cell = next(iter(work.groupby([attr, "_outcome"], dropna=False)))
+    return cell.sample(1, random_state=42).index[0]
+
+
+def test_select_images_draws_from_every_attribute_under_a_tight_budget() -> None:
+    """A budget smaller than the first attribute's stratum count still reaches the rest.
+
+    Cells used to be drained attribute by attribute, so with age_group listed
+    first (40 strata here) a 9-image budget never reached fitzpatrick_group or
+    sex, and the dermatology stage explained age strata only.
+    """
+    rng = np.random.default_rng(3)
+    n = 400
+    df = pd.DataFrame(
+        {
+            "y_true": rng.integers(0, 2, n),
+            "y_pred": rng.integers(0, 2, n),
+            "age_group": rng.choice([f"g{i}" for i in range(10)], n),
+            "fitzpatrick_group": rng.choice(["I-II", "III-IV", "V-VI"], n),
+            "sex": rng.choice(["Female", "Male"], n),
+            "image_path": [f"img_{i}.png" for i in range(n)],
+        }
+    )
+    attrs = ["age_group", "fitzpatrick_group", "sex"]
+
+    sel = xai.select_images(df, attrs, n_samples=9, per_cell=1)
+
+    assert len(sel) == 9
+    for attr in attrs:
+        assert _first_cell_index(df, attr) in sel.index, attr
+
+
 def test_select_images_no_sensitive_attr_falls_back() -> None:
     df = pd.DataFrame(
         {

@@ -39,7 +39,8 @@ experiment = [
     "scipy>=1.10.0",            # (reqs: 1.15.3) distance metrics, statistical functions
     "imbalanced-learn>=0.12.0", # (reqs: 0.14.0) SMOTE, oversampling, undersampling
     "fairlearn>=0.10.0,<0.14",  # (reqs: 0.13.0) fairness metrics and mitigation algorithms
-    "xgboost>=3.2.0",           # (reqs: 3.2.0) gradient-boosted trees for model_type='xgboost'
+    # Capped with shap below: shap 0.52 + xgboost >= 3.3 breaks interventional SHAP.
+    "xgboost>=3.2.0,<3.3",      # (reqs: 3.2.0) gradient-boosted trees for model_type='xgboost'
     "interpret>=0.6.0",         # (reqs: 0.6.10) InterpretML — loads the EBM difficulty model
     "psutil>=5.9.0",            # (reqs: 7.0.0)  memory-aware worker budgeting in studies
     "jenkspy>=0.3.0",           # (reqs: 0.3.3)  Jenks natural breaks for attribute binning
@@ -51,7 +52,7 @@ experiment = [
 dev = [
     "matplotlib>=3.8.0",  # (reqs: 3.10.7) plotting and figure generation
     "seaborn>=0.13.0",    # (reqs: 0.13.2) statistical visualisation
-    "shap>=0.44.0",       # (reqs: 0.50.0) SHAP feature importance (lazy-imported)
+    "shap>=0.50.0,<0.52", # (reqs: 0.50.0) SHAP feature importance (lazy-imported); see xgboost pin
     "lime>=0.2.0",        # (reqs: 0.2.0.1) LIME local explanations (lazy-imported)
     "jenkspy>=0.3.0",     # (reqs: 0.3.3)  Jenks natural breaks (also in experiment)
     "tqdm>=4.66.0",       # (reqs: 4.67.1) progress bars

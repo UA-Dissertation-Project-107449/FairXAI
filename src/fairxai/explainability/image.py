@@ -22,6 +22,7 @@ the pipeline config via the caller script.
 from __future__ import annotations
 
 import logging
+from itertools import zip_longest
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
@@ -179,7 +180,9 @@ def select_images(
     """Pick up to ``n_samples`` rows stratified by (sensitive group, outcome).
 
     Round-robins across available sensitive attributes so every attribute and
-    every outcome class gets some coverage before the budget is spent.
+    every outcome class gets some coverage before the budget is spent. The
+    attribute order therefore sets the priority when the budget is too small to
+    cover every stratum: put the attribute the research question is about first.
     """
     work = df.copy()
     work["_outcome"] = [_outcome(int(t), int(p)) for t, p in zip(work["y_true"], work["y_pred"])]
@@ -187,11 +190,19 @@ def select_images(
 
     picked: list[int] = []
     seen: set[int] = set()
-    # Build (attr, group, outcome) cells; draw round-robin until budget hit.
-    cells: list[pd.DataFrame] = []
+    # (group, outcome) cells per attribute, then interleaved ACROSS attributes.
+    # Draining one attribute's cells before starting the next spent the whole
+    # budget on the first one: with three attributes and n_samples=12, only
+    # age_group was ever represented, so the skin-tone question had no images.
+    per_attr: list[list[pd.DataFrame]] = []
     for attr in attrs:
-        for (_group, _oc), cell in work.groupby([attr, "_outcome"], dropna=False):
-            cells.append(cell.sample(min(per_cell, len(cell)), random_state=random_state))
+        attr_cells = [
+            cell.sample(min(per_cell, len(cell)), random_state=random_state)
+            for (_group, _oc), cell in work.groupby([attr, "_outcome"], dropna=False)
+        ]
+        if attr_cells:
+            per_attr.append(attr_cells)
+    cells = [c for row in zip_longest(*per_attr) for c in row if c is not None]
     if not cells:  # no sensitive attrs present — fall back to a plain sample
         cells = [work.sample(min(n_samples, len(work)), random_state=random_state)]
 

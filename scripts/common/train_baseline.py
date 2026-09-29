@@ -38,17 +38,18 @@ from fairxai.experiments.data_io import (
     resolve_dataset_dir,
     resolve_default_binning,
 )
-from fairxai.explainability.subgroup import DEFAULT_MIN_GROUP_SIZE, summarise_subgroup_shap
+from fairxai.explainability.subgroup import DEFAULT_MIN_GROUP_SIZE, save_subgroup_shap
 from fairxai.explainability.tabular import (
     build_lime_explainer,
     lime_explain_instance,
     shap_explain_tabular,
+    shap_status_record,
+    write_shap_status,
 )
 from fairxai.models import get_model_class
 from fairxai.models.baseline import generate_predictions_with_metadata
 from fairxai.models.cv_trainer import CVTrainer
 from fairxai.training.vision import train_image_baseline
-from fairxai.utils.config import load_yaml_config
 
 ALLOWED_TRAINING_METHODS = {"single_split", "kfold_cv"}
 
@@ -131,66 +132,6 @@ def _build_cv_features(
     return x_full_raw, FoldPreprocessor
 
 
-def _save_subgroup_shap(
-    shap_abs: np.ndarray,
-    feature_names: list,
-    sensitive_global: pd.DataFrame,
-    explained_index: pd.Index,
-    holdout_shap_dir: Path,
-    dataset_name: str,
-    min_group_size: int = DEFAULT_MIN_GROUP_SIZE,
-) -> None:
-    """Write per-sensitive-group SHAP summaries beside the global one.
-
-    ``explained_index`` are the row labels SHAP actually explained (a subsample
-    of ``X_global``); the sensitive frame is realigned onto them by label rather
-    than by position, so a mismatch fails loudly here instead of silently
-    attributing rows to the wrong group.
-    """
-    try:
-        aligned = sensitive_global.loc[explained_index]
-    except KeyError as exc:
-        logging.warning(
-            "Subgroup SHAP skipped for %s: sensitive frame does not cover the "
-            "explained rows (%s)",
-            dataset_name,
-            exc,
-        )
-        return
-
-    summary = summarise_subgroup_shap(
-        shap_abs,
-        feature_names,
-        aligned,
-        min_group_size=min_group_size,
-    )
-    if summary is None:
-        logging.info(
-            "Subgroup SHAP produced nothing for %s: no sensitive attribute keeps "
-            "two or more groups of at least %d rows",
-            dataset_name,
-            min_group_size,
-        )
-        return
-
-    for name, frame in (
-        ("subgroup_summary.csv", summary.per_group),
-        ("subgroup_disparity.csv", summary.disparity),
-        ("subgroup_agreement.csv", summary.agreement),
-    ):
-        path = holdout_shap_dir / name
-        frame.to_csv(path, index=False)
-        logging.info(f"[SUCCESS] Holdout subgroup SHAP saved: {path}")
-
-    for attribute, dropped in summary.skipped.items():
-        logging.info(
-            "  Subgroup SHAP dropped small groups for %s: %s (floor=%d rows)",
-            attribute,
-            dropped,
-            min_group_size,
-        )
-
-
 def save_xai_outputs(
     model: Any,
     model_type: str,
@@ -201,7 +142,7 @@ def save_xai_outputs(
     X_global: Optional[pd.DataFrame] = None,
     xai_cfg: Optional[dict] = None,
     sensitive_global: Optional[pd.DataFrame] = None,
-) -> None:
+) -> list[dict]:
     """Save holdout-based SHAP and LIME outputs.
 
     Outputs are placed under::
@@ -222,12 +163,14 @@ def save_xai_outputs(
     No extra SHAP is computed for this: the per-row attribution matrix is
     already in memory and was previously collapsed to a single cohort-wide
     summary, which cannot show whether the model explains groups differently.
+
+    Returns the SHAP status records for the caller to write with the CV ones.
     """
     if xai_cfg is None:
         xai_cfg = {}
     if not xai_cfg.get("enabled", True):
         logging.info("XAI disabled via config xai.enabled=false")
-        return
+        return []
 
     holdout_shap_dir = output_dir / dataset_name / "holdout" / "shap"
     holdout_lime_dir = output_dir / dataset_name / "holdout" / "lime"
@@ -243,11 +186,16 @@ def save_xai_outputs(
     subgroup_enabled = bool(xai_cfg.get("subgroup_shap", True))
     subgroup_min_size = int(xai_cfg.get("subgroup_min_size", DEFAULT_MIN_GROUP_SIZE))
 
+    shap_records: list[dict] = []
     if not shap_enabled:
         logging.info(f"SHAP skipped for model_type={model_type} via xai.skip_shap_model_types")
+        shap_records.append(
+            shap_status_record("holdout_global", skipped_reason="xai.skip_shap_model_types")
+        )
 
     # Global SHAP summary (dataset-level) with percentiles
     if X_global is not None and shap_enabled:
+        shap_global = None
         try:
             df_global = X_global.copy()
             if len(df_global) > global_max:
@@ -274,7 +222,7 @@ def save_xai_outputs(
             logging.info(f"[SUCCESS] Holdout SHAP summary saved: {shap_global_file}")
 
             if subgroup_enabled and sensitive_global is not None:
-                _save_subgroup_shap(
+                save_subgroup_shap(
                     shap_vals_global,
                     shap_global.feature_names,
                     sensitive_global,
@@ -287,6 +235,10 @@ def save_xai_outputs(
                 )
         except Exception as exc:
             logging.warning(f"Global SHAP failed for {dataset_name}: {exc}")
+            if shap_global is None:
+                shap_records.append(shap_status_record("holdout_global", error=exc))
+        if shap_global is not None:
+            shap_records.append(shap_status_record("holdout_global", explanation=shap_global))
 
     # LIME examples
     try:
@@ -357,6 +309,22 @@ def save_xai_outputs(
             logging.warning(f"LIME skipped for {dataset_name}: no predict_proba/decision_function")
     except Exception as exc:
         logging.warning(f"LIME failed for {dataset_name}: {exc}")
+
+    return shap_records
+
+
+def _save_portable_booster(model: Any, path: Path) -> None:
+    """Write an XGBoost booster as JSON next to the pickle: pickles are not
+    portable across xgboost versions. No-op for other families."""
+    estimator = getattr(model, "model", model)
+    get_booster = getattr(estimator, "get_booster", None)
+    if get_booster is None:
+        return
+    try:
+        get_booster().save_model(str(path))
+        logging.info(f"  Portable booster: {path}")
+    except Exception as exc:
+        logging.warning(f"Could not write portable booster {path}: {exc}")
 
 
 def _normalise_model_types(raw_values: Optional[list[Any]]) -> list[str]:
@@ -572,7 +540,6 @@ def _apply_model_thread_override(
 
 def _build_model_params(
     model_type: str,
-    training_cfg: dict,
     random_state: int,
     project_root: Path,
     hpo_dir: Optional[Path] = None,
@@ -583,23 +550,19 @@ def _build_model_params(
     When ``hpo_dir`` and ``dataset_name`` are provided, best params from a
     previous :func:`~fairxai.training.grid_search.run_hpo` run are merged on
     top of the base config, overriding only the searched keys.
+
+    Delegates to :func:`fairxai.training.grid_search.resolve_model_params`
+    so stages 10 and 11 train the same tuned model this stage reports.
     """
-    from fairxai.training.grid_search import load_hpo_params
+    from fairxai.training.grid_search import resolve_model_params
 
-    model_cfg_path = project_root / "configs" / "models" / f"{model_type}.yaml"
-    params = dict(load_yaml_config(str(model_cfg_path)).get("hyperparameters", {}))
-    params.setdefault("random_state", random_state)
-
-    if hpo_dir is not None and dataset_name is not None:
-        hpo_best = load_hpo_params(hpo_dir, dataset_name, model_type)
-        if hpo_best:
-            logging.info(f"  [HPO] Loaded best params for {model_type}/{dataset_name}: {hpo_best}")
-            params.update(hpo_best)
-        else:
-            logging.debug(
-                f"  [HPO] No saved params found for {model_type}/{dataset_name}; " "using defaults."
-            )
-    return params
+    return resolve_model_params(
+        project_root,
+        model_type,
+        dataset=dataset_name,
+        hpo_dir=hpo_dir,
+        random_state=random_state,
+    ).params
 
 
 def _is_shap_enabled_for_model(model_type: str, xai_cfg: dict) -> bool:
@@ -750,8 +713,8 @@ def main():
         default=None,
         help=(
             "Extract frozen-backbone features once and train only the head over them "
-            "(requires --freeze-backbone). Much faster, but uses an eval-mode backbone "
-            "so BatchNorm/dropout differ from the default train-mode path."
+            "(requires --freeze-backbone). Much faster; the frozen backbone runs in "
+            "eval mode either way, so the trained model is the same."
         ),
     )
     parser.add_argument(
@@ -1186,7 +1149,6 @@ def main():
                 hpo_dir = project_root / f"output/{pipeline}/studies/hpo" if use_hpo else None
                 model_params = _build_model_params(
                     model_type,
-                    training_cfg,
                     random_state,
                     project_root,
                     hpo_dir=hpo_dir,
@@ -1347,6 +1309,7 @@ def main():
 
                 model_file = models_dir / f"{dataset_name}_{model_type}.pkl"
                 model.save(str(model_file))
+                _save_portable_booster(model, model_file.with_suffix(".json"))
 
                 train_pred_file = predictions_dir / f"{dataset_name}_{model_type}_train.csv"
                 test_pred_file = predictions_dir / f"{dataset_name}_{model_type}_test.csv"
@@ -1366,7 +1329,7 @@ def main():
                 feature_importance.to_csv(importance_file, index=False)
                 logging.info(f"  Feature importance: {importance_file}")
 
-                save_xai_outputs(
+                shap_records = save_xai_outputs(
                     model,
                     model_type,
                     X_train,
@@ -1462,6 +1425,9 @@ def main():
                             cv_lime_df.to_csv(cv_lime_file, index=False)
                             logging.info(f"[SUCCESS] CV LIME tracked saved: {cv_lime_file}")
 
+                        for fold in cv_xai_results["fold_results"]:
+                            shap_records.extend((fold.get("xai") or {}).get("shap_status", []))
+
                         agg = cv_xai_results["aggregated_metrics"]
                         logging.info(
                             f"  CV performance: "
@@ -1471,6 +1437,11 @@ def main():
                     except Exception as exc:
                         logging.warning(f"CV XAI failed for {dataset_name}/{model_type}: {exc}")
                         logging.debug("CV XAI traceback:", exc_info=True)
+                        if _is_shap_enabled_for_model(model_type, xai_cfg):
+                            shap_records.append(shap_status_record("cv", error=exc))
+
+                if shap_records:
+                    write_shap_status(xai_dir / xai_dataset_key, xai_dataset_key, shap_records)
 
                 model_result.update(
                     {

@@ -5,7 +5,8 @@ Run fairness mitigation comparison experiment.
 This script:
 1. Loads preprocessed train/test datasets
 2. Trains baseline models (no mitigation)
-3. Applies pre-processing mitigation techniques (SMOTE, ROS, RUS, ADASYN, reweighting)
+3. Applies pre-processing mitigation techniques (SMOTE, ROS, RUS, ADASYN, reweighting,
+   and the group-aware uniform_sampling and smote_group)
 4. Applies in-processing techniques (ExponentiatedGradient, GridSearch)
 5. Applies post-processing techniques (ThresholdOptimizer)
 6. Computes fairness metrics for each technique
@@ -27,6 +28,13 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
@@ -39,15 +47,28 @@ from fairxai.cli.runner_utils import (
     resolve_run_id,
     update_latest_pointer,
 )
+from fairxai.data.preprocessors import FoldPreprocessor, apply_fold_preprocessing
 from fairxai.experiments.data_io import (
     default_exclude_columns,
     resolve_dataset_dir,
     resolve_default_binning,
 )
+from fairxai.explainability.subgroup import DEFAULT_MIN_GROUP_SIZE, save_subgroup_shap
+from fairxai.explainability.tabular import shap_explain_tabular
 from fairxai.fairness.metrics import FairnessMetrics
-from fairxai.fairness.mitigation import MitigationEngine
+from fairxai.fairness.mitigation import (
+    MitigationEngine,
+    resolve_estimator_mixture,
+    resolve_single_estimator,
+)
+from fairxai.fairness.uncertainty import (
+    adaptive_bootstrap_replicates,
+    paired_arm_differences,
+)
 from fairxai.models import generate_predictions_with_metadata, get_model_class
-from fairxai.utils.config import load_yaml_config
+from fairxai.models.cv_trainer import CVTrainer
+from fairxai.training.grid_search import hpo_params_dir, resolve_model_params
+from fairxai.utils.config import dataset_excluded_model_types, load_yaml_config
 
 
 def load_dataset(
@@ -86,12 +107,14 @@ def load_dataset(
     train_raw = data_dir / f"{dataset_name}_train.csv"
     test_raw = data_dir / f"{dataset_name}_test.csv"
 
+    raw_siblings = False
     if train_scaled.exists() and test_scaled.exists():
         train_df = pd.read_csv(train_scaled)
         test_df = pd.read_csv(test_scaled)
         if train_raw.exists() and test_raw.exists():
             train_raw_df = pd.read_csv(train_raw)
             test_raw_df = pd.read_csv(test_raw)
+            raw_siblings = True
         else:
             train_raw_df = train_df
             test_raw_df = test_df
@@ -162,12 +185,38 @@ def load_dataset(
     logging.info(f"  Features: {X_train.shape[1]}")
     logging.info(f"  Sensitive attributes: {list(sensitive_train.columns)}")
 
+    # Pre-scaling feature frames, used only by the CV protocol so imputation and
+    # scaling are refit inside each fold instead of reused from the holdout fit.
+    # None whenever no unscaled sibling exists or it misses a model feature: CV
+    # then falls back to the scaled frame, which is holdout-safe but not
+    # per-fold leak-free.
+    X_train_raw = X_test_raw = None
+    if raw_siblings:
+        missing_raw = [c for c in numeric_cols if c not in train_raw_df.columns]
+        if missing_raw:
+            logging.warning(
+                "  Raw splits miss model features %s; per-fold refitting disabled", missing_raw
+            )
+        else:
+            X_train_raw = train_raw_df[list(numeric_cols)].copy()
+            X_test_raw = test_raw_df[list(numeric_cols)].copy()
+
     # Analysis-only metadata for the test split: continuous `*_raw` columns
     # (e.g. age_raw) carried for the post-hoc age-binning fairness sweep.
     meta_cols = [c for c in test_raw_df.columns if c.endswith("_raw")]
     meta_test = test_raw_df[meta_cols].copy() if meta_cols else None
 
-    return X_train, y_train, sensitive_train, X_test, y_test, sensitive_test, meta_test
+    return (
+        X_train,
+        y_train,
+        sensitive_train,
+        X_test,
+        y_test,
+        sensitive_test,
+        meta_test,
+        X_train_raw,
+        X_test_raw,
+    )
 
 
 def train_baseline(
@@ -260,6 +309,193 @@ def _persist_arm_predictions(
         )
 
 
+def _arm_shap_attributions(model, X_test, max_samples: int):
+    """Absolute SHAP values for one arm, with the rows they were computed on.
+
+    Most arms have a single fitted estimator — ``resolve_single_estimator`` finds
+    it — and are explained directly. ``ExponentiatedGradient`` has none: it draws a
+    member of ``predictors_`` per row from ``weights_``. Its score is nonetheless
+    the linear combination ``sum_t weights_[t] * h_t(X)``, and SHAP is linear in the
+    model output for a fixed background, so the arm's attributions are the same
+    weighted combination of its members' attributions. Each member is explained on
+    one fixed sample of rows so the per-member values line up before they are
+    combined. Note the members are explained on the score the explainer gives them
+    (probability or margin), where EG mixes their hard labels, so this describes the
+    weighted soft mixture — the same output space the baseline arm is explained in,
+    which is what makes the before/after pair comparable.
+
+    Returns ``None`` when the arm exposes nothing to explain, such as a
+    post-processor.
+    """
+    estimator = resolve_single_estimator(model)
+    if estimator is not None:
+        explanation = shap_explain_tabular(estimator, X_test, max_samples=max_samples)
+        return (
+            np.abs(explanation.shap_values),
+            explanation.feature_names,
+            # SHAP may subsample internally; its returned frame is the authoritative
+            # record of which rows were explained.
+            getattr(explanation, "data", X_test).index,
+        )
+
+    mixture = resolve_estimator_mixture(model)
+    if not mixture:
+        return None
+
+    rows = X_test if len(X_test) <= max_samples else X_test.sample(n=max_samples, random_state=42)
+    combined = None
+    feature_names = None
+    for weight, member in mixture:
+        explanation = shap_explain_tabular(member, rows, max_samples=len(rows))
+        weighted = weight * np.asarray(explanation.shap_values, dtype=float)
+        combined = weighted if combined is None else combined + weighted
+        feature_names = explanation.feature_names
+    logging.info("Subgroup SHAP combined %d weighted predictors for a mixture arm", len(mixture))
+    return np.abs(combined), feature_names, rows.index
+
+
+def _persist_arm_subgroup_shap(
+    model,
+    X_test,
+    sensitive_test,
+    subgroup_cfg,
+    dataset_name: str,
+    model_type: str,
+    technique_name: str,
+    sensitive_attr: str,
+) -> None:
+    """Subgroup-resolved SHAP for one arm, so RO4 can compare before and after.
+
+    Stage 7 writes these tables for the baseline only, which answers "does the
+    model explain the groups differently?" but not "does mitigating change the
+    answer?". Writing them per arm here, on this stage's own baseline and its own
+    split, makes the before/after pair like-for-like.
+
+    A post-processing arm reuses its base model and only moves the decision
+    threshold, so its attributions are the base model's by construction and it is
+    skipped. Every other arm is explained by ``_arm_shap_attributions``; skips are
+    logged rather than silently absent.
+    """
+    if not subgroup_cfg or not subgroup_cfg.get("enabled"):
+        return
+
+    arm = f"{dataset_name}/{model_type}/{technique_name}/{sensitive_attr}"
+    try:
+        attributions = _arm_shap_attributions(
+            model, X_test, int(subgroup_cfg.get("max_samples", 1000))
+        )
+    except Exception as exc:
+        logging.warning("Subgroup SHAP failed for %s: %s", arm, exc)
+        return
+    if attributions is None:
+        logging.info("Subgroup SHAP skipped for %s: the arm exposes no estimator to explain", arm)
+        return
+    values, feature_names, explained_index = attributions
+
+    out_dir = (
+        Path(subgroup_cfg["dir"]) / f"{dataset_name}_{model_type}_{technique_name}_{sensitive_attr}"
+    )
+    save_subgroup_shap(
+        values,
+        feature_names,
+        sensitive_test,
+        explained_index,
+        out_dir,
+        arm,
+        min_group_size=int(subgroup_cfg.get("min_group_size", DEFAULT_MIN_GROUP_SIZE)),
+    )
+
+
+def _write_paired_effects(
+    output_dir,
+    prediction_index,
+    sensitive_attrs,
+    settings,
+    predictions_subdir: str = "predictions",
+    output_name: str = "paired_effects.csv",
+) -> None:
+    """Interval and p-value for what each arm changed against its own baseline.
+
+    Every arm predicts the same rows as the baseline of its family, so the two
+    results are paired and the cohort noise they share cancels. Without this the
+    stage reports a before/after pair with no way to tell a real change from a
+    resampling wobble, which is the gap the mitigation chapter admits to.
+
+    This holds under both protocols. On the holdout split both arms score the one
+    test split; under CV the folds are cut before any technique runs, so both
+    arms score the same rows in the same fold and pair row for row. The CV
+    interval is still a fold-averaged one -- the pooled table comes from k
+    models, not one -- so it states the spread of the change, not the sampling
+    distribution of a single fitted model.
+    """
+    if not settings.get("enabled", True) or not prediction_index:
+        return
+
+    predictions_dir = output_dir / predictions_subdir
+    baselines = {
+        (row["dataset"], row["model_type"]): row["file"]
+        for row in prediction_index
+        if row["technique"] == "baseline"
+    }
+
+    alpha = float(settings.get("alpha", 0.05))
+    n_jobs = int(settings.get("n_jobs", 1))
+    configured_boot = settings.get("n_boot")
+
+    frames = []
+    for row in prediction_index:
+        if row["technique"] == "baseline":
+            continue
+        baseline_file = baselines.get((row["dataset"], row["model_type"]))
+        if baseline_file is None:
+            logging.warning(
+                "No baseline arm for %s/%s; skipping its paired comparison",
+                row["dataset"],
+                row["model_type"],
+            )
+            continue
+
+        baseline_df = pd.read_csv(predictions_dir / baseline_file)
+        arm_df = pd.read_csv(predictions_dir / row["file"])
+        n_boot = int(configured_boot or adaptive_bootstrap_replicates(len(baseline_df)))
+        try:
+            result = paired_arm_differences(
+                baseline_df,
+                arm_df,
+                sensitive_attrs,
+                n_boot=n_boot,
+                alpha=alpha,
+                n_jobs=n_jobs,
+                baseline_label="baseline",
+                arm_label=row["technique"],
+            )
+        except ValueError as exc:
+            logging.warning("Paired comparison failed for %s: %s", row["file"], exc)
+            continue
+
+        if result.is_empty:
+            continue
+        table = result.table.copy()
+        table.insert(0, "dataset", row["dataset"])
+        table.insert(1, "model_type", row["model_type"])
+        table.insert(2, "technique", row["technique"])
+        table.insert(3, "constraint_attr", row["constraint_attr"])
+        frames.append(table)
+
+    if not frames:
+        return
+
+    effects = pd.concat(frames, ignore_index=True)
+    effects_path = output_dir / output_name
+    effects.to_csv(effects_path, index=False)
+    logging.info(
+        "[SUCCESS] Saved paired arm effects: %s (%d rows, %d significant after BH)",
+        effects_path,
+        len(effects),
+        int(effects["significant"].sum()),
+    )
+
+
 def apply_mitigation_techniques(
     X_train,
     y_train,
@@ -277,6 +513,8 @@ def apply_mitigation_techniques(
     model_type="logistic_regression",
     model_params=None,
     prediction_index=None,
+    subgroup_cfg=None,
+    fold_sink=None,
 ):
     """
     Apply all mitigation techniques and collect results.
@@ -292,6 +530,10 @@ def apply_mitigation_techniques(
             ``"all"`` (default) runs each technique once per available sensitive
             attr (thorough); a list restricts to that subset; ``"none"`` keeps
             the legacy single-attr behavior (first available attr).
+        fold_sink: When set, each arm's prediction frame is appended to
+            ``fold_sink[(technique, constraint_attr)]`` instead of being reported
+            on its own. ``run_cv_protocol`` uses it to collect one fold's arms
+            before pooling them across folds.
 
     Returns:
         List of result dictionaries (one per technique × constraint attr).
@@ -386,6 +628,11 @@ def apply_mitigation_techniques(
                     for col in meta_test.columns:
                         predictions_df[col] = meta_test[col].values
 
+                if fold_sink is not None:
+                    fold_sink.setdefault((technique_name, sensitive_attr), []).append(
+                        predictions_df
+                    )
+
                 # Persist the mitigated per-sample predictions ("after" regime)
                 # so the age-binning sensitivity sweep can pair them vs baseline.
                 _persist_arm_predictions(
@@ -397,6 +644,17 @@ def apply_mitigation_techniques(
                     model_type=model_type,
                     technique_name=technique_name,
                     sensitive_attr=sensitive_attr,
+                )
+
+                _persist_arm_subgroup_shap(
+                    result["model"],
+                    X_test,
+                    sensitive_test,
+                    subgroup_cfg,
+                    dataset_name,
+                    model_type,
+                    technique_name,
+                    sensitive_attr,
                 )
 
                 # Calculate fairness metrics across ALL sensitive attrs (measurement
@@ -436,6 +694,198 @@ def apply_mitigation_techniques(
                 )
                 logging.exception(e)
 
+    return results
+
+
+def _pooled_metrics(frame) -> dict:
+    """Performance of one arm over its pooled out-of-fold predictions.
+
+    Every row is scored once, by the fold model that did not train on it, so
+    these are cohort-wide numbers rather than one test split's numbers.
+    """
+    y_true = frame["y_true"]
+    y_pred = frame["y_pred"]
+    metrics = {
+        "accuracy": float(accuracy_score(y_true, y_pred)),
+        "precision": float(precision_score(y_true, y_pred, zero_division=0)),
+        "recall": float(recall_score(y_true, y_pred, zero_division=0)),
+        "f1_score": float(f1_score(y_true, y_pred, zero_division=0)),
+        "auc_roc": float("nan"),
+    }
+    if "y_proba" in frame.columns:
+        try:
+            metrics["auc_roc"] = float(
+                roc_auc_score(y_true, pd.to_numeric(frame["y_proba"], errors="coerce"))
+            )
+        except (ValueError, TypeError):
+            pass
+    return metrics
+
+
+def run_cv_protocol(
+    dataset_name,
+    X_full,
+    y_full,
+    sensitive_full,
+    X_full_raw,
+    techniques_config,
+    model_type,
+    model_params,
+    constraint_attrs,
+    predictions_dir,
+    prediction_index,
+    n_folds: int = 5,
+    random_seed: int = 42,
+):
+    """Run every arm of the comparison out of fold instead of on one test split.
+
+    The holdout protocol reports each arm on a single test split, which is 61
+    patients on Cleveland -- small enough that one patient can own a subgroup
+    gap. Here the baseline and every technique x constraint attribute are refit
+    inside each fold and their validation predictions pooled, so each arm's
+    metrics are computed over the whole cohort with every patient scored exactly
+    once by a model that never saw them.
+
+    Folds are built once, from the target and the sensitive attributes, before
+    any technique touches the data. Every arm therefore scores the same rows in
+    the same fold, which is what keeps each arm paired with its own baseline.
+
+    Two things are deliberately left to the holdout protocol: per-arm subgroup
+    SHAP, which would need a cross-fold aggregation that does not exist, and the
+    ``*_raw`` analysis metadata, which the loader carries for the test split
+    only.
+    """
+    fold_factory = FoldPreprocessor if X_full_raw is not None else None
+    if fold_factory is None:
+        logging.warning(
+            "Raw split siblings unavailable; CV falls back to scaled X_full "
+            "(holdout-safe only, not per-fold leak-free)."
+        )
+        X_full_raw = X_full
+
+    trainer = CVTrainer(
+        n_folds=n_folds,
+        random_state=random_seed,
+        fold_preprocessor_factory=fold_factory,
+    )
+    folds = trainer.create_stratified_folds(X_full_raw, y_full, sensitive_full)
+    logging.info(
+        "[MITIGATION] protocol=kfold_cv dataset=%s model=%s folds=%d rows=%d",
+        dataset_name,
+        model_type,
+        len(folds),
+        len(X_full_raw),
+    )
+
+    arm_frames = {}
+    for fold_idx, (train_idx, val_idx) in enumerate(folds):
+        logging.info("[FOLD] protocol=kfold_cv fold=%d/%d", fold_idx + 1, len(folds))
+        X_tr, X_val = apply_fold_preprocessing(
+            fold_factory, X_full_raw.iloc[train_idx], X_full_raw.iloc[val_idx]
+        )
+        y_tr, y_val = y_full.iloc[train_idx], y_full.iloc[val_idx]
+        sens_tr, sens_val = sensitive_full.iloc[train_idx], sensitive_full.iloc[val_idx]
+
+        baseline = train_baseline(
+            X_tr,
+            y_tr,
+            X_val,
+            y_val,
+            sens_val,
+            dataset_name,
+            model_params,
+            model_type=model_type,
+        )
+        # The fold's baseline is an arm in its own right, and the reference the
+        # other arms of this fold are paired against.
+        sink = {("baseline", "none"): [baseline["predictions"]]}
+        apply_mitigation_techniques(
+            X_tr,
+            y_tr,
+            X_val,
+            y_val,
+            sens_tr,
+            sens_val,
+            dataset_name,
+            baseline["model"],
+            techniques_config,
+            base_model_params=model_params,
+            constraint_attrs=constraint_attrs,
+            model_type=model_type,
+            model_params=model_params,
+            subgroup_cfg=None,
+            fold_sink=sink,
+        )
+
+        for arm, frames in sink.items():
+            frame = frames[0].copy()
+            frame.insert(0, "fold", fold_idx)
+            frame.insert(1, "sample_idx", val_idx)
+            arm_frames.setdefault(arm, []).append(frame)
+
+    results = []
+    fairness_calc = FairnessMetrics(list(sensitive_full.columns))
+    for (technique_name, sensitive_attr), frames in arm_frames.items():
+        pooled = (
+            pd.concat(frames, ignore_index=True).sort_values("sample_idx").reset_index(drop=True)
+        )
+        if len(frames) != len(folds):
+            logging.warning(
+                "Arm %s/%s/%s covers %d of %d folds; its pooled table is incomplete",
+                dataset_name,
+                model_type,
+                technique_name,
+                len(frames),
+                len(folds),
+            )
+        _persist_arm_predictions(
+            pooled,
+            None,
+            predictions_dir=predictions_dir,
+            prediction_index=prediction_index,
+            dataset_name=dataset_name,
+            model_type=model_type,
+            technique_name=technique_name,
+            sensitive_attr=sensitive_attr,
+        )
+        feature_cols = [c for c in X_full.columns if c in pooled.columns]
+        fairness = fairness_calc.calculate_all_metrics(pooled, feature_cols=feature_cols)
+        # Out-of-fold rows come from k models, so the honest statement of
+        # performance spread is the fold-to-fold standard deviation, not a
+        # bootstrap interval over the pooled table.
+        per_fold = [
+            float(f1_score(g["y_true"], g["y_pred"], zero_division=0))
+            for _, g in pooled.groupby("fold")
+        ]
+        results.append(
+            {
+                "dataset": dataset_name,
+                "model_type": model_type,
+                "technique": technique_name,
+                "constraint_attr": "" if technique_name == "baseline" else sensitive_attr,
+                "stage": (
+                    "none"
+                    if technique_name == "baseline"
+                    else techniques_config[technique_name]["stage"]
+                ),
+                "split": "cv",
+                "test_metrics": _pooled_metrics(pooled),
+                "fairness": fairness,
+                "metadata": {
+                    "model_type": model_type,
+                    "n_folds": len(folds),
+                    "f1_folds": per_fold,
+                    "f1_fold_std": float(np.std(per_fold)) if per_fold else None,
+                },
+            }
+        )
+
+    logging.info(
+        "[SUCCESS] CV protocol complete dataset=%s model=%s arms=%d",
+        dataset_name,
+        model_type,
+        len(results),
+    )
     return results
 
 
@@ -491,6 +941,10 @@ def create_comparison_table(all_results):
             "technique": result["technique"],
             "constraint_attr": result.get("constraint_attr", ""),
             "stage": result["stage"],
+            # Which protocol produced the row, so a table never mixes the two
+            # silently: "holdout" is the single test split, "cv" is pooled
+            # out-of-fold.
+            "split": result.get("split", "holdout"),
             "accuracy": metrics["accuracy"],
             "precision": metrics["precision"],
             "recall": metrics["recall"],
@@ -613,17 +1067,18 @@ def _resolve_model_types(cli_model_types, experiment_cfg):
     return resolved or ["logistic_regression"]
 
 
-def _load_model_params(project_root, model_type):
-    """Base hyperparameters for a family, from configs/models/<model_type>.yaml."""
-    cfg_path = Path(project_root) / "configs" / "models" / f"{model_type}.yaml"
-    if not cfg_path.exists():
-        logging.warning(
-            "No model config at %s - falling back to wrapper class defaults for %s",
-            cfg_path,
-            model_type,
-        )
-        return {}
-    return dict(load_yaml_config(str(cfg_path)).get("hyperparameters", {}))
+def _load_model_params(project_root, model_type, dataset=None, hpo_dir=None):
+    """Hyperparameters for a family, tuned the same way stage 7 tunes them.
+
+    This stage used to stop at configs/models/<model_type>.yaml, so it mitigated
+    an untuned model and compared it to stage 7's tuned baseline.
+    """
+    return resolve_model_params(
+        project_root,
+        model_type,
+        dataset=dataset,
+        hpo_dir=hpo_dir,
+    ).params
 
 
 def run_analysis(
@@ -654,6 +1109,14 @@ def run_analysis(
     model_types = _resolve_model_types(model_types, experiment_cfg)
     logging.info("Mitigation model families: %s", model_types)
 
+    # Tuned params from stage 5, auto-detected exactly as the sweep does. Absent
+    # HPO output leaves every family on its config defaults.
+    hpo_dir = hpo_params_dir(project_root, pipeline)
+    if hpo_dir:
+        logging.info("[HPO] Using pre-computed HPO params from: %s", hpo_dir)
+    else:
+        logging.info("[HPO] No HPO study found; using configs/models defaults.")
+
     target_col = experiment_cfg.get("data", {}).get("target", "heart_disease")
 
     sensitive_attrs = experiment_cfg.get("data", {}).get("sensitive_attributes", ["sex"])
@@ -664,6 +1127,15 @@ def run_analysis(
     #   "none" -> legacy behavior: constrain on the first available attr only
     constraint_attrs_cfg = experiment_cfg.get("constraint_attrs", "all")
     logging.info("Mitigation constraint_attrs mode: %s", constraint_attrs_cfg)
+
+    # Protocols to report. `single_split` is the historical one test split;
+    # `kfold_cv` reruns every arm out of fold, which costs one fit per fold per
+    # arm but scores each patient exactly once.
+    training_methods = experiment_cfg.get("training_methods") or ["single_split"]
+    run_cv = "kfold_cv" in training_methods
+    cv_folds = int(experiment_cfg.get("cv_folds", 5))
+    random_seed = int(experiment_cfg.get("random_seed", 42))
+    logging.info("Mitigation protocols: %s", training_methods)
 
     use_run_id = bool(run_id or os.getenv("RUN_ID") or os.getenv("PREFECT__RUNTIME__FLOW_RUN_ID"))
     run_id = resolve_run_id(run_id) if use_run_id else None
@@ -741,27 +1213,47 @@ def run_analysis(
         default_binning,
     )
 
-    # Techniques to test (from config)
+    # Techniques to test (from config). A hardcoded allow-list used to filter this
+    # down silently, so a technique the engine never implemented stayed in the YAML
+    # looking pending instead of failing. Check the config against the engine.
     techniques = experiment_cfg["mitigation_strategies"]
+    unknown = sorted(set(techniques) - set(MitigationEngine.valid_techniques()))
+    if unknown:
+        raise ValueError(
+            f"mitigation_strategies names techniques the engine does not implement: {unknown}. "
+            "Implement them in MitigationEngine or drop them from the config."
+        )
 
-    # Filter to implemented techniques
-    implemented = {
-        "smote": techniques["smote"],
-        "ros": techniques["ros"],
-        "rus": techniques["rus"],
-        "adasyn": techniques["adasyn"],
-        "reweighting": techniques["reweighting"],
-        "exponentiated_gradient": techniques["exponentiated_gradient"],
-        "grid_search": techniques["grid_search"],
-        "threshold_optimizer": techniques["threshold_optimizer"],
+    logging.info(f"Techniques to test: {list(techniques.keys())}")
+
+    # Subgroup SHAP per arm (RO4: does mitigating change how the model explains
+    # each group?). Restricted to the two families the chapter reports for RO4;
+    # SVM has no fast exact explainer and is skipped for SHAP everywhere else too.
+    xai_cfg = pipeline_cfg.get("xai", {}) or {}
+    subgroup_families = {
+        str(m).strip().lower()
+        for m in xai_cfg.get(
+            "mitigation_subgroup_shap_model_types", ["logistic_regression", "xgboost"]
+        )
     }
-
-    logging.info(f"Techniques to test: {list(implemented.keys())}")
+    subgroup_cfg_base = {
+        "enabled": bool(xai_cfg.get("subgroup_shap", True)),
+        "min_group_size": int(xai_cfg.get("subgroup_min_size", DEFAULT_MIN_GROUP_SIZE)),
+        "max_samples": int(xai_cfg.get("global_max_samples", 1000)),
+        "dir": output_dir / "subgroup_shap",
+    }
+    logging.info(
+        "Per-arm subgroup SHAP: enabled=%s families=%s",
+        subgroup_cfg_base["enabled"],
+        sorted(subgroup_families),
+    )
 
     # Process each dataset
     all_results = []
     baseline_results = []
     prediction_index = []
+    cv_results = []
+    cv_prediction_index = []
 
     for dataset_name in datasets:
         logging.info("[DATASET] Processing dataset=%s", dataset_name)
@@ -770,12 +1262,51 @@ def run_analysis(
             dataset_dir = resolve_dataset_dir(data_dir, dataset_name, default_binning)
 
             # Load data — processed files carry the canonical target column
-            X_train, y_train, sensitive_train, X_test, y_test, sensitive_test, meta_test = (
-                load_dataset(dataset_name, dataset_dir, schema_cfg, target_col, sensitive_attrs)
-            )
+            (
+                X_train,
+                y_train,
+                sensitive_train,
+                X_test,
+                y_test,
+                sensitive_test,
+                meta_test,
+                X_train_raw,
+                X_test_raw,
+            ) = load_dataset(dataset_name, dataset_dir, schema_cfg, target_col, sensitive_attrs)
 
+            # CV pools the two splits back together once per dataset; the folds
+            # are then cut from the pool inside `run_cv_protocol`.
+            if run_cv:
+                cv_pool = {
+                    "X_full": pd.concat([X_train, X_test], ignore_index=True),
+                    "y_full": pd.concat([y_train, y_test], ignore_index=True),
+                    "sensitive_full": pd.concat(
+                        [sensitive_train, sensitive_test], ignore_index=True
+                    ),
+                    "X_full_raw": (
+                        pd.concat([X_train_raw, X_test_raw], ignore_index=True)
+                        if X_train_raw is not None and X_test_raw is not None
+                        else None
+                    ),
+                }
+
+            # Families this cohort must not run, recorded in config rather than
+            # remembered: SVM's RBF kernel is O(n^2) in rows and the resamplers
+            # add rows, so cardio70k drops it.
+            excluded_here = dataset_excluded_model_types(experiment_cfg, dataset_name)
+            if excluded_here:
+                logging.info(
+                    "Dataset %s excludes model families %s per dataset_overrides",
+                    dataset_name,
+                    sorted(excluded_here),
+                )
             for model_type in model_types:
-                model_params = _load_model_params(project_root, model_type)
+                if model_type in excluded_here:
+                    continue
+                model_params = _load_model_params(
+                    project_root, model_type, dataset=dataset_name, hpo_dir=hpo_dir
+                )
+                subgroup_cfg = subgroup_cfg_base if model_type in subgroup_families else None
 
                 # Train this family's own baseline. Post-processing wraps it, so
                 # it must be the same family as the rows it will be compared to.
@@ -806,6 +1337,18 @@ def run_analysis(
                     sensitive_attr="none",
                 )
 
+                # The "before" half of the RO4 pair, from this stage's baseline.
+                _persist_arm_subgroup_shap(
+                    baseline["model"],
+                    X_test,
+                    sensitive_test,
+                    subgroup_cfg,
+                    dataset_name,
+                    model_type,
+                    "baseline",
+                    "none",
+                )
+
                 baseline_results.append(
                     {
                         "dataset": dataset_name,
@@ -830,7 +1373,7 @@ def run_analysis(
                         sensitive_test,
                         dataset_name,
                         baseline["model"],
-                        implemented,
+                        techniques,
                         base_model_params=model_params,
                         constraint_attrs=constraint_attrs_cfg,
                         meta_test=meta_test,
@@ -838,8 +1381,28 @@ def run_analysis(
                         model_type=model_type,
                         model_params=model_params,
                         prediction_index=prediction_index,
+                        subgroup_cfg=subgroup_cfg,
                     )
                 )
+
+                if run_cv:
+                    cv_results.extend(
+                        run_cv_protocol(
+                            dataset_name,
+                            cv_pool["X_full"],
+                            cv_pool["y_full"],
+                            cv_pool["sensitive_full"],
+                            cv_pool["X_full_raw"],
+                            techniques,
+                            model_type,
+                            model_params,
+                            constraint_attrs_cfg,
+                            output_dir / "predictions_cv",
+                            cv_prediction_index,
+                            n_folds=cv_folds,
+                            random_seed=random_seed,
+                        )
+                    )
 
         except Exception as e:
             logging.error(f"Failed to process {dataset_name}: {e}")
@@ -882,6 +1445,41 @@ def run_analysis(
         with open(index_path, "w") as f:
             json.dump(prediction_index, f, indent=2)
         logging.info("[SUCCESS] Saved predictions index: %s", index_path)
+
+        _write_paired_effects(
+            output_dir,
+            prediction_index,
+            sensitive_attrs,
+            experiment_cfg.get("paired_effects", {}),
+        )
+
+    # CV protocol outputs, kept in their own files so no table mixes protocols.
+    if cv_results:
+        cv_df = create_comparison_table(cv_results)
+        if not cv_df.empty:
+            cv_csv = output_dir / "summary_cv.csv"
+            cv_df.to_csv(cv_csv, index=False)
+            logging.info("[SUCCESS] Saved CV CSV: %s (%d rows)", cv_csv, len(cv_df))
+        cv_json = output_dir / "results_cv.json"
+        with open(cv_json, "w") as f:
+            json.dump(cv_results, f, indent=2, default=str)
+        logging.info("[SUCCESS] Saved CV JSON: %s", cv_json)
+
+        if cv_prediction_index:
+            cv_index_path = output_dir / "predictions_cv" / "index.json"
+            cv_index_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(cv_index_path, "w") as f:
+                json.dump(cv_prediction_index, f, indent=2)
+            logging.info("[SUCCESS] Saved CV predictions index: %s", cv_index_path)
+
+            _write_paired_effects(
+                output_dir,
+                cv_prediction_index,
+                sensitive_attrs,
+                experiment_cfg.get("paired_effects", {}),
+                predictions_subdir="predictions_cv",
+                output_name="paired_effects_cv.csv",
+            )
 
     # Generate human-readable markdown report
     report_file = output_dir / "report.md"

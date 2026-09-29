@@ -16,6 +16,8 @@ from run_experiment_comparison import (  # noqa: E402
     _extract_per_group_fairness,
     _load_baseline_per_group,
     _normalize_sensitive_attr,
+    build_pareto_frontiers,
+    pareto_criterion_columns,
 )
 
 from fairxai.comparison.config import load_comparison_config  # noqa: E402
@@ -323,3 +325,133 @@ class TestCanonicalMetricTables:
             sensitive_attr="sex_cat",
         )
         assert performance_filename == "kaggle_heart_lr_primary_sex_performance_gaps.png"
+
+
+def _pareto_frame():
+    """Four cells whose frontier differs by criterion and by protocol.
+
+    On the held-out split, cell A is best on F1 and on the sex gap, while cell B
+    trades F1 for a smaller age gap: each owns one criterion. The two CV cells
+    have F1 values that would dominate both held-out cells if the protocols were
+    pooled.
+    """
+    return pd.DataFrame(
+        [
+            {
+                "experiment_id": "a",
+                "dataset": "cleveland_uci",
+                "training_method": "single_split",
+                "model_type": "logistic_regression",
+                "model_variant": "tuned",
+                "binning_strategy": "fixed_10yr",
+                "mitigation_technique": "baseline",
+                "constraint_attribute": "",
+                "f1_value": 0.80,
+                "dem_parity_sex_max_diff": 0.10,
+                "dem_parity_age_group_max_diff": 0.30,
+                "eq_odds_sex_tpr_diff": 0.12,
+            },
+            {
+                "experiment_id": "b",
+                "dataset": "cleveland_uci",
+                "training_method": "single_split",
+                "model_type": "logistic_regression",
+                "model_variant": "tuned",
+                "binning_strategy": "fixed_10yr",
+                "mitigation_technique": "reweighting",
+                "constraint_attribute": "age_group",
+                "f1_value": 0.75,
+                "dem_parity_sex_max_diff": 0.20,
+                "dem_parity_age_group_max_diff": 0.05,
+                "eq_odds_sex_tpr_diff": 0.18,
+            },
+            {
+                "experiment_id": "c",
+                "dataset": "cleveland_uci",
+                "training_method": "kfold_cv",
+                "model_type": "logistic_regression",
+                "model_variant": "tuned",
+                "binning_strategy": "fixed_10yr",
+                "mitigation_technique": "baseline",
+                "constraint_attribute": "",
+                "f1_value": 0.90,
+                "f1_score_std": 0.04,
+                "dem_parity_sex_max_diff": 0.25,
+                "dem_parity_age_group_max_diff": 0.40,
+                "eq_odds_sex_tpr_diff": 0.30,
+            },
+            {
+                "experiment_id": "d",
+                "dataset": "cleveland_uci",
+                "training_method": "kfold_cv",
+                "model_type": "logistic_regression",
+                "model_variant": "tuned",
+                "binning_strategy": "fixed_10yr",
+                "mitigation_technique": "smote",
+                "constraint_attribute": "sex",
+                "f1_value": 0.85,
+                "f1_score_std": 0.06,
+                "dem_parity_sex_max_diff": 0.15,
+                "dem_parity_age_group_max_diff": 0.50,
+                "eq_odds_sex_tpr_diff": 0.20,
+            },
+        ]
+    )
+
+
+class TestParetoFrontiers:
+    def test_aggregate_gap_columns_are_not_criteria(self):
+        df = _pareto_frame()
+        df["dp_max_diff"] = 0.3
+        df["eq_odds_max_diff"] = 0.4
+        criteria = pareto_criterion_columns(df)
+        assert "dp_max_diff" not in criteria
+        assert "eq_odds_max_diff" not in criteria
+        assert criteria == [
+            "dem_parity_age_group_max_diff",
+            "dem_parity_sex_max_diff",
+            "eq_odds_sex_tpr_diff",
+        ]
+
+    def test_each_criterion_gets_its_own_frontier(self):
+        front, _ = build_pareto_frontiers(_pareto_frame())
+        holdout = front[front["protocol"] == "single_split"]
+        sex = holdout[holdout["criterion"] == "dem_parity_sex_max_diff"]
+        age = holdout[holdout["criterion"] == "dem_parity_age_group_max_diff"]
+        # A dominates B on the sex gap; on the age gap both survive.
+        assert set(sex["experiment_id"]) == {"a"}
+        assert set(age["experiment_id"]) == {"a", "b"}
+
+    def test_protocols_do_not_dominate_each_other(self):
+        front, _ = build_pareto_frontiers(_pareto_frame())
+        holdout = set(front[front["protocol"] == "single_split"]["experiment_id"])
+        cv = set(front[front["protocol"] == "kfold_cv"]["experiment_id"])
+        # The CV cells have the higher F1 everywhere, so pooling would have
+        # emptied the held-out frontier.
+        assert holdout == {"a", "b"}
+        assert cv == {"c", "d"}
+        assert front["n_candidates"].max() == 2
+
+    def test_cv_rows_carry_the_fold_spread(self):
+        front, _ = build_pareto_frontiers(_pareto_frame())
+        cv = front[front["protocol"] == "kfold_cv"]
+        assert cv["f1_score_std"].notna().all()
+
+    def test_front_count_is_reported_per_row(self):
+        df = _pareto_frame()
+        _, counts = build_pareto_frontiers(df)
+        # Cell A is on all three held-out frontiers; B only on the age one.
+        assert counts.loc[df.index[df["experiment_id"] == "a"][0]] == 3
+        assert counts.loc[df.index[df["experiment_id"] == "b"][0]] == 1
+
+    def test_no_criterion_columns_means_no_frontier(self):
+        df = _pareto_frame().drop(
+            columns=[
+                "dem_parity_sex_max_diff",
+                "dem_parity_age_group_max_diff",
+                "eq_odds_sex_tpr_diff",
+            ]
+        )
+        front, counts = build_pareto_frontiers(df)
+        assert front.empty
+        assert (counts == 0).all()

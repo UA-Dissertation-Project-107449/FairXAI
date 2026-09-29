@@ -13,8 +13,10 @@ from .mitigation import (
 )
 from .uncertainty import (
     BootstrapResult,
+    PairedEffectResult,
     adaptive_bootstrap_replicates,
     bootstrap_fairness_metrics,
+    paired_arm_differences,
 )
 
 __all__ = [
@@ -22,6 +24,8 @@ __all__ = [
     "BootstrapResult",
     "bootstrap_fairness_metrics",
     "adaptive_bootstrap_replicates",
+    "PairedEffectResult",
+    "paired_arm_differences",
     "PreProcessingMitigation",
     "InProcessingMitigation",
     "PostProcessingMitigation",

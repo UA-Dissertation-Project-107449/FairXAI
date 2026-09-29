@@ -109,13 +109,16 @@ age_binning_sensitivity:
   # sweep answers "is this gap a bucketing artifact?" against every scheme the
   # study describes rather than a four-scheme sample of it. Every name below
   # resolves in BUILTIN_STRATEGIES; a name that does not aborts the sweep.
+  # clinical_adaptive is deliberately absent: it exists only to merge bins that
+  # fall below min_bin_size, and on these cohorts it merges nothing, so it
+  # produced the same bins as clinical and cost a duplicate arm per model.
+  # It stays in the catalogue for cohorts where it would differ.
   strategies:
     - fixed_2
     - fixed_3
     - fixed_5yr
     - fixed_10yr
     - clinical
-    - clinical_adaptive
     - quantile_3
     - quantile_4
     - quantile_5
@@ -153,6 +156,13 @@ xai:
   # Groups smaller than this are excluded from the subgroup tables: per-feature
   # percentiles over a handful of rows are noise, not a disparity.
   subgroup_min_size: 30
+  # Stage 10 repeats the subgroup tables on its own baseline and on every
+  # mitigated arm, so RO4 can ask whether mitigating changes how the model
+  # explains each group. Only these families are explained: SVM has no fast exact
+  # explainer, and these two are the ones the chapter reports for RO4.
+  mitigation_subgroup_shap_model_types:
+    - logistic_regression
+    - xgboost
 
 studies:
   skip: false
@@ -163,7 +173,7 @@ scheduling:
   cpu_fraction: 0.75
   parallel_studies: true
   parallel_experiments: false
-  fs_jobs: 1
+  fs_jobs: 7                  # was 1; the 2026-09-26 cold run used 7 (--fs-jobs 7, --max-cores 14)
   hpo_search_n_jobs: null
   hpo_model_n_jobs: null
   warn_rows_threshold: 50000

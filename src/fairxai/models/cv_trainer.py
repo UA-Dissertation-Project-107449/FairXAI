@@ -411,6 +411,7 @@ class CVTrainer:
             build_lime_explainer,
             lime_explain_instance,
             shap_explain_tabular,
+            shap_status_record,
         )
 
         xai_result: Dict = {
@@ -418,6 +419,7 @@ class CVTrainer:
             "shap_values_local": None,
             "feature_names": feature_names,
             "lime_results": [],
+            "shap_status": [],
         }
 
         inner_model = getattr(model, "model", model)
@@ -433,12 +435,18 @@ class CVTrainer:
                     allow_svm=allow_svm_shap,
                 )
                 xai_result["shap_values"] = shap_exp.shap_values
+                xai_result["shap_status"].append(
+                    shap_status_record(f"cv_fold{fold_idx}_global", explanation=shap_exp)
+                )
                 self.logger.info(
                     f"  Fold {fold_idx}: SHAP global computed "
                     f"({shap_exp.shap_values.shape[0]} samples)"
                 )
             except Exception as exc:
                 self.logger.warning(f"  Fold {fold_idx}: SHAP global failed - {exc}")
+                xai_result["shap_status"].append(
+                    shap_status_record(f"cv_fold{fold_idx}_global", error=exc)
+                )
 
             # --- SHAP on validation data (local) ---
             try:
@@ -450,12 +458,18 @@ class CVTrainer:
                     allow_svm=allow_svm_shap,
                 )
                 xai_result["shap_values_local"] = shap_local.shap_values
+                xai_result["shap_status"].append(
+                    shap_status_record(f"cv_fold{fold_idx}_local", explanation=shap_local)
+                )
                 self.logger.info(
                     f"  Fold {fold_idx}: SHAP local computed "
                     f"({shap_local.shap_values.shape[0]} samples)"
                 )
             except Exception as exc:
                 self.logger.warning(f"  Fold {fold_idx}: SHAP local failed - {exc}")
+                xai_result["shap_status"].append(
+                    shap_status_record(f"cv_fold{fold_idx}_local", error=exc)
+                )
         else:
             self.logger.info(f"  Fold {fold_idx}: SHAP skipped by configuration")
 

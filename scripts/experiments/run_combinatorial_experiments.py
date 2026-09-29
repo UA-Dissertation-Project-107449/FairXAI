@@ -31,7 +31,11 @@ from fairxai.cli.runner_utils import (
     update_latest_pointer,
 )
 from fairxai.data.preprocessors import FoldPreprocessor, apply_fold_preprocessing
-from fairxai.data.schemas import available_sensitive, preferred_sensitive
+from fairxai.data.schemas import (
+    available_sensitive,
+    preferred_sensitive,
+    resolve_constraint_attribute,
+)
 from fairxai.experiments.data_io import (
     build_schema_excludes,
     default_exclude_columns,
@@ -43,12 +47,23 @@ from fairxai.explainability.tabular import (
     build_lime_explainer,
     lime_explain_instance,
     shap_explain_tabular,
+    shap_status_record,
+    write_shap_status,
 )
 from fairxai.fairness.metrics import FairnessMetrics
-from fairxai.fairness.mitigation import MitigationEngine
+from fairxai.fairness.mitigation import (
+    MitigationEngine,
+    resolve_estimator_mixture,
+    resolve_single_estimator,
+)
 from fairxai.models import get_model_class
 from fairxai.models.cv_trainer import CVTrainer
-from fairxai.utils.config import load_yaml_config
+from fairxai.training.grid_search import (
+    hpo_params_dir,
+    load_base_params,
+    resolve_model_params,
+)
+from fairxai.utils.config import dataset_excluded_model_types, load_yaml_config
 from fairxai.utils.gpu import detect_accelerator
 
 logger = logging.getLogger(__name__)
@@ -191,6 +206,7 @@ _SIGNATURE_FIELDS = (
     "dataset",
     "binning_strategy",
     "mitigation_technique",
+    "constraint_attribute",
     "training_method",
     "model_type",
     "model_variant",
@@ -210,12 +226,17 @@ def _load_completed_signatures(results_root: Path, logger) -> set:
     interrupted leaves a usable record of everything it finished. Matching on the
     configuration rather than the experiment ID is what makes that record
     reusable across invocations.
+
+    A failed cell writes a result JSON too (status "failed", results null), so
+    only successful ones count as complete — otherwise a rerun after a fix
+    plans zero experiments and the failures are never retried.
     """
     completed = set()
     if not results_root.exists():
         return completed
 
     unreadable = 0
+    failed = 0
     for path in results_root.rglob("*.json"):
         try:
             with open(path) as handle:
@@ -226,11 +247,17 @@ def _load_completed_signatures(results_root: Path, logger) -> set:
             unreadable += 1
             continue
         configuration = payload.get("configuration")
-        if isinstance(configuration, dict):
-            completed.add(_experiment_signature(configuration))
+        if not isinstance(configuration, dict):
+            continue
+        if (payload.get("execution") or {}).get("status") != "success":
+            failed += 1
+            continue
+        completed.add(_experiment_signature(configuration))
 
     if unreadable:
         logger.warning(f"[RESUME] Skipped {unreadable} unreadable result file(s) while scanning")
+    if failed:
+        logger.info(f"[RESUME] {failed} previously failed cell(s) will be retried")
     return completed
 
 
@@ -441,10 +468,8 @@ def _select_top_experiments_for_xai(
 
 
 def _load_model_config(project_root: Path, model_type: str) -> Dict[str, Any]:
-    """Load base hyperparameters from configs/models/<model_type>.yaml."""
-    path = project_root / "configs" / "models" / f"{model_type}.yaml"
-    cfg = load_yaml_config(str(path))
-    return dict(cfg.get("hyperparameters", {}))
+    """Load base (untuned) hyperparameters from configs/models/<model_type>.yaml."""
+    return load_base_params(project_root, model_type)
 
 
 def _build_postprocessing_base_model(model_type, model_params=None):
@@ -507,41 +532,49 @@ def _resolve_model_variants(
     dataset: Optional[str] = None,
     hpo_dir: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
-    """Resolve model variants: base params from model file, overrides from config."""
-    from fairxai.training.grid_search import load_hpo_params
+    """Resolve the cells one family contributes for one cohort.
 
-    base_params = _load_model_config(project_root, model_type)
+    Tuned params come from the shared resolver, so a sweep cell fits the same
+    model stages 7 and 10 use. ``model_variants`` in the experiment config is
+    now for explicit sensitivity checks only: a variant's params are applied
+    *over* the tuned ones rather than replacing them, which is how the sweep
+    used to report hand-written hyperparameters as if they were tuned. With no
+    variants configured, the family contributes a single cell, named ``tuned``
+    when an HPO study supplied its params and ``default`` when none existed.
+    """
+    base_params = load_base_params(project_root, model_type)
+    hardware: Dict[str, Any] = {}
     if model_type == "xgboost" and xgb_device is not None:
-        base_params["device"] = xgb_device
+        hardware["device"] = xgb_device
     if model_type == "random_forest" and xgb_device == "cuda":
         # Enable RAPIDS cuML GPU backend when a CUDA device is available.
-        base_params["use_gpu"] = True
+        hardware["use_gpu"] = True
     # Prevent CPU/RAM over-subscription: when outer experiment workers > 1,
     # each model must use a single thread (not all cores).
     if model_type in {"random_forest", "xgboost"} and "n_jobs" in base_params:
-        base_params["n_jobs"] = _resolve_model_n_jobs(outer_n_jobs)
-    # Merge HPO best params when available (override defaults, keep GPU/n_jobs overrides after).
-    if hpo_dir is not None and dataset is not None:
-        hpo_best = load_hpo_params(hpo_dir, dataset, model_type)
-        if hpo_best:
-            logger.debug(f"[HPO] Loaded params for {model_type}/{dataset}: {hpo_best}")
-            base_params.update(hpo_best)
-            # Re-apply hardware overrides that must not be clobbered by HPO.
-            if model_type == "xgboost" and xgb_device is not None:
-                base_params["device"] = xgb_device
-            if model_type in {"random_forest", "xgboost"} and "n_jobs" in base_params:
-                base_params["n_jobs"] = _resolve_model_n_jobs(outer_n_jobs)
+        hardware["n_jobs"] = _resolve_model_n_jobs(outer_n_jobs)
+
+    def _resolve(overrides: Optional[Dict[str, Any]] = None):
+        return resolve_model_params(
+            project_root,
+            model_type,
+            dataset=dataset,
+            hpo_dir=hpo_dir,
+            overrides=overrides,
+            hardware=hardware,
+        )
 
     variants = config.get("model_variants", {}).get(model_type, [])
     if not variants:
-        return [{"name": "default", "params": base_params}]
+        resolved_params = _resolve()
+        return [{"name": resolved_params.variant_name, "params": resolved_params.params}]
 
     resolved = []
     for variant in variants:
         variant_name = str(variant.get("name", "variant")).strip() or "variant"
-        merged_params = dict(base_params)
-        merged_params.update(variant.get("params", {}))
-        resolved.append({"name": variant_name, "params": merged_params})
+        resolved.append(
+            {"name": variant_name, "params": _resolve(variant.get("params", {})).params}
+        )
     return resolved
 
 
@@ -686,31 +719,89 @@ def prepare_data_splits(
     }
 
 
+def _wrap_decision_function(df_model: Any):
+    """Read a margin-only estimator as probabilities, for XAI that needs them."""
+
+    class _DecisionFunctionWrapper:
+        def __init__(self, base_model: Any):
+            self.base_model = base_model
+
+        def predict_proba(self, X):
+            scores = self.base_model.decision_function(X)
+            scores = np.asarray(scores)
+            if scores.ndim == 1:
+                prob_pos = 1.0 / (1.0 + np.exp(-scores))
+                return np.vstack([1 - prob_pos, prob_pos]).T
+            exp_scores = np.exp(scores - np.max(scores, axis=1, keepdims=True))
+            return exp_scores / np.sum(exp_scores, axis=1, keepdims=True)
+
+    return _DecisionFunctionWrapper(df_model)
+
+
+def _positive_class_proba(estimator: Any, X: pd.DataFrame) -> np.ndarray:
+    """One estimator's positive-class score, however it exposes one."""
+    candidate = getattr(estimator, "model", estimator)
+    if hasattr(candidate, "predict_proba"):
+        return np.asarray(candidate.predict_proba(X))[:, 1].astype(float)
+    if hasattr(candidate, "decision_function"):
+        return _wrap_decision_function(candidate).predict_proba(X)[:, 1]
+    return np.asarray(candidate.predict(X), dtype=float)
+
+
+class _MixtureProba:
+    """A randomised reduction's score, behind one ``predict_proba``.
+
+    ``ExponentiatedGradient`` has no single fitted estimator: it draws a member of
+    ``predictors_`` per row from ``weights_``, so explaining any one member would
+    describe a different classifier from the arm. Its score is the linear
+    combination ``sum_t weights_[t] * h_t(X)``, so the arm is explained through the
+    same weighted combination of its members' scores. As in stage 10's subgroup
+    SHAP, the members contribute probabilities where fairlearn mixes their hard
+    labels: this is the weighted soft mixture, which is the output space the
+    baseline arm is explained in and therefore the comparable one.
+    """
+
+    def __init__(self, mixture: List[Tuple[float, Any]]) -> None:
+        self.mixture = mixture
+
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        positive = np.zeros(len(X), dtype=float)
+        for weight, member in self.mixture:
+            positive += weight * _positive_class_proba(member, X)
+        return np.vstack([1.0 - positive, positive]).T
+
+    # SHAP explains a callable directly; LIME wants predict_proba.
+    __call__ = predict_proba
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        return (self.predict_proba(X)[:, 1] >= 0.5).astype(int)
+
+
 def _unwrap_for_xai(raw_model: Any) -> Optional[Any]:
-    """Extract a sklearn-compatible estimator from fairlearn/wrapper models.
+    """Extract something explainable from fairlearn/wrapper models.
 
     ``_run_xai_for_fold`` only does ``getattr(model, 'model', model)`` which
-    is insufficient for fairlearn in-processing models.  This helper digs
-    into ``predictors_`` / ``.model`` to find a real sklearn estimator that
-    exposes ``predict_proba`` (or at least ``predict``).
+    is insufficient for fairlearn in-processing models. The two reductions need
+    different treatment, for the reasons ``resolve_single_estimator`` sets out:
+    ``GridSearch`` predicts with ``predictors_[best_idx_]``, so that member is the
+    arm, while ``ExponentiatedGradient`` mixes its members and is explained through
+    ``_MixtureProba``. Taking the first member of ``predictors_`` instead, as this
+    did, explains a model neither arm predicts with.
 
     Returns:
-        A sklearn-like estimator, or *None* if nothing usable is found.
+        A sklearn-like estimator or mixture, or *None* if nothing usable is found.
     """
     candidate = raw_model
-    # Fairlearn in-processing (ExponentiatedGradient, GridSearch)
-    # Prefer fitted predictors_ first; estimator_/estimator can be unfitted
-    # base templates in some fairlearn objects.
+    # Fairlearn in-processing (ExponentiatedGradient, GridSearch).
+    # Reductions are handled here and never fall through to estimator_/estimator,
+    # which can be the unfitted base template.
     if hasattr(candidate, "predictors_"):
-        predictor = next(
-            (p for p in candidate.predictors_ if hasattr(p, "predict_proba")),
-            next(
-                (p for p in candidate.predictors_ if hasattr(p, "predict")),
-                None,
-            ),
-        )
-        if predictor is not None:
-            candidate = predictor
+        single = resolve_single_estimator(candidate)
+        if single is not None:
+            candidate = single
+        else:
+            mixture = resolve_estimator_mixture(candidate)
+            return _MixtureProba(mixture) if mixture else None
     # Fairlearn post-processing wrappers (e.g. ThresholdOptimizer)
     elif hasattr(candidate, "estimator_"):
         candidate = candidate.estimator_
@@ -776,18 +867,8 @@ def save_experiment_xai(
         return _reduce(np.asarray(shap_values))
 
     def _resolve_shap_model(raw_model: Any) -> Any:
+        # _unwrap_for_xai already picked the reduction's own model or its mixture.
         candidate = _unwrap_for_xai(raw_model) or raw_model
-        if hasattr(candidate, "predictors_"):
-            predictor = next(
-                (
-                    p
-                    for p in candidate.predictors_
-                    if hasattr(p, "predict_proba") or hasattr(p, "predict")
-                ),
-                None,
-            )
-            if predictor is not None:
-                candidate = predictor
         if hasattr(candidate, "model"):
             candidate = candidate.model
 
@@ -800,39 +881,12 @@ def save_experiment_xai(
             return lambda X: candidate.predict(X)
         return candidate
 
-    def _wrap_decision_function(df_model: Any):
-        class _DecisionFunctionWrapper:
-            def __init__(self, base_model: Any):
-                self.base_model = base_model
-
-            def predict_proba(self, X):
-                scores = self.base_model.decision_function(X)
-                scores = np.asarray(scores)
-                if scores.ndim == 1:
-                    prob_pos = 1.0 / (1.0 + np.exp(-scores))
-                    return np.vstack([1 - prob_pos, prob_pos]).T
-                exp_scores = np.exp(scores - np.max(scores, axis=1, keepdims=True))
-                return exp_scores / np.sum(exp_scores, axis=1, keepdims=True)
-
-        return _DecisionFunctionWrapper(df_model)
-
     def _resolve_lime_model(raw_model: Any) -> Optional[Any]:
         candidate = _unwrap_for_xai(raw_model) or raw_model
         if hasattr(candidate, "predict_proba"):
             return candidate
         if hasattr(candidate, "decision_function"):
             return _wrap_decision_function(candidate)
-        if hasattr(candidate, "predictors_"):
-            predictor = next(
-                (
-                    p
-                    for p in candidate.predictors_
-                    if hasattr(p, "predict_proba") or hasattr(p, "decision_function")
-                ),
-                None,
-            )
-            if predictor is not None:
-                return predictor
         if hasattr(candidate, "model") and hasattr(candidate.model, "predict_proba"):
             return candidate.model
         if hasattr(candidate, "model") and hasattr(candidate.model, "decision_function"):
@@ -842,6 +896,7 @@ def save_experiment_xai(
     xai_model_raw = base_model if base_model is not None else model
     xai_model = _unwrap_for_xai(xai_model_raw) or xai_model_raw
     if shap_enabled:
+        shap_records = []
         try:
             shap_model = _resolve_shap_model(xai_model)
             # Global SHAP (train reference)
@@ -851,6 +906,7 @@ def save_experiment_xai(
                 max_samples=max_samples,
                 allow_svm=allow_svm_shap,
             )
+            shap_records.append(shap_status_record("global", explanation=shap_global))
             mean_abs_global = _mean_abs_shap_values(shap_global.shap_values)
             shap_global_df = pd.DataFrame(
                 {"feature": shap_global.feature_names, "mean_abs_shap": mean_abs_global}
@@ -865,6 +921,7 @@ def save_experiment_xai(
                 max_samples=max_samples,
                 allow_svm=allow_svm_shap,
             )
+            shap_records.append(shap_status_record("local", explanation=shap_local))
             mean_abs_local = _mean_abs_shap_values(shap_local.shap_values)
             shap_local_df = pd.DataFrame(
                 {"feature": shap_local.feature_names, "mean_abs_shap": mean_abs_local}
@@ -873,6 +930,9 @@ def save_experiment_xai(
             shap_local_df.to_csv(shap_local_file, index=False)
         except Exception as exc:
             logging.getLogger(__name__).warning(f"SHAP failed for {exp_id}: {exc}")
+            scope = "local" if shap_records else "global"
+            shap_records.append(shap_status_record(scope, error=exc))
+        write_shap_status(shap_dir, exp_id, shap_records, prefix=f"{exp_id}_")
     else:
         logging.getLogger(__name__).info(
             f"SHAP skipped for exp_id={exp_id} model_type={model_type}"
@@ -955,6 +1015,12 @@ def save_cv_experiment_xai(
     lime_dir = cv_xai_dir / "lime"
     shap_dir.mkdir(parents=True, exist_ok=True)
     lime_dir.mkdir(parents=True, exist_ok=True)
+
+    shap_records = [
+        record for fr in fold_results for record in (fr.get("xai") or {}).get("shap_status", [])
+    ]
+    if shap_records:
+        write_shap_status(shap_dir, exp_id, shap_records, prefix=f"{exp_id}_")
 
     # Aggregate SHAP across folds (global = train data, local = val data)
     cv_shap_global = CVTrainer.aggregate_cv_shap(fold_results, scope="global")
@@ -1042,6 +1108,7 @@ def run_single_experiment(
         logger.info(
             f"[EXPERIMENT] id={exp_id} dataset={config['dataset']} "
             f"binning={config['binning_strategy']} mitigation={config['mitigation_technique']} "
+            f"constraint={config.get('constraint_attribute') or 'auto'} "
             f"training={config['training_method']} "
             f"model={config.get('model_type', 'logistic_regression')}[{config.get('model_variant', 'default')}]"
         )
@@ -1138,13 +1205,10 @@ def run_single_split_experiment(
     if mitigation == "baseline":
         stage = "baseline"
     base_model = None
-    sensitive_attr = next(
-        (
-            c
-            for c in config["sensitive_attributes"]
-            if c in splits["sensitive_train"].columns and c != "age_group"
-        ),
-        next((c for c in splits["sensitive_train"].columns), None),
+    sensitive_attr = resolve_constraint_attribute(
+        splits["sensitive_train"].columns,
+        config.get("constraint_attribute"),
+        config["sensitive_attributes"],
     )
 
     if mitigation != "baseline" and sensitive_attr is None:
@@ -1252,10 +1316,14 @@ def run_single_split_experiment(
     if stage == "post-processing" and base_model is not None:
         model_for_xai = base_model
     if model_for_xai is not None and xai_enabled:
-        model_for_xai = _unwrap_for_xai(model_for_xai) or model_for_xai
+        xai_model = _unwrap_for_xai(model_for_xai) or model_for_xai
+        # The mixture is an explanation surface defined in this script, so it is
+        # not what gets pickled below; the arm's own fitted model is.
+        if not isinstance(xai_model, _MixtureProba):
+            model_for_xai = xai_model
         save_experiment_xai(
             exp_id,
-            model_for_xai,
+            xai_model,
             splits["X_train"],
             splits["X_test"],
             versioning,
@@ -1399,13 +1467,10 @@ def run_cv_experiment(
         fold_results = []
         all_predictions = []
 
-        sensitive_attr = next(
-            (
-                c
-                for c in config["sensitive_attributes"]
-                if c in sensitive_full.columns and c != "age_group"
-            ),
-            next((c for c in sensitive_full.columns), None),
+        sensitive_attr = resolve_constraint_attribute(
+            sensitive_full.columns,
+            config.get("constraint_attribute"),
+            config["sensitive_attributes"],
         )
 
         if sensitive_attr is None:
@@ -1672,6 +1737,10 @@ def run_combinatorial_analysis(
     logger.info(f"Loaded configuration from: {config_path}")
 
     sensitive_attrs = preferred_sensitive(config.get("sensitive_attributes"))
+    # Which attribute each mitigation technique is made fair about. Without the
+    # axis every cell constrained on sex, so the binning axis only changed how
+    # the age gap was measured afterwards.
+    constraint_attrs = list(config.get("constraint_attributes") or [None])
 
     # Load pipeline config
     pipeline_cfg = load_yaml_config(str(project_root / f"configs/pipelines/{pipeline}.yaml"))
@@ -1709,8 +1778,7 @@ def run_combinatorial_analysis(
     # Generate all experiment combinations
     experiments = []
     # HPO: load best params directory (auto-detected; silently skipped when absent).
-    hpo_output_dir = project_root / f"output/{pipeline}/studies/hpo"
-    hpo_dir: Optional[Path] = hpo_output_dir if hpo_output_dir.exists() else None
+    hpo_dir: Optional[Path] = hpo_params_dir(project_root, pipeline)
     if hpo_dir:
         logger.info(f"[HPO] Using pre-computed HPO params from: {hpo_dir}")
     fairness_base_params_cfg = config.get("fairness_base_model_params")
@@ -1730,10 +1798,19 @@ def run_combinatorial_analysis(
             fairness_base_params = fairness_base_params_cfg
         if not fairness_base_params:
             fairness_base_params = _load_model_config(project_root, "logistic_regression")
+        excluded_here = dataset_excluded_model_types(config, dataset)
+        if excluded_here:
+            logger.info(
+                "Dataset %s excludes model families %s per dataset_overrides",
+                dataset,
+                sorted(excluded_here),
+            )
         for binning in config["binning_strategies"]:
             for mitigation in config["mitigation_techniques"]:
                 for training_method in config["training_methods"]:
                     for model_type in model_types:
+                        if model_type in excluded_here:
+                            continue
                         # Skip mitigation for models not in the supported set (baseline always runs).
                         if (
                             mitigation != "baseline"
@@ -1754,23 +1831,29 @@ def run_combinatorial_analysis(
                             dataset=dataset,
                             hpo_dir=hpo_dir,
                         ):
-                            exp_id = versioning.generate_experiment_id()
-                            exp_config = {
-                                "dataset": dataset,
-                                "binning_strategy": binning,
-                                "mitigation_technique": mitigation,
-                                "training_method": training_method,
-                                "cv_folds": config.get("cv_folds", 5),
-                                "random_seed": config.get("random_seed", 42),
-                                "model_type": model_type,
-                                "model_variant": variant["name"],
-                                "model_params": variant["params"],
-                                "fairness_base_model_params": fairness_base_params or None,
-                                "sensitive_attributes": sensitive_attrs,
-                                "xai": config.get("xai", {}),
-                            }
+                            # Baseline constrains nothing, so it runs once.
+                            cell_constraints = (
+                                [None] if mitigation == "baseline" else constraint_attrs
+                            )
+                            for constraint_attr in cell_constraints:
+                                exp_id = versioning.generate_experiment_id()
+                                exp_config = {
+                                    "dataset": dataset,
+                                    "binning_strategy": binning,
+                                    "mitigation_technique": mitigation,
+                                    "constraint_attribute": constraint_attr,
+                                    "training_method": training_method,
+                                    "cv_folds": config.get("cv_folds", 5),
+                                    "random_seed": config.get("random_seed", 42),
+                                    "model_type": model_type,
+                                    "model_variant": variant["name"],
+                                    "model_params": variant["params"],
+                                    "fairness_base_model_params": fairness_base_params or None,
+                                    "sensitive_attributes": sensitive_attrs,
+                                    "xai": config.get("xai", {}),
+                                }
 
-                            experiments.append((exp_id, exp_config))
+                                experiments.append((exp_id, exp_config))
 
     # Combo experiments: pre to in to post chains, per configured family.
     combo_model_types = _resolve_combo_model_types(config, selected_model_types)
@@ -1783,9 +1866,12 @@ def run_combinatorial_analysis(
                 fairness_base_params = fairness_base_params_cfg
             if not fairness_base_params:
                 fairness_base_params = _load_model_config(project_root, "logistic_regression")
+            excluded_here = dataset_excluded_model_types(config, dataset)
             for binning in config["binning_strategies"]:
                 for training_method in config["training_methods"]:
                     for model_type in combo_model_types:
+                        if model_type in excluded_here:
+                            continue
                         for variant in _resolve_model_variants(
                             config,
                             model_type,
@@ -1795,23 +1881,25 @@ def run_combinatorial_analysis(
                             dataset=dataset,
                             hpo_dir=hpo_dir,
                         ):
-                            exp_id = versioning.generate_experiment_id()
-                            exp_config = {
-                                "dataset": dataset,
-                                "binning_strategy": binning,
-                                "mitigation_technique": "+".join(combo),
-                                "mitigation_combo": combo,
-                                "training_method": training_method,
-                                "cv_folds": config.get("cv_folds", 5),
-                                "random_seed": config.get("random_seed", 42),
-                                "model_type": model_type,
-                                "model_variant": variant["name"],
-                                "model_params": variant["params"],
-                                "fairness_base_model_params": fairness_base_params or None,
-                                "sensitive_attributes": sensitive_attrs,
-                                "xai": config.get("xai", {}),
-                            }
-                            experiments.append((exp_id, exp_config))
+                            for constraint_attr in constraint_attrs:
+                                exp_id = versioning.generate_experiment_id()
+                                exp_config = {
+                                    "dataset": dataset,
+                                    "binning_strategy": binning,
+                                    "mitigation_technique": "+".join(combo),
+                                    "mitigation_combo": combo,
+                                    "constraint_attribute": constraint_attr,
+                                    "training_method": training_method,
+                                    "cv_folds": config.get("cv_folds", 5),
+                                    "random_seed": config.get("random_seed", 42),
+                                    "model_type": model_type,
+                                    "model_variant": variant["name"],
+                                    "model_params": variant["params"],
+                                    "fairness_base_model_params": fairness_base_params or None,
+                                    "sensitive_attributes": sensitive_attrs,
+                                    "xai": config.get("xai", {}),
+                                }
+                                experiments.append((exp_id, exp_config))
 
     planned_experiments = len(experiments)
 
@@ -1899,6 +1987,26 @@ def run_combinatorial_analysis(
             versioning.save_results(result["experiment_id"], result, split_method=_sm)
             results.append(result)
             logger.info(f"[SAVED] {finished}/{total_experiments} exp_id={result['experiment_id']}")
+
+    # Failure tally in the parent process. Workers log through joblib's loky
+    # backend, whose child processes have none of the stage's handlers, so a
+    # failed cell only ever reached the console as a bare "ERROR:__main__" line
+    # and sweep_errors.log stayed empty. Re-log from the collected results so
+    # the stage log carries the count and one line per lost cell.
+    failed = [r for r in results if (r.get("execution") or {}).get("status") == "failed"]
+    if failed:
+        logger.error("[FAILED] %d of %d experiments failed", len(failed), total_experiments)
+        for result in failed:
+            cfg = result.get("configuration") or {}
+            logger.error(
+                "  exp_id=%s model=%s mitigation=%s attr=%s method=%s: %s",
+                result.get("experiment_id"),
+                cfg.get("model_type"),
+                cfg.get("mitigation_technique"),
+                cfg.get("constraint_attribute"),
+                cfg.get("training_method"),
+                (result.get("execution") or {}).get("error"),
+            )
 
     # Deferred XAI pass: run only for top-ranked configurations.
     if xai_cfg_global.get("enabled", True) and xai_mode == "top_configs":

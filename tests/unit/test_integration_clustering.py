@@ -36,6 +36,8 @@ def test_run_clustering_uses_selected_method_config(tmp_path, monkeypatch):
                 n_clusters=2,
                 silhouette=0.82,
                 feature_cols=["feat_a", "feat_b"],
+                n_noise=0,
+                noise_fraction=0.0,
             )
 
     class FakeProfiler:

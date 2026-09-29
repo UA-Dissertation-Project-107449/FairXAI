@@ -347,3 +347,49 @@ class TestResolveXgbDevice:
             self._resolve(monkeypatch, "rocm")
 
         assert any("rocm" in record.message.lower() for record in caplog.records)
+
+
+def test_resume_skips_successful_cells_but_retries_failed_ones(tmp_path):
+    """A failed cell writes a result JSON too; resume must not treat it as done."""
+    import json
+    import logging
+
+    from run_combinatorial_experiments import (
+        _experiment_signature,
+        _load_completed_signatures,
+    )
+
+    def _config(mitigation):
+        return {
+            "dataset": "cleveland_uci",
+            "binning_strategy": "fixed_10yr",
+            "mitigation_technique": mitigation,
+            "constraint_attribute": "sex",
+            "training_method": "single_split",
+            "model_type": "random_forest",
+            "model_variant": "tuned",
+        }
+
+    results_root = tmp_path / "results"
+    results_root.mkdir()
+    ok_config = _config("smote")
+    failed_config = _config("exponentiated_gradient")
+    (results_root / "results_ok.json").write_text(
+        json.dumps({"configuration": ok_config, "execution": {"status": "success"}})
+    )
+    (results_root / "results_failed.json").write_text(
+        json.dumps(
+            {
+                "configuration": failed_config,
+                "execution": {
+                    "status": "failed",
+                    "error": "got an unexpected keyword argument 'sample_weight'",
+                },
+            }
+        )
+    )
+
+    completed = _load_completed_signatures(results_root, logging.getLogger(__name__))
+
+    assert _experiment_signature(ok_config) in completed
+    assert _experiment_signature(failed_config) not in completed

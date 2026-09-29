@@ -397,6 +397,10 @@ export RUN_ID
 export RUN_ID
 
 RUN_ROOT="$BASE_RESULTS/runs/$RUN_ID"
+
+# STRICT_SHAP=1 turns a SHAP fallback or failure into a stop, before stage 7 is done.
+STRICT_SHAP=${STRICT_SHAP:-false}
+[[ "$STRICT_SHAP" =~ ^(1|true|yes|on)$ ]] && STRICT_SHAP_ARGS=(--strict) || STRICT_SHAP_ARGS=()
 CHECKPOINT_DIR="$RUN_ROOT/.checkpoints"
 SELECTOR_CONTRACT_PATH="$RUN_ROOT/recommendations/selector_contract.json"
 
@@ -456,6 +460,30 @@ if [[ -n "$RESUME_FROM" ]] && (( START_NUM > 1 )); then
     fi
     echo "Resume validation passed — stages 1..$((START_NUM - 1)) are complete."
 fi
+
+# ======================================================================
+# Run manifest — what this run is running on, not just how far it got
+# ======================================================================
+_MANIFEST_RESUMING=0
+[[ -f "$RUN_ROOT/run_manifest.json" ]] && _MANIFEST_RESUMING=1
+_MANIFEST_FLAGS="hpo_study=$RUN_HPO_STUDY,feature_selection_study=$RUN_FEATURE_SELECTION_STUDY"
+_MANIFEST_FLAGS+=",attribute_binning=$RUN_ATTRIBUTE_BINNING,mitigation=$RUN_MITIGATION"
+_MANIFEST_FLAGS+=",combinatorial=$RUN_COMBINATORIAL,comparison=$RUN_COMPARISON"
+_MANIFEST_FLAGS+=",recommendations=$RUN_RECOMMENDATIONS,max_samples=${MAX_SAMPLES:-default}"
+_MANIFEST_FLAGS+=",strict_shap=$STRICT_SHAP"
+run_manifest_guard \
+    "$ROOT_DIR" "$RUN_ROOT" cardiac "$_MANIFEST_RESUMING" \
+    "$(IFS=,; echo "${DATASETS[*]:-}")" \
+    "$(IFS=,; echo "${MODEL_TYPES[*]:-}")" \
+    "$_MANIFEST_FLAGS" \
+    "$ROOT_DIR/configs/pipelines/cardiac.yaml" \
+    "$ATTRIBUTE_BINNING_CONFIG" \
+    "$GROUPING_CONFIG" \
+    "$MITIGATION_CONFIG" \
+    "$COMBINATORIAL_CONFIG" \
+    "$HPO_CONFIG" \
+    "$FEATURE_SELECTION_STUDY_CONFIG" \
+    "$COMPARISON_CONFIG"
 
 # ======================================================================
 # Banner
@@ -532,7 +560,7 @@ fi
 if should_run 3; then
     if [[ "$RUN_RECOMMENDATIONS" == "true" ]]; then
         echo "[PHASE 3/12] Generating fairness triage recommendations"
-        python3 "$ROOT_DIR/scripts/cardiac/generate_recommendations.py" --run-id "$RUN_ID" $VERBOSE_FLAG
+        python3 "$ROOT_DIR/scripts/cardiac/generate_recommendations.py" --run-id "$RUN_ID" "${DATASET_ARGS[@]}" $VERBOSE_FLAG
         mark_done 3
         echo ""
     else
@@ -686,6 +714,8 @@ if should_run 7; then
     python3 "$ROOT_DIR/scripts/cardiac/train_baseline.py" \
         --selector-contract "$SELECTOR_CONTRACT_PATH" \
         "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $VERBOSE_FLAG
+    python3 "$ROOT_DIR/scripts/common/report_shap_status.py" \
+        --run-root "$RUN_ROOT/baseline" "${STRICT_SHAP_ARGS[@]}"
     mark_done 7
     echo ""
 else
@@ -929,6 +959,8 @@ if tw or te:
 else:
     print('Log summary: no warnings or errors recorded.')
 "
+
+python3 "$ROOT_DIR/scripts/common/report_shap_status.py" --run-root "$RUN_ROOT"
 
 # ======================================================================
 # Summary

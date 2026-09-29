@@ -80,12 +80,17 @@ binning_strategies:
     labels: ["<45", "45-54", "55-64", "65+"]
     reference: "ACC/AHA guidelines"
 
-  clinical_adaptive:
-    description: "Clinical guidelines with auto-merge of small bins"
-    method: "fixed"
-    bins: [0, 45, 55, 65, 100]
-    labels: ["<45", "45-54", "55-64", "65+"]
-    adaptive: true
+  # clinical_adaptive is clinical plus auto-merge of bins below min_group_size.
+  # On cleveland_uci, four_site_uci and cardio70k no clinical bin falls below the
+  # floor, so it merged nothing and reported the same bins as clinical. Kept here,
+  # commented, because a cohort with a sparse 65+ stratum would need it back; it
+  # still resolves in BUILTIN_STRATEGIES, so re-enabling it is uncommenting it.
+  # clinical_adaptive:
+  #   description: "Clinical guidelines with auto-merge of small bins"
+  #   method: "fixed"
+  #   bins: [0, 45, 55, 65, 100]
+  #   labels: ["<45", "45-54", "55-64", "65+"]
+  #   adaptive: true
 
   # --- Quantile strategies (equal-frequency bins) -------------------------
   quantile_3:

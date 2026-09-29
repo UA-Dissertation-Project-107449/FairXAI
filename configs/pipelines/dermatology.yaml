@@ -97,7 +97,17 @@ xai:
   shap: true
   lime: true
   gradcam: true
-  n_samples: 12          # images explained per model
+  # Attributes to stratify the explained images by, in priority order; defaults
+  # to fairness.sensitive_attributes when absent. fitzpatrick_group leads because
+  # the skin-tone question is what this stage exists to answer, and age_group is
+  # left out: with it first the whole budget went to age strata and no Fitzpatrick
+  # group was explained at all.
+  sensitive_attributes: [fitzpatrick_group, sex]
+  # 20 = every stratum of the two attributes above: fitzpatrick_group has 3 groups
+  # (I-II, III-IV, V-VI) and sex 2, each crossed with the 4 outcomes (TP/FP/TN/FN).
+  # Raise per_cell, not n_samples, for more than one image per stratum — that is
+  # the lever if a quantitative claim about the saliency maps is wanted.
+  n_samples: 20          # images explained per model
   per_cell: 1            # images per (sensitive group, outcome) stratum before budget
   lime_num_samples: 1000 # LIME perturbations per image (lower = faster, noisier)
 

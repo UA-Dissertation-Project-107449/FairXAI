@@ -270,6 +270,11 @@ def run_clustering(
         "method": result.method,
         "n_clusters": result.n_clusters,
         "silhouette": round(result.silhouette, 4),
+        # Rows DBSCAN put in the noise cluster. Reported because a grouping that
+        # explains the upload by setting part of it aside is a different result
+        # from one that explains all of it.
+        "n_noise": result.n_noise,
+        "noise_fraction": round(result.noise_fraction, 4),
         "clusters": clusters,
         # What the clustering actually ran on.
         "feature_columns": list(result.feature_cols),

@@ -35,7 +35,8 @@ binning_strategies:
 #
 # NOTE on grid_search: this is fairlearn.GridSearchReduction (lambda sweep for
 #   fairness-accuracy trade-off), NOT sklearn GridSearchCV for hyperparameter tuning.
-#   Hyperparameter tuning is handled separately via model_variants below.
+#   Hyperparameter tuning happens in stage 5 (run_hpo.py); this sweep reads its
+#   best params from output/<pipeline>/studies/hpo.
 mitigation_techniques:
   - baseline
   - reweighting
@@ -99,51 +100,21 @@ mitigation_combo_model_types:
   - svm
   - xgboost
 
-# Model variants: experiment-specific overrides merged onto base hyperparameters.
-# Base params are loaded from configs/models/<model_type>.yaml at runtime.
-# Only define keys here that differ from the model file defaults.
-model_variants:
-  logistic_regression:
-    - name: c_1_0
-      params:
-        C: 1.0
-    - name: c_0_5
-      params:
-        C: 0.5
+# Per-cohort family exclusions. The SVM caveats above were comments an operator
+# had to remember; here they are part of the run, so re-enabling cardio70k does
+# not also need three edits elsewhere.
+dataset_overrides:
+  cardio70k:
+    exclude_model_types:
+      - svm
 
-  random_forest:
-    - name: rf_shallow
-      params:
-        n_estimators: 250
-        max_depth: 8
-    - name: rf_deeper
-      params:
-        n_estimators: 350
-        max_depth: 14
-
-  svm:
-    - name: svm_linear
-      params:
-        kernel: linear
-        C: 1.0
-    # svm_rbf is the arm that distinguishes the SVM family from logistic
-    # regression — svm_linear and LR produce near-identical decision
-    # boundaries on this data, so without RBF the family adds little.
-    # The RBF kernel is O(n²) in training: fine at 303/918 rows (a fraction of
-    # a second), hours on cardio70k. Comment this variant back out before
-    # running cardio70k, or gate it on dataset size in the runner.
-    - name: svm_rbf
-      params:
-        kernel: rbf
-        C: 1.0
-        gamma: scale
-
-  xgboost:
-    - name: xgb_small
-      params:
-        n_estimators: 200
-        max_depth: 4
-        learning_rate: 0.05
+# Model variants: deliberate sensitivity checks only. The hand-written params
+# that used to live here (c_1_0, rf_shallow, svm_linear, xgb_small, ...) were
+# merged after the HPO best params and overwrote them, so the sweep reported
+# untuned models. Tuned params now come from output/<pipeline>/studies/hpo, and
+# a family with no variant contributes one cell per combination, named "tuned".
+# The SVM kernel is in the HPO search space, so svm_linear is no longer needed.
+model_variants: {}
 
 # Cross-validation settings
 cv_folds: 5
@@ -154,6 +125,12 @@ sensitive_attributes:
   - age_group
   - sex
   - group_cluster
+
+# Attribute each mitigation technique is made fair about, one sweep axis. With
+# age_group here, every binning strategy becomes a different fairness target.
+constraint_attributes:
+  - sex
+  - age_group
 
 # Fairness evaluation thresholds (for filtering results).
 # These override the canonical thresholds.yaml values for this experiment.
@@ -214,18 +191,18 @@ order_cheap_first: true
 #   V_mit = sum of variants over mitigation_supported_model_types
 #   V_combo = sum of variants over mitigation_combo_model_types
 #   V_base = sum of variants over models in model_types but NOT mitigation-supported
+#   K = number of constraint_attributes (baseline cells ignore it and run once)
 #
 # Base experiments (mitigated families run every technique, the rest baseline only):
-#   D * B * T * (V_mit * M + V_base)
+#   D * B * T * (V_mit * (1 + (M - 1) * K) + V_base)
 # Combo experiments:
-#   D * B * T * (V_combo * C)
-# Total experiments:
-#   D * B * T * (V_mit * M + V_base + V_combo * C)
+#   D * B * T * (V_combo * C * K)
 #
 # Example A (this config: 2 datasets, 5 bins, 2 training types, 7 mitigations
-#            incl. baseline, 6 combos, variants LR=2 RF=2 SVM=2 XGB=1;
-#            every family is mitigated => V_mit=7, V_base=0, V_combo=7):
-#   2 * 5 * 2 * (7*7 + 0 + 7*6) = 1820
+#            incl. baseline, 6 combos, 2 constraint attributes, one variant per
+#            family => V_mit=4, V_base=0, V_combo=4, K=2):
+#   base  2 * 5 * 2 * (4 * (1 + 6*2) + 0) = 1040
+#   combo 2 * 5 * 2 * (4 * 6 * 2)         =  960
 #
 # Example A' (same config with cardio70k re-enabled, and svm dropped back out
 #             of both mitigation lists as the comments there instruct:
@@ -234,3 +211,6 @@ order_cheap_first: true
 #
 # Example B (the pre-2026-08 LR-only setup: V_mit=2, V_base=4, V_combo=2):
 #   3 * 5 * 2 * (2*7 + 4 + 2*6) = 900
+#
+# Examples A' and B predate both the single variant per family and K; their
+# mitigated and combo terms multiply by K.
