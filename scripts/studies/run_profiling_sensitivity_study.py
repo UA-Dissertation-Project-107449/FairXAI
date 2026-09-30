@@ -315,6 +315,18 @@ def _build_knob_response(delta_rows: list[dict]) -> list[dict]:
     return rows
 
 
+def _type_accuracy_by_tier(confusion: dict[tuple[str, str, str], int]) -> dict[str, dict]:
+    """Scored columns, correct columns and accuracy per tier, over all replicates."""
+    out: dict[str, dict] = {}
+    for (tier, expected, observed), count in confusion.items():
+        entry = out.setdefault(tier, {"columns": 0, "correct": 0})
+        entry["columns"] += count
+        entry["correct"] += count if expected == observed else 0
+    for entry in out.values():
+        entry["accuracy"] = round(entry["correct"] / entry["columns"], 4)
+    return out
+
+
 def _git_state(repo: Path) -> dict[str, Any]:
     """Commit, branch and dirty flag of ``repo`` (all ``None`` outside git)."""
 
@@ -403,7 +415,7 @@ def main(argv: list[str] | None = None) -> int:
     manifest_records: list[dict] = []
     column_rows: list[dict] = []
     dataset_rows: list[dict] = []
-    confusion: dict[tuple[str, str], int] = {}
+    confusion: dict[tuple[str, str, str], int] = {}
     status_counts: dict[str, int] = {}
     n_failed = 0
 
@@ -460,7 +472,11 @@ def main(argv: list[str] | None = None) -> int:
             )
 
             for row in rows:
-                key = (str(row["expected_semantic_type"]), str(row["observed_semantic_type"]))
+                key = (
+                    cfg.tier,
+                    str(row["expected_semantic_type"]),
+                    str(row["observed_semantic_type"]),
+                )
                 confusion[key] = confusion.get(key, 0) + 1
 
             status_counts[status] = status_counts.get(status, 0) + 1
@@ -483,8 +499,8 @@ def main(argv: list[str] | None = None) -> int:
     _write_csv(study_root / "column_results.csv", column_rows)
     _write_csv(study_root / "dataset_results.csv", dataset_rows)
     confusion_rows = [
-        {"expected": expected, "observed": observed, "count": count}
-        for (expected, observed), count in sorted(confusion.items())
+        {"tier": tier, "expected": expected, "observed": observed, "count": count}
+        for (tier, expected, observed), count in sorted(confusion.items())
     ]
     _write_csv(study_root / "type_confusion.csv", confusion_rows)
     delta_rows = _build_paired_deltas(dataset_rows)
@@ -508,6 +524,7 @@ def main(argv: list[str] | None = None) -> int:
             round(sum(accuracies) / len(accuracies), 4) if accuracies else 0.0
         ),
         "min_semantic_type_accuracy": min(accuracies) if accuracies else 0.0,
+        "type_accuracy_by_tier": _type_accuracy_by_tier(confusion),
     }
     (study_root / "study_summary.json").write_text(json.dumps(summary, indent=2))
     manifest = {

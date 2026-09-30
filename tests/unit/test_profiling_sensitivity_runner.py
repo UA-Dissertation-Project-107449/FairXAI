@@ -77,6 +77,10 @@ def test_smoke_study_writes_replicated_tables_and_environment(tmp_path, monkeypa
     assert manifest["seeds"] == [20260625, 20260626]
     assert manifest["environment"]["packages"]["pandas"] == pd.__version__
     assert "commit" in manifest["environment"]["git"]
+    confusion = pd.read_csv(study_root / "type_confusion.csv")
+    assert set(confusion["tier"]) == {"abstract"}
+    by_tier = manifest["type_accuracy_by_tier"]["abstract"]
+    assert by_tier["columns"] == len(pd.read_csv(study_root / "column_results.csv"))
 
     # The plots read the replicated tables, including the paired-delta figures.
     monkeypatch.setattr(plots, "_ROOT", tmp_path)
