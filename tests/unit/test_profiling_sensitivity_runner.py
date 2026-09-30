@@ -12,6 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "studies"))
 
+import generate_profiling_sensitivity_plots as plots  # noqa: E402
 import run_profiling_sensitivity_study as runner  # noqa: E402
 
 from fairxai.data.synthetic import build_grid  # noqa: E402
@@ -76,3 +77,9 @@ def test_smoke_study_writes_replicated_tables_and_environment(tmp_path, monkeypa
     assert manifest["seeds"] == [20260625, 20260626]
     assert manifest["environment"]["packages"]["pandas"] == pd.__version__
     assert "commit" in manifest["environment"]["git"]
+
+    # The plots read the replicated tables, including the paired-delta figures.
+    monkeypatch.setattr(plots, "_ROOT", tmp_path)
+    assert plots.main(["--study-id", study_root.name]) == 0
+    assert (study_root / "figures" / "complexity" / "paired_delta_forest.pdf").exists()
+    assert (study_root / "figures" / "complexity" / "paired_delta_heatmap.pdf").exists()
