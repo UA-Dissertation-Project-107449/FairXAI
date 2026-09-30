@@ -39,11 +39,15 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import logging
+import platform
 import shutil
+import subprocess
 import sys
 from dataclasses import asdict
+from importlib import metadata
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +87,9 @@ RESPONSE_METRICS = [
     "class_balance_delta",
     "duplicate_pct_observed",
 ]
+
+# Distributions whose versions can move a profiling number.
+VERSIONED_PACKAGES = ["fairxai", "numpy", "pandas", "scikit-learn", "scipy", "interpret"]
 
 
 def _knob_value(cfg: SyntheticConfig) -> Any:
@@ -308,6 +315,52 @@ def _build_knob_response(delta_rows: list[dict]) -> list[dict]:
     return rows
 
 
+def _git_state(repo: Path) -> dict[str, Any]:
+    """Commit, branch and dirty flag of ``repo`` (all ``None`` outside git)."""
+
+    def _git(*args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=repo, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+    try:
+        return {
+            "commit": _git("rev-parse", "HEAD"),
+            "branch": _git("rev-parse", "--abbrev-ref", "HEAD"),
+            "is_dirty": bool(_git("status", "--porcelain")),
+        }
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return {"commit": None, "branch": None, "is_dirty": None}
+
+
+def _environment(project_root: Path) -> dict[str, Any]:
+    """Everything a rerun needs to reproduce the numbers: code, packages, EBM model."""
+    packages: dict[str, str | None] = {}
+    for name in VERSIONED_PACKAGES:
+        try:
+            packages[name] = metadata.version(name)
+        except metadata.PackageNotFoundError:
+            packages[name] = None
+
+    ebm: dict[str, str | None] = {"path": None, "sha256": None}
+    try:
+        model_path = dc._resolve_ebm_model_path()
+        ebm = {
+            "path": str(model_path),
+            "sha256": hashlib.sha256(model_path.read_bytes()).hexdigest(),
+        }
+    except FileNotFoundError:
+        pass
+
+    return {
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "packages": packages,
+        "git": _git_state(project_root),
+        "ebm_model": ebm,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pipeline", default="synthetic", help="Output namespace.")
@@ -336,6 +389,8 @@ def main(argv: list[str] | None = None) -> int:
         project_root, STUDY_TYPE, study_id, "study.log", args.verbose, log_subdir=args.pipeline
     )
     update_study_pointer(project_root / "logs" / args.pipeline, STUDY_TYPE, study_id, logger)
+    # Captured before anything is written, so the dirty flag reflects the code only.
+    environment = _environment(project_root)
 
     study_root = project_root / "output" / args.pipeline / "studies" / STUDY_TYPE / study_id
     scratch_root = study_root / ".scratch"
@@ -461,6 +516,7 @@ def main(argv: list[str] | None = None) -> int:
         **summary,
         "seeds": seeds,
         "argv": sys.argv if argv is None else ["run_profiling_sensitivity_study.py", *argv],
+        "environment": environment,
     }
     (study_root / "study_manifest.json").write_text(json.dumps(manifest, indent=2))
     update_output_study_pointer(project_root / "output" / args.pipeline, STUDY_TYPE, study_id)

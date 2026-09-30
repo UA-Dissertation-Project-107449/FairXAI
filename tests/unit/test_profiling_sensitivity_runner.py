@@ -56,7 +56,7 @@ def test_paired_deltas_subtract_the_same_replicates_baseline():
     assert row["delta_ci95_low"] < 0.25 < row["delta_ci95_high"]
 
 
-def test_smoke_study_writes_replicated_tables(tmp_path, monkeypatch):
+def test_smoke_study_writes_replicated_tables_and_environment(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "get_project_root", lambda _path: tmp_path)
     code = runner.main(["--grid-size", "smoke", "--limit", "2", "--replicates", "2"])
     assert code == 0
@@ -74,3 +74,5 @@ def test_smoke_study_writes_replicated_tables(tmp_path, monkeypatch):
 
     manifest = json.loads((study_root / "study_manifest.json").read_text())
     assert manifest["seeds"] == [20260625, 20260626]
+    assert manifest["environment"]["packages"]["pandas"] == pd.__version__
+    assert "commit" in manifest["environment"]["git"]
