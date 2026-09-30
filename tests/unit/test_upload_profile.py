@@ -249,6 +249,30 @@ def test_characterize_dataset_handles_missing_values(tmp_path, monkeypatch):
     assert result["top_missing_pct"] == 25.0
 
 
+def test_characterize_dataset_clips_reported_metrics_but_not_ebm_input(tmp_path, monkeypatch):
+    csv_path = _write_csv(tmp_path)
+    raw = {name: 0.5 for name in dc.EBM_FEATURE_ORDER}
+    raw.update(BayesImbalance=-0.052, N2Imbalance=1.3)
+    seen = {}
+
+    def fake_predict(metrics, **_kwargs):
+        seen.update(metrics)
+        return 0.3
+
+    monkeypatch.setattr(dc, "compute_complexity_metrics", lambda *_a, **_k: raw)
+    monkeypatch.setattr(dc, "_predict_ebm_difficulty", fake_predict)
+
+    result = dc.characterize_dataset(
+        filename=str(csv_path), output_dir=tmp_path / "out", target_column="income"
+    )
+
+    # The EBM sees raw values; the report is clipped to [0, 1].
+    assert seen["BayesImbalance"] == -0.052 and seen["N2Imbalance"] == 1.3
+    assert result["metrics"]["BayesImbalance"] == 0.0
+    assert result["metrics"]["N2Imbalance"] == 1.0
+    assert result["metrics"]["F2Imbalance"] == 0.5
+
+
 # --- 2-D projection ----------------------------------------------------------
 
 
