@@ -171,6 +171,29 @@ def test_select_images_ignores_predictions() -> None:
     assert list(sel_a["outcome"]) != list(sel_b["outcome"])
 
 
+def test_select_images_skips_unknown_groups() -> None:
+    """Rows with missing group metadata never fill a stratum.
+
+    The first PAD test run spent 2 of 20 images on an ``unknown`` Fitzpatrick
+    group whose sex was also ``-1``; neither says anything about skin tone.
+    """
+    n = 40
+    df = pd.DataFrame(
+        {
+            "y_true": [0, 1] * (n // 2),
+            "y_pred": [0, 0] * (n // 2),
+            "fitzpatrick_group": ["I-II", "V-VI", "unknown", "I-II", "V-VI"] * (n // 5),
+            "sex": [0, 1, -1, 1, 0] * (n // 5),
+            "image_path": [f"img_{i}.png" for i in range(n)],
+        }
+    )
+    sel = xai.select_images(df, ["fitzpatrick_group", "sex"], n_samples=20, per_cell=2)
+
+    assert len(sel) > 0
+    assert "unknown" not in set(sel["fitzpatrick_group"])
+    assert -1 not in set(sel["sex"])
+
+
 def test_select_images_no_sensitive_attr_falls_back() -> None:
     df = pd.DataFrame(
         {

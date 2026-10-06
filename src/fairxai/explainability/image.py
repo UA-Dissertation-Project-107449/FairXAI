@@ -29,6 +29,8 @@ from typing import Any, Callable, Iterable, Optional
 import numpy as np
 import pandas as pd
 
+from fairxai.fairness.image_assessment import _is_unknown_label, decode_groups
+
 logger = logging.getLogger(__name__)
 
 METHODS = ("shap", "lime", "gradcam")  # canonical order (matches tabular nomenclature)
@@ -187,6 +189,10 @@ def select_images(
     shared only one to four images per backbone. The outcome is still reported
     per row in the ``outcome`` column.
 
+    Rows whose group is unknown (``unknown`` Fitzpatrick, sex ``-1``, NaN) form
+    no stratum: an image with missing metadata says nothing about the group
+    question and would spend budget the real groups need.
+
     Round-robins across available sensitive attributes so every attribute and
     both labels get some coverage before the budget is spent. The attribute
     order therefore sets the priority when the budget is too small to cover
@@ -206,9 +212,10 @@ def select_images(
     # age_group was ever represented, so the skin-tone question had no images.
     per_attr: list[list[pd.DataFrame]] = []
     for attr in attrs:
+        known = work[~decode_groups(work, attr).map(_is_unknown_label)]
         attr_cells = [
             cell.sample(min(per_cell, len(cell)), random_state=random_state)
-            for (_group, _label), cell in work.groupby([attr, "y_true"], dropna=False)
+            for (_group, _label), cell in known.groupby([attr, "y_true"])
         ]
         if attr_cells:
             per_attr.append(attr_cells)

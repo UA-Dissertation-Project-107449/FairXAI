@@ -106,7 +106,8 @@ xai:
   # group was explained at all.
   sensitive_attributes: [fitzpatrick_group, sex]
   # 20 = two images in every stratum of the two attributes above: fitzpatrick_group
-  # has 3 groups (I-II, III-IV, V-VI) and sex 2, each crossed with the 2 labels.
+  # has 3 groups (I-II, III-IV, V-VI) and sex 2, each crossed with the 2 labels;
+  # images with an unknown Fitzpatrick group or sex fill no stratum.
   # Raise per_cell and n_samples together for more images per stratum — that is
   # the lever if a quantitative claim about the saliency maps is wanted.
   n_samples: 20          # images explained per model
