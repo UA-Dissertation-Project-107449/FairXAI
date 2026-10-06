@@ -698,15 +698,8 @@ def section_four_site_bands() -> None:
     emit()
 
 
-def section_cluster_age() -> None:
-    emit("## L7b. Age gaps within discovered clusters (saved predictions, age groups n >= 30)")
-    emit()
-    emit(
-        "Point estimates, max - min over the age groups of one cluster. No interval: a bootstrap "
-        "interval on a max-min gap excludes zero on null data (see L1); only pairwise "
-        "differences are testable, and the pairwise layer does not cross cluster with age."
-    )
-    emit()
+def cluster_gaps(attribute: str) -> pd.DataFrame:
+    """Within-cluster parity and outcome-rate gaps over one attribute, groups of n >= 30."""
     rows = []
     for run, cohorts in CARDIAC_COHORTS:
         pred = CARD / "runs" / run / "baseline" / "results" / "predictions"
@@ -715,9 +708,9 @@ def section_cluster_age() -> None:
                 path = pred / f"{cohort}_{model}_{split_of(cohort)}.csv"
                 if not path.exists():
                     continue
-                df = pd.read_csv(path, usecols=["y_true", "y_pred", "group_cluster", "age_group"])
+                df = pd.read_csv(path, usecols=["y_true", "y_pred", "group_cluster", attribute])
                 for cl, c in df.groupby("group_cluster"):
-                    s = c.groupby("age_group").agg(
+                    s = c.groupby(attribute).agg(
                         n=("y_true", "size"), pos=("y_pred", "mean"), out=("y_true", "mean")
                     )
                     s = s[s.n >= 30]
@@ -729,16 +722,31 @@ def section_cluster_age() -> None:
                             "split": split_of(cohort),
                             "cluster": cl,
                             "n": len(c),
-                            "age_groups": len(s),
+                            "groups": len(s),
                             "outcome_rate": c.y_true.mean(),
                             "outcome_gap": s.out.max() - s.out.min(),
                             "model": model,
                             "parity_gap": s.pos.max() - s.pos.min(),
                         }
                     )
-    df = pd.DataFrame(rows)
-    keys = ["cohort", "split", "cluster", "n", "age_groups", "outcome_rate", "outcome_gap"]
-    table(df.pivot_table(index=keys, columns="model", values="parity_gap").reset_index())
+    return pd.DataFrame(rows)
+
+
+def section_cluster_age() -> None:
+    emit("## L7b. Age and sex gaps within discovered clusters (saved predictions, groups n >= 30)")
+    emit()
+    emit(
+        "Point estimates, max - min over the groups of one cluster. No interval: a bootstrap "
+        "interval on a max-min gap excludes zero on null data (see L1); only pairwise "
+        "differences are testable, and the pairwise layer does not cross cluster with age or sex."
+    )
+    emit()
+    keys = ["cohort", "split", "cluster", "n", "groups", "outcome_rate", "outcome_gap"]
+    for attribute in ("age_group", "sex"):
+        emit(f"By {attribute}:")
+        emit()
+        df = cluster_gaps(attribute)
+        table(df.pivot_table(index=keys, columns="model", values="parity_gap").reset_index())
 
 
 # Techniques that act on the group, in table order; the two within-group resamplers pool.

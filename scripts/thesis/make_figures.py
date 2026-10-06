@@ -18,7 +18,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
-from build_ledger import _nondominated, split_of  # noqa: E402
+from build_ledger import _nondominated, cluster_gaps, split_of  # noqa: E402
 from matplotlib.image import imread  # noqa: E402
 from thesis_runs import (  # noqa: E402
     C70_MODELS,
@@ -482,6 +482,41 @@ def fig_mitigation_deltas() -> None:
     save(fig, "mitigation_deltas")
 
 
+def fig_cluster_gaps() -> None:
+    """Cardio70k held-out age and sex parity gaps inside each cluster, against the outcome gap."""
+    panels = [("age_group", "Age parity gap"), ("sex", "Sex parity gap")]
+    fig, axes = plt.subplots(1, 2, figsize=(WIDTH, 2.2), sharey=True)
+    offs = {"LR": -0.18, "RF": 0.0, "XGB": 0.18}
+    for ax, (attr, title) in zip(axes, panels):
+        g = cluster_gaps(attr)
+        g = g[g.cohort == "cardio70k"].sort_values("outcome_rate")
+        order = list(dict.fromkeys(g.cluster))
+        for model, s in g.groupby("model"):
+            fam = FAMILY[model]
+            x = np.array([order.index(c) for c in s.cluster]) + offs[fam]
+            ax.scatter(x, s.parity_gap, s=12, color=FAM_COLOR[fam], lw=0, label=fam, zorder=3)
+        out = g.drop_duplicates("cluster")
+        ax.scatter(
+            range(len(order)),
+            out.outcome_gap,
+            marker="_",
+            s=90,
+            color="#222222",
+            lw=1.2,
+            label="outcome-rate gap",
+        )
+        ticks = [f"{c}\n{r:.0%}\n{n:,}" for c, r, n in zip(out.cluster, out.outcome_rate, out.n)]
+        ax.set_xticks(range(len(order)), ticks, fontsize=6.5)
+        ax.set_title(title, loc="left")
+        ax.set_xlabel("cluster, outcome rate, held-out n")
+    axes[0].set_ylabel("max – min over groups")
+    axes[0].set_ylim(0, None)
+    h, lab = axes[0].get_legend_handles_labels()
+    fig.legend(h, lab, loc="lower center", ncol=4, frameon=False, bbox_to_anchor=(0.5, -0.11))
+    fig.tight_layout()
+    save(fig, "cardio70k_cluster_gaps")
+
+
 FIGURES = (
     fig_evidence,
     fig_foursite_age,
@@ -491,6 +526,7 @@ FIGURES = (
     fig_gradcam,
     fig_frontier,
     fig_mitigation_deltas,
+    fig_cluster_gaps,
 )
 
 
