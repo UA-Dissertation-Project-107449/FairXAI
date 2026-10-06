@@ -15,19 +15,24 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.stats import spearmanr
 from sklearn.metrics import f1_score, roc_auc_score
 from thesis_runs import (
+    C70_MODELS,
     CALIBRATION,
     CARD,
     CARDIAC_COHORTS,
     DEFAULT_OUT,
     DERM,
+    FOUR_SITE_DATA,
     REDUNDANT,
     RUN_C70,
     RUN_C70_SUB,
     RUN_CARDIAC,
     RUN_DERM_AUG,
     RUN_DERM_CACHED,
+    SYNTHETIC,
+    UCI_MODELS,
     USAB,
     rel,
     study_dir,
@@ -621,6 +626,340 @@ def section_shap() -> None:
     table(pd.DataFrame(rows))
 
 
+def split_of(cohort: str) -> str:
+    """The prediction split the chapter quotes: held-out for Cardio70k, pooled CV otherwise."""
+    return "test" if cohort == "cardio70k" else "cv"
+
+
+def models_of(cohort: str) -> list[str]:
+    return C70_MODELS if cohort == "cardio70k" else UCI_MODELS
+
+
+def section_derm_groups() -> None:
+    emit("## L4b. Dermatology recall and AUC by Fitzpatrick group (point estimates, no intervals)")
+    emit()
+    rows = []
+    for arm, run in (("augmented", RUN_DERM_AUG), ("cached_no_aug", RUN_DERM_CACHED)):
+        path = DERM / "runs" / run / "baseline" / "prediction_fairness" / "fairness_groups.csv"
+        emit(f"Source ({arm}): `{rel(path)}`")
+        g = pd.read_csv(path)
+        g = g[g.sensitive_attribute == "fitzpatrick_group"]
+        for key, d in g.groupby("run_key"):
+            d = d.set_index("group")
+            light, mid = d.loc["I-II"], d.loc["III-IV"]
+            rows.append(
+                {
+                    "arm": arm,
+                    "backbone": key.removeprefix("pad_ufes_20_"),
+                    "recall_I-II": light.recall,
+                    "recall_III-IV": mid.recall,
+                    "recall_diff": mid.recall - light.recall,
+                    "auc_I-II": light.auc,
+                    "auc_III-IV": mid.auc,
+                }
+            )
+    emit()
+    groups = g.drop_duplicates("group")[["group", "n", "prevalence", "degenerate"]]
+    emit("Groups (last arm; identical test split in both):")
+    emit()
+    table(groups)
+    table(pd.DataFrame(rows))
+
+
+def section_four_site_bands() -> None:
+    emit("## L6b. Four-site outcome rate by site and age band (raw data, descriptive only)")
+    emit()
+    emit(f"Source: `{rel(FOUR_SITE_DATA)}`, the `age_group` bands as stored (right-closed).")
+    emit()
+    d = pd.read_csv(FOUR_SITE_DATA, usecols=["source_site", "age_group", "heart_disease"])
+    bands = sorted(d.age_group.unique(), key=lambda b: (not b.startswith("<"), b))
+    site = d.groupby("source_site").heart_disease.agg(n="size", prevalence="mean")
+    table(site.sort_values("prevalence").reset_index())
+    band = d.groupby("age_group").heart_disease.agg(n="size", rate="mean")
+    share = pd.crosstab(d.age_group, d.source_site, normalize="index").add_prefix("share_")
+    emit("Pooled rate per band, and each site's share of the band:")
+    emit()
+    table(band.join(share).loc[bands].reset_index())
+    rate = d.pivot_table(index="source_site", columns="age_group", values="heart_disease")
+    size = d.pivot_table(
+        index="source_site", columns="age_group", values="heart_disease", aggfunc="size"
+    )
+    cells = pd.DataFrame(index=rate.index)
+    for b in bands:
+        cells[b] = [f"{r:.3f} ({int(n)})" if pd.notna(n) else "-" for r, n in zip(rate[b], size[b])]
+    young, old = bands[0], "60-69"
+    if old in rate:
+        cells[f"{old} minus {young}"] = (rate[old] - rate[young]).round(3)
+    emit("Within-site rate (n) per band:")
+    emit()
+    emit(cells.reset_index().to_markdown(index=False))
+    emit()
+
+
+def section_cluster_age() -> None:
+    emit("## L7b. Age gaps within discovered clusters (saved predictions, age groups n >= 30)")
+    emit()
+    emit(
+        "Point estimates, max - min over the age groups of one cluster. No interval: a bootstrap "
+        "interval on a max-min gap excludes zero on null data (see L1); only pairwise "
+        "differences are testable, and the pairwise layer does not cross cluster with age."
+    )
+    emit()
+    rows = []
+    for run, cohorts in CARDIAC_COHORTS:
+        pred = CARD / "runs" / run / "baseline" / "results" / "predictions"
+        for cohort in cohorts:
+            for model in models_of(cohort):
+                path = pred / f"{cohort}_{model}_{split_of(cohort)}.csv"
+                if not path.exists():
+                    continue
+                df = pd.read_csv(path, usecols=["y_true", "y_pred", "group_cluster", "age_group"])
+                for cl, c in df.groupby("group_cluster"):
+                    s = c.groupby("age_group").agg(
+                        n=("y_true", "size"), pos=("y_pred", "mean"), out=("y_true", "mean")
+                    )
+                    s = s[s.n >= 30]
+                    if len(s) < 2:
+                        continue
+                    rows.append(
+                        {
+                            "cohort": cohort,
+                            "split": split_of(cohort),
+                            "cluster": cl,
+                            "n": len(c),
+                            "age_groups": len(s),
+                            "outcome_rate": c.y_true.mean(),
+                            "outcome_gap": s.out.max() - s.out.min(),
+                            "model": model,
+                            "parity_gap": s.pos.max() - s.pos.min(),
+                        }
+                    )
+    df = pd.DataFrame(rows)
+    keys = ["cohort", "split", "cluster", "n", "age_groups", "outcome_rate", "outcome_gap"]
+    table(df.pivot_table(index=keys, columns="model", values="parity_gap").reset_index())
+
+
+# Techniques that act on the group, in table order; the two within-group resamplers pool.
+ACTING = [
+    "exponentiated_gradient",
+    "threshold_optimizer",
+    "grid_search",
+    "reweighting",
+    "group_aware_resampling",
+]
+GROUP_AWARE = {
+    "smote_group": "group_aware_resampling",
+    "uniform_sampling": "group_aware_resampling",
+}
+
+
+def section_mitigation_effects() -> None:
+    emit("## L9b. Mitigation: change in the targeted parity gap and in F1, mean over families")
+    emit()
+    emit(
+        "Targeted gap = demographic_parity max_difference on the constraint attribute; F1 from "
+        "scope performance. Group-aware resampling pools smote_group and uniform_sampling (mean "
+        "and counts over both). sig_down / sig_up: arms whose gap change is significant (BH "
+        "within the arm), by direction. UCI cohorts: pooled CV; Cardio70k: held-out split."
+    )
+    emit()
+    rows, sig = [], []
+    for run, cohorts in CARDIAC_COHORTS:
+        base = CARD / "runs" / run / "experiments" / "mitigation"
+        for cohort in cohorts:
+            path = base / (
+                "paired_effects.csv" if split_of(cohort) == "test" else "paired_effects_cv.csv"
+            )
+            emit(f"Source ({cohort}): `{rel(path)}`")
+            pe = pd.read_csv(path)
+            pe = pe[pe.dataset == cohort].copy()
+            pe["significant"] = pe.significant.fillna(False).astype(bool)
+            pe["group"] = pe.technique.replace(GROUP_AWARE)
+            gap = pe[
+                (pe.scope == "group_fairness")
+                & (pe.metric == "demographic_parity")
+                & (pe.quantity == "max_difference")
+                & (pe.attribute == pe.constraint_attr)
+            ].copy()
+            gap["down"] = gap.significant & (gap.difference < 0)
+            gap["up"] = gap.significant & (gap.difference > 0)
+            f1 = pe[(pe.scope == "performance") & (pe.quantity == "f1")]
+            keys = ["constraint_attr", "group"]
+            agg = gap.groupby(keys).agg(
+                baseline_gap=("baseline", "mean"),
+                d_gap=("difference", "mean"),
+                arms=("difference", "size"),
+                sig_down=("down", "sum"),
+                sig_up=("up", "sum"),
+            )
+            agg = agg.join(f1.groupby(keys).difference.mean().rename("d_f1")).reset_index()
+            agg.insert(0, "cohort", cohort)
+            rows.append(agg)
+            hit = gap[gap.significant]
+            sig.append(
+                hit[["dataset", "constraint_attr", "technique", "model_type"]].assign(
+                    baseline=hit.baseline, arm=hit.arm, difference=hit.difference
+                )
+            )
+    emit()
+    df = pd.concat(rows)
+    order = {t: i for i, t in enumerate(ACTING)}
+    df = df.sort_values(
+        ["cohort", "constraint_attr", "group"],
+        key=lambda s: s.map(order).fillna(99) if s.name == "group" else s,
+    )
+    table(df.rename(columns={"group": "technique"}))
+    emit("Every arm with a significant targeted-gap change:")
+    emit()
+    table(pd.concat(sig))
+
+
+def section_coef_shap() -> None:
+    emit("## L12b. Logistic regression |coefficient| vs mean |SHAP| (holdout), and top-two shares")
+    emit()
+    rows, tops = [], []
+    for run, cohorts in CARDIAC_COHORTS:
+        res = CARD / "runs" / run / "baseline" / "results"
+        for cohort in cohorts:
+            imp = pd.read_csv(res / "predictions" / f"{cohort}_logistic_regression_importance.csv")
+            lr = res / "xai" / f"{cohort}__logistic_regression" / "holdout" / "shap" / "summary.csv"
+            m = imp.merge(pd.read_csv(lr), on="feature")
+            rows.append(
+                {
+                    "cohort": cohort,
+                    "features": len(m),
+                    "spearman": spearmanr(m.abs_coefficient, m.mean_abs_shap).statistic,
+                    "top_coef": imp.sort_values("abs_coefficient").feature.iloc[-1],
+                }
+            )
+            for model in models_of(cohort):
+                p = res / "xai" / f"{cohort}__{model}" / "holdout" / "shap" / "summary.csv"
+                if not p.exists():
+                    continue
+                s = pd.read_csv(p).sort_values("mean_abs_shap", ascending=False)
+                share = (s.mean_abs_shap / s.mean_abs_shap.sum()).to_numpy()
+                tops.append(
+                    {
+                        "cohort": cohort,
+                        "model": model,
+                        "top1": s.feature.iloc[0],
+                        "share1": share[0],
+                        "top2": s.feature.iloc[1],
+                        "share2": share[1],
+                        "top4": ", ".join(sorted(s.feature.iloc[:4])),
+                    }
+                )
+    table(pd.DataFrame(rows))
+    table(pd.DataFrame(tops))
+
+
+def _arm_parts(name: str, cohort: str) -> tuple[str, str, str]:
+    """``<cohort>_<family>_<technique>_<constraint>`` -> (family, technique, constraint)."""
+    rest = name.removeprefix(cohort + "_")
+    family = next(f for f in UCI_MODELS if rest.startswith(f + "_"))
+    rest = rest.removeprefix(family + "_")
+    constraint = next(c for c in ("group_cluster", "age_group", "sex", "none") if rest.endswith(c))
+    return family, rest.removesuffix("_" + constraint), constraint
+
+
+def section_shap_mitigation() -> None:
+    emit("## L12c. Subgroup SHAP before and after mitigation (stage 10, held-out rows)")
+    emit()
+    emit(
+        "baseline_none = the unmitigated model on the same held-out rows; compare mitigated arms "
+        "with it, not with L12 (training rows). gap = max share_gap over features; rho = min "
+        "Spearman of a group's ranking vs the overall one."
+    )
+    emit()
+    arms = []
+    for run, cohorts in CARDIAC_COHORTS:
+        root = CARD / "runs" / run / "experiments" / "mitigation" / "subgroup_shap"
+        emit(f"Source: `{rel(root)}`")
+        for cohort in cohorts:
+            found = [
+                d
+                for d in sorted(root.glob(f"{cohort}_*"))
+                if (d / "subgroup_disparity.csv").exists()
+            ]
+            if not found:
+                emit(
+                    f"{cohort}: no subgroup SHAP (no attribute keeps two groups of 30 held-out rows)."
+                )
+            for d in found:
+                family, technique, constraint = _arm_parts(d.name, cohort)
+                row = {
+                    "cohort": cohort,
+                    "model": family,
+                    "technique": technique,
+                    "constraint": constraint,
+                }
+                for attr, g in pd.read_csv(d / "subgroup_disparity.csv").groupby("attribute"):
+                    row[f"{attr}_gap"] = g.share_gap.max()
+                for attr, g in pd.read_csv(d / "subgroup_agreement.csv").groupby("attribute"):
+                    row[f"{attr}_rho"] = g.spearman_vs_overall.min()
+                arms.append(row)
+    emit()
+    df = pd.DataFrame(arms)
+    df["arm"] = df.model + "/" + df.technique + "/" + df.constraint
+    summary = []
+    for (cohort, is_base), g in df.groupby(["cohort", df.technique == "baseline"]):
+        for attr in ("age_group", "sex", "group_cluster"):
+            if f"{attr}_gap" not in g or g[f"{attr}_gap"].isna().all():
+                continue
+            hi = g.loc[g[f"{attr}_gap"].idxmax()]
+            lo = g.loc[g[f"{attr}_rho"].idxmin()]
+            summary.append(
+                {
+                    "cohort": cohort,
+                    "arms": "baseline_none" if is_base else f"mitigated ({len(g)})",
+                    "attribute": attr,
+                    "max_gap": hi[f"{attr}_gap"],
+                    "max_gap_arm": hi.arm,
+                    "min_rho": lo[f"{attr}_rho"],
+                    "min_rho_arm": lo.arm,
+                }
+            )
+    table(pd.DataFrame(summary))
+    emit("Per arm:")
+    emit()
+    table(df.drop(columns="arm"))
+
+
+def section_synthetic() -> None:
+    emit("## L14. Synthetic profiling-sensitivity study (Appendix E)")
+    emit()
+    if not SYNTHETIC.is_dir():
+        emit(f"MISSING: `{rel(SYNTHETIC)}` (runs.yaml `studies.synthetic`).")
+        emit()
+        return
+    emit(f"Source: `{rel(SYNTHETIC)}`")
+    emit()
+    for key, value in json.loads((SYNTHETIC / "study_summary.json").read_text()).items():
+        emit(f"- {key}: {value}")
+    emit()
+    k = pd.read_csv(SYNTHETIC / "knob_response_summary.csv")
+    k = k[k.knob != "base"]
+    # Manipulation checks, not profiling responses: they record what the knob did.
+    checks = {"semantic_type_accuracy", "top_missing_pct", "class_balance_delta"}
+    checks.add("duplicate_pct_observed")
+    r = k[~k.metric.isin(checks)]
+    excl = (r.delta_ci95_low > 0) | (r.delta_ci95_high < 0)
+    emit(
+        f"Paired-delta intervals on the profiling responses: {len(r)} ({r.condition.nunique()} "
+        f"conditions x {r.metric.nunique()} responses x {r.tier.nunique()} tiers); excluding "
+        f"zero: {int(excl.sum())}. Manipulation checks left out: {', '.join(sorted(checks))}."
+    )
+    emit()
+    emit("Difficulty response (ebmDifficulty, paired delta from the same seed's baseline):")
+    emit()
+    cols = ["tier", "knob", "condition", "knob_value", "n_replicates", "mean"]
+    cols += ["delta_mean", "delta_ci95_low", "delta_ci95_high"]
+    table(k[k.metric == "ebmDifficulty"][cols])
+    emit("Semantic-type confusion (`type_confusion.csv`):")
+    emit()
+    table(pd.read_csv(SYNTHETIC / "type_confusion.csv"))
+
+
 def section_usability() -> None:
     emit("## L13. Usability study (n = 5; raw record, WebApp repo)")
     emit()
@@ -677,21 +1016,30 @@ def main() -> None:
     runs = (RUN_CARDIAC, RUN_C70_SUB, RUN_C70, RUN_DERM_AUG, RUN_DERM_CACHED)
     emit("Runs: " + ", ".join(f"`{r}`" for r in runs))
     emit()
+    emit(f"Synthetic study: `{rel(SYNTHETIC)}`")
+    emit()
     for fn in (
         section_calibration,
         section_resampling,
         section_triage,
         section_baseline,
+        section_derm_groups,
         section_pairwise,
         section_gaps,
+        section_four_site_bands,
         section_clusters,
+        section_cluster_age,
         section_binning,
         section_binning_predictions,
         section_mitigation,
+        section_mitigation_effects,
         section_sweep,
         section_ablation,
         section_shap,
+        section_coef_shap,
+        section_shap_mitigation,
         section_usability,
+        section_synthetic,
     ):
         try:
             fn()
