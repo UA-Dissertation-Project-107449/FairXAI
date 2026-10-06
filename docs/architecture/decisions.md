@@ -86,7 +86,7 @@ purpose:
   I/O, no checkpoint loading, no sampling — trivial to unit-test and to reuse
   outside the pipeline.
 - **Driver** (`select_images`, `explain_image_model`) owns the side effects:
-  checkpoint loading, stratified group × outcome sampling, overlay rendering, and
+  checkpoint loading, stratified group × true-label sampling, overlay rendering, and
   the `manifest.csv`.
 
 Rationale: the heatmap math is the defensible methods-chapter contribution and

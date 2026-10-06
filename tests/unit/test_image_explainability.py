@@ -110,11 +110,7 @@ def test_select_images_stratifies_and_caps() -> None:
 
 def _first_cell_index(df: pd.DataFrame, attr: str) -> int:
     """Index of the row ``select_images`` draws for ``attr``'s first cell."""
-    work = df.copy()
-    work["_outcome"] = [
-        xai._outcome(int(t), int(p)) for t, p in zip(work["y_true"], work["y_pred"])
-    ]
-    _key, cell = next(iter(work.groupby([attr, "_outcome"], dropna=False)))
+    _key, cell = next(iter(df.groupby([attr, "y_true"], dropna=False)))
     return cell.sample(1, random_state=42).index[0]
 
 
@@ -144,6 +140,35 @@ def test_select_images_draws_from_every_attribute_under_a_tight_budget() -> None
     assert len(sel) == 9
     for attr in attrs:
         assert _first_cell_index(df, attr) in sel.index, attr
+
+
+def test_select_images_ignores_predictions() -> None:
+    """Two models scored on the same rows explain the same images.
+
+    Strata used to be (group, outcome), so each model's own predictions decided
+    which images it explained and the dermatology arms barely overlapped.
+    """
+    rng = np.random.default_rng(4)
+    n = 200
+    df = pd.DataFrame(
+        {
+            "y_true": rng.integers(0, 2, n),
+            "fitzpatrick_group": rng.choice(["I-II", "III-IV", "V-VI"], n),
+            "sex": rng.choice(["Female", "Male"], n),
+            "image_path": [f"img_{i}.png" for i in range(n)],
+        }
+    )
+    arm_a = df.assign(y_pred=rng.integers(0, 2, n))
+    arm_b = df.assign(y_pred=rng.integers(0, 2, n))
+    attrs = ["fitzpatrick_group", "sex"]
+
+    sel_a = xai.select_images(arm_a, attrs, n_samples=20, per_cell=2)
+    sel_b = xai.select_images(arm_b, attrs, n_samples=20, per_cell=2)
+
+    assert 0 < len(sel_a) <= 20  # a row drawn for both attributes counts once
+    assert list(sel_a["image_path"]) == list(sel_b["image_path"])
+    # the outcome column still reflects each model's own predictions
+    assert list(sel_a["outcome"]) != list(sel_b["outcome"])
 
 
 def test_select_images_no_sensitive_attr_falls_back() -> None:
@@ -207,6 +232,43 @@ def test_explain_image_model_writes_manifest_and_png(tmp_path: Path, monkeypatch
     assert all((Path(row["png_path"]).exists()) for row in manifest)
     assert {row["method"] for row in manifest} == {"gradcam"}
     assert {"sex", "outcome"} <= set(manifest[0])
+
+
+def test_explain_image_model_picks_do_not_depend_on_row_order(tmp_path: Path, monkeypatch) -> None:
+    """Arms that wrote their test predictions in different orders explain the same images."""
+    img_dir = tmp_path / "imgs"
+    rows = []
+    for i in range(12):
+        p = img_dir / f"lesion_{i:02d}.png"
+        _write_image(p, seed=i)
+        rows.append(
+            {
+                "image_path": str(p),
+                "y_true": i % 2,
+                "y_pred": (i // 2) % 2,
+                "sex": "Female" if (i // 3) % 2 else "Male",
+            }
+        )
+    preds = pd.DataFrame(rows)
+    shuffled = preds.sample(frac=1, random_state=7).assign(y_pred=lambda d: 1 - d["y_pred"])
+
+    ckpt = {"model_name": "tiny", "image_size": 16, "transform": {"resize": [16, 16]}}
+    monkeypatch.setattr(xai, "_load_model", lambda path, device: (_tiny_cnn(), ckpt))
+
+    def _paths(run_key: str, df: pd.DataFrame) -> list[str]:
+        manifest = xai.explain_image_model(
+            tmp_path / "runs" / "run_x",
+            run_key,
+            tmp_path / "fake.pt",
+            df,
+            image_col="image_path",
+            sensitive_attrs=["sex"],
+            methods=["gradcam"],
+            n_samples=4,
+        )
+        return [row["image_path"] for row in manifest]
+
+    assert _paths("arm_a", preds) == _paths("arm_b", shuffled)
 
 
 def test_explain_image_model_rejects_unknown_methods(tmp_path: Path, monkeypatch) -> None:

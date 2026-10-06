@@ -2,8 +2,8 @@
 """Dermatology phase runner: post-hoc explainability (stage 10).
 
 Reloads each trained baseline model for the current run and writes SHAP, LIME and
-Grad-CAM saliency overlays for a small set of test images stratified by sensitive
-group and outcome. No retraining. Methods and sample size come from the ``xai``
+Grad-CAM saliency overlays for a fixed set of test images stratified by sensitive
+group and true label, so every model explains the same images. No retraining. Methods and sample size come from the ``xai``
 section of ``configs/pipelines/dermatology.yaml``; CLI flags override.
 
 Invoked by the pipeline with ``RUN_ID`` exported; can also be run standalone:

@@ -90,7 +90,9 @@ comparison:
 xai:
   # Stage 10 (explain): post-hoc saliency for trained CNNs. Reloads each model
   # checkpoint and writes SHAP / LIME / Grad-CAM overlays for a small set of test
-  # images stratified by sensitive group x outcome (TP/FP/TN/FN). No retraining.
+  # images stratified by sensitive group x true label. No retraining. Strata use
+  # the label, not the TP/FP/TN/FN outcome, so every arm and backbone explains the
+  # same images; the manifest still records each image's outcome.
   enabled: true
   cv_enabled: false
   # Per-method toggles (all on to start; flip individually if LIME/SHAP are slow).
@@ -103,12 +105,12 @@ xai:
   # left out: with it first the whole budget went to age strata and no Fitzpatrick
   # group was explained at all.
   sensitive_attributes: [fitzpatrick_group, sex]
-  # 20 = every stratum of the two attributes above: fitzpatrick_group has 3 groups
-  # (I-II, III-IV, V-VI) and sex 2, each crossed with the 4 outcomes (TP/FP/TN/FN).
-  # Raise per_cell, not n_samples, for more than one image per stratum — that is
+  # 20 = two images in every stratum of the two attributes above: fitzpatrick_group
+  # has 3 groups (I-II, III-IV, V-VI) and sex 2, each crossed with the 2 labels.
+  # Raise per_cell and n_samples together for more images per stratum — that is
   # the lever if a quantitative claim about the saliency maps is wanted.
   n_samples: 20          # images explained per model
-  per_cell: 1            # images per (sensitive group, outcome) stratum before budget
+  per_cell: 2            # images per (sensitive group, true label) stratum before budget
   lime_num_samples: 1000 # LIME perturbations per image (lower = faster, noisier)
 
 mitigation:
