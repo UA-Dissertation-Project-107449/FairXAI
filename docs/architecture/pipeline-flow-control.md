@@ -186,28 +186,28 @@ The contract is generated from available study artifacts and passed to downstrea
 GO_UNTIL=profile bash scripts/cardiac/cardiac_pipeline.sh
 
 # Prefect
-python flows/cardiac_pipeline.py --go-until profile
+python3 flows/cardiac_pipeline.py --go-until profile
 ```
 
 ### Run only through recommendations (stages 1–3)
 
 ```bash
 GO_UNTIL=recommend bash scripts/cardiac/cardiac_pipeline.sh
-python flows/cardiac_pipeline.py --go-until recommend
+python3 flows/cardiac_pipeline.py --go-until recommend
 ```
 
 ### Run the core pipeline without experiments (stages 1–8)
 
 ```bash
 GO_UNTIL=assess bash scripts/cardiac/cardiac_pipeline.sh
-python flows/cardiac_pipeline.py --go-until assess
+python3 flows/cardiac_pipeline.py --go-until assess
 ```
 
 ### Skip studies but keep baseline and experiment flow
 
 ```bash
 bash scripts/cardiac/cardiac_pipeline.sh --no-hpo-study --no-feature-selection-study
-python flows/cardiac_pipeline.py --no-hpo-study --no-feature-selection-study
+python3 flows/cardiac_pipeline.py --no-hpo-study --no-feature-selection-study
 ```
 
 ### Run only Cleveland with selected models
@@ -219,7 +219,7 @@ bash scripts/cardiac/cardiac_pipeline.sh \
       --model-types logistic_regression xgboost
 
 # Prefect orchestrator
-python flows/cardiac_pipeline.py \
+python3 flows/cardiac_pipeline.py \
       --datasets cleveland_uci \
       --model-types logistic_regression xgboost
 ```
@@ -233,7 +233,7 @@ bash scripts/cardiac/cardiac_pipeline.sh \
       --datasets cleveland_uci \
       --model-types logistic_regression
 
-python flows/cardiac_pipeline.py \
+python3 flows/cardiac_pipeline.py \
       --resume-from train \
       --go-until compare \
       --datasets cleveland_uci \
@@ -250,22 +250,22 @@ RESUME_FROM=preprocess RUN_ID=run_20260224_143000_12345_abc123 bash scripts/card
 RESUME_FROM=preprocess bash scripts/cardiac/cardiac_pipeline.sh
 
 # Prefect equivalents
-python flows/cardiac_pipeline.py --resume-from preprocess --run-id run_20260224_143000_12345_abc
-python flows/cardiac_pipeline.py --resume-from preprocess
+python3 flows/cardiac_pipeline.py --resume-from preprocess --run-id run_20260224_143000_12345_abc
+python3 flows/cardiac_pipeline.py --resume-from preprocess
 ```
 
 ### Resume from training, stop after assessment
 
 ```bash
 RESUME_FROM=train GO_UNTIL=assess bash scripts/cardiac/cardiac_pipeline.sh
-python flows/cardiac_pipeline.py --resume-from train --go-until assess
+python3 flows/cardiac_pipeline.py --resume-from train --go-until assess
 ```
 
 ### Run a single stage (e.g., re-run only recommendations)
 
 ```bash
 RESUME_FROM=recommend GO_UNTIL=recommend bash scripts/cardiac/cardiac_pipeline.sh
-python flows/cardiac_pipeline.py --resume-from recommend --go-until recommend
+python3 flows/cardiac_pipeline.py --resume-from recommend --go-until recommend
 ```
 
 ### Dermatology: full baseline without the saliency stage

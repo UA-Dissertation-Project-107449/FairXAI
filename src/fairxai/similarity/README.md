@@ -62,7 +62,7 @@ orchestrators:
 
 ```bash
 RUN_SIMILARITY=1 GO_UNTIL=assess bash scripts/cardiac/cardiac_pipeline.sh --datasets cleveland_uci
-python flows/cardiac_pipeline.py --similarity --go-until assess --datasets cleveland_uci
+python3 flows/cardiac_pipeline.py --similarity --go-until assess --datasets cleveland_uci
 ```
 
 The standalone study (`scripts/studies/run_grouping_analysis.py`) calls the same
