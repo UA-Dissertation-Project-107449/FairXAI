@@ -29,6 +29,8 @@ from typing import Any, Callable, Iterable, Optional
 import numpy as np
 import pandas as pd
 
+from fairxai.fairness.image_assessment import _is_unknown_label, decode_groups
+
 logger = logging.getLogger(__name__)
 
 METHODS = ("shap", "lime", "gradcam")  # canonical order (matches tabular nomenclature)
@@ -157,7 +159,7 @@ def shap_heatmap(
 
 
 # --------------------------------------------------------------------------- #
-# Image selection (stratified by sensitive group x outcome)
+# Image selection (stratified by sensitive group x true label)
 # --------------------------------------------------------------------------- #
 def _outcome(y_true: int, y_pred: int) -> str:
     if y_true == 1 and y_pred == 1:
@@ -177,12 +179,26 @@ def select_images(
     per_cell: int = 1,
     random_state: int = 42,
 ) -> pd.DataFrame:
-    """Pick up to ``n_samples`` rows stratified by (sensitive group, outcome).
+    """Pick up to ``n_samples`` rows stratified by (sensitive group, true label).
+
+    Strata use ``y_true``, not the TP/FP/TN/FN outcome, so the choice does not
+    depend on the model: two models scored on the same test rows (the augmented
+    and cached no-augmentation arms, or two backbones) explain the same images
+    and their saliency maps can be compared image by image. Stratifying by
+    outcome made each arm pick its own images, and the two dermatology arms
+    shared only one to four images per backbone. The outcome is still reported
+    per row in the ``outcome`` column.
+
+    Rows whose group is unknown (``unknown`` Fitzpatrick, sex ``-1``, NaN) form
+    no stratum: an image with missing metadata says nothing about the group
+    question and would spend budget the real groups need.
 
     Round-robins across available sensitive attributes so every attribute and
-    every outcome class gets some coverage before the budget is spent. The
-    attribute order therefore sets the priority when the budget is too small to
-    cover every stratum: put the attribute the research question is about first.
+    both labels get some coverage before the budget is spent. The attribute
+    order therefore sets the priority when the budget is too small to cover
+    every stratum: put the attribute the research question is about first.
+    Callers that need the same picks across models must pass the rows in the
+    same order (``explain_image_model`` sorts by image path).
     """
     work = df.copy()
     work["_outcome"] = [_outcome(int(t), int(p)) for t, p in zip(work["y_true"], work["y_pred"])]
@@ -190,15 +206,16 @@ def select_images(
 
     picked: list[int] = []
     seen: set[int] = set()
-    # (group, outcome) cells per attribute, then interleaved ACROSS attributes.
+    # (group, label) cells per attribute, then interleaved ACROSS attributes.
     # Draining one attribute's cells before starting the next spent the whole
     # budget on the first one: with three attributes and n_samples=12, only
     # age_group was ever represented, so the skin-tone question had no images.
     per_attr: list[list[pd.DataFrame]] = []
     for attr in attrs:
+        known = work[~decode_groups(work, attr).map(_is_unknown_label)]
         attr_cells = [
             cell.sample(min(per_cell, len(cell)), random_state=random_state)
-            for (_group, _oc), cell in work.groupby([attr, "_outcome"], dropna=False)
+            for (_group, _label), cell in known.groupby([attr, "y_true"])
         ]
         if attr_cells:
             per_attr.append(attr_cells)
@@ -303,7 +320,7 @@ def explain_image_model(
     num_samples_lime: int = 1000,
     device: str = "cpu",
 ) -> list[dict[str, Any]]:
-    """Explain a small stratified sample of test images for one trained model.
+    """Explain a fixed stratified sample of test images for one trained model.
 
     Writes ``baseline/explanations/<run_key>/<method>/<image_id>.png`` and returns
     manifest rows (image id, group values, outcome, method, png path).
@@ -320,9 +337,9 @@ def explain_image_model(
     model, ckpt = _load_model(checkpoint_path, torch_device)
     transform = _build_transform(ckpt)
 
-    selected = select_images(
-        predictions_df, sensitive_attrs, n_samples=n_samples, per_cell=per_cell
-    )
+    # Sort first so the pick does not depend on the row order each arm wrote.
+    ordered = predictions_df.sort_values(image_col, kind="stable").reset_index(drop=True)
+    selected = select_images(ordered, sensitive_attrs, n_samples=n_samples, per_cell=per_cell)
     out_root = run_root / "baseline" / "explanations" / run_key
     attrs = [a for a in sensitive_attrs if a in selected.columns]
 

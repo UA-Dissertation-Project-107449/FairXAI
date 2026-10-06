@@ -59,7 +59,8 @@ Two layers, kept deliberately separate (see
   - `lime_heatmap` — LIME image segmentation importance
   - `shap_heatmap` — SHAP pixel attribution
 - **Driver** — orchestration around a saved checkpoint:
-  - `select_images` — stratified sampling by group × outcome (TP/FP/TN/FN)
+  - `select_images` — stratified sampling by group × true label, so every model
+    on the same test rows explains the same images (outcome is still reported)
   - `explain_image_model` — loads a checkpoint, runs the heatmap fns, writes
     overlay PNGs
 

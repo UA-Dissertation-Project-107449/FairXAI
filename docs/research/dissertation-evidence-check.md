@@ -4,7 +4,7 @@ Snapshot: 2026-10-06, after the cold re-run behind Chapters 6 and 7.
 
 This note records how to read the evidence, not the numbers. The numbers live
 in the runs named by `scripts/thesis/runs.yaml` and in the ledger that
-`scripts/thesis/build_ledger.py` writes to `output/thesis/ledger.md`. Change the
+`scripts/thesis/build_ledger.py` writes to `output/thesis/chapter6_ledger.md`. Change the
 run IDs in `runs.yaml` after a rerun, then rebuild the ledger and figures; do not
 copy values into this file.
 
