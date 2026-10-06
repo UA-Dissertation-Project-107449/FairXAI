@@ -8,7 +8,6 @@ See [../docs/README.md](../docs/README.md) for the full docs index.
 
 ```text
 configs/
-├── datasets/          # Planned dataset registry (not read by any code yet)
 ├── domain/            # Domain metadata, feature maps, constraints, labels
 ├── experiments/       # Experiment and study configs
 ├── models/            # One YAML file per model type
@@ -30,7 +29,6 @@ configs/
 - `recommendations/thresholds.yaml` is the central triage/fairness threshold file.
 - `schema/cardiac.json` supports standardized dataset metadata and WebApp-compatible ingestion.
 - `schema/dermatology.json` declares the image datasets (`pad_ufes_20`, `scin`) with their metadata files and standardizers. Only `pad_ufes_20` is in the default run.
-- `datasets/registry.yaml` is a planned multi-domain registry. No pipeline code reads it yet.
 
 ## Experiment Configs
 
