@@ -6,8 +6,30 @@ import logging
 
 import numpy as np
 import pandas as pd
+from sklearn.utils.class_weight import compute_sample_weight
 
 from .sklearn_wrapper import SklearnClassifierWrapper
+
+try:
+    from xgboost import XGBClassifier
+except ImportError:  # optional dependency; XGBoostModel raises on use
+    XGBClassifier = None
+
+if XGBClassifier is not None:
+
+    class BalancedXGBClassifier(XGBClassifier):
+        """XGBClassifier with balanced class weights, like the other models.
+
+        Balanced weights multiply any ``sample_weight`` the caller passes
+        (reweighting, fairlearn reductions), as sklearn does for
+        ``class_weight`` x ``sample_weight``.
+        """
+
+        def fit(self, X, y, *, sample_weight=None, **kwargs):
+            weights = compute_sample_weight("balanced", y)
+            if sample_weight is not None:
+                weights = weights * np.asarray(sample_weight, dtype=float)
+            return super().fit(X, y, sample_weight=weights, **kwargs)
 
 
 class XGBoostModel(SklearnClassifierWrapper):
@@ -29,17 +51,15 @@ class XGBoostModel(SklearnClassifierWrapper):
         tree_method: str = "hist",
         device: str = "cpu",
     ):
-        try:
-            from xgboost import XGBClassifier
-        except ImportError as exc:
+        if XGBClassifier is None:
             raise ImportError(
                 "xgboost is not installed. Install it before selecting model_type='xgboost'."
-            ) from exc
+            )
 
         # XGBoost ≥2.0: tree_method must be 'hist' when device='cuda'
         resolved_tree_method = "hist" if device == "cuda" else tree_method
 
-        estimator = XGBClassifier(
+        estimator = BalancedXGBClassifier(
             n_estimators=n_estimators,
             max_depth=max_depth,
             learning_rate=learning_rate,

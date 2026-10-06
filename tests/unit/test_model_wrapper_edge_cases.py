@@ -130,3 +130,59 @@ def test_xgboost_train_uses_wrapper_predict_path_not_estimator_predict():
     metrics = XGBoostModel.train(model, X, y)
     assert isinstance(metrics, dict)
     assert "accuracy" in metrics
+
+
+def _spy_xgb_fit(monkeypatch):
+    """Record the sample_weight the plain XGBClassifier.fit receives."""
+    xgboost = pytest.importorskip("xgboost")
+    captured = {}
+    original = xgboost.XGBClassifier.fit
+
+    def spy(self, X, y, **kwargs):
+        captured["weights"] = kwargs.get("sample_weight")
+        return original(self, X, y, **kwargs)
+
+    monkeypatch.setattr(xgboost.XGBClassifier, "fit", spy)
+    return captured
+
+
+def _imbalanced_frame(n=120):
+    rng = np.random.default_rng(0)
+    X = pd.DataFrame(rng.normal(size=(n, 3)), columns=["a", "b", "c"])
+    y = pd.Series((rng.random(n) < 0.25).astype(int))
+    return X, y
+
+
+def test_xgboost_train_applies_balanced_class_weights(monkeypatch):
+    from sklearn.utils.class_weight import compute_sample_weight
+
+    captured = _spy_xgb_fit(monkeypatch)
+    X, y = _imbalanced_frame()
+    XGBoostModel(n_estimators=5, n_jobs=1).train(X, y)
+    np.testing.assert_allclose(captured["weights"], compute_sample_weight("balanced", y))
+
+
+def test_xgboost_class_weights_multiply_reweighting_weights(monkeypatch):
+    from sklearn.utils.class_weight import compute_sample_weight
+
+    from fairxai.fairness.mitigation import _fit_with_sample_weight
+
+    captured = _spy_xgb_fit(monkeypatch)
+    X, y = _imbalanced_frame()
+    sample_weight = np.linspace(0.5, 1.5, len(y))
+    _, applied = _fit_with_sample_weight(
+        XGBoostModel(n_estimators=5, n_jobs=1), X, y, sample_weight
+    )
+    assert applied
+    expected = compute_sample_weight("balanced", y) * sample_weight
+    np.testing.assert_allclose(captured["weights"], expected)
+
+
+def test_xgboost_balanced_estimator_survives_clone():
+    pytest.importorskip("xgboost")
+    from sklearn.base import clone
+
+    estimator = XGBoostModel(n_estimators=7, max_depth=3, n_jobs=1).model
+    cloned = clone(estimator)
+    assert type(cloned) is type(estimator)
+    assert cloned.get_params() == estimator.get_params()
