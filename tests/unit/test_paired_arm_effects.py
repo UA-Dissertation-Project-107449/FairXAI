@@ -21,6 +21,9 @@ from fairxai.fairness.uncertainty import (  # noqa: E402
     paired_arm_differences,
 )
 
+# Bootstrap-heavy; PR CI skips it, main validation runs it.
+pytestmark = pytest.mark.slow
+
 SENSITIVE = ["sex", "age_group"]
 
 

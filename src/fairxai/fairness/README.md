@@ -11,7 +11,10 @@ techniques spanning pre-processing, in-processing, and post-processing stages.
 |------|---------|
 | `metrics.py` | Group and individual fairness metrics computation (tabular) |
 | `mitigation.py` | Mitigation techniques and orchestration engine |
+| `uncertainty.py` | Bootstrap intervals for fairness and performance metrics, pairwise group tests, paired arm effects |
 | `image_assessment.py` | Post-prediction fairness for dermatology image baselines + post-hoc group views |
+| `image_mitigation.py` | Dermatology post-processing: group thresholds (`ThresholdOptimizer`) fit on saved train predictions |
+| `image_feature_mitigation.py` | Dermatology pre/in-processing: rebuilds frozen-backbone features, runs the cardiac technique catalog on the head |
 | `__init__.py` | Public re-exports for fairness APIs (tabular surface) |
 
 ## Public API
@@ -37,6 +40,35 @@ techniques spanning pre-processing, in-processing, and post-processing stages.
 
 - `MitigationEngine`
   - Unified orchestration to apply techniques by stage.
+
+- Bootstrap intervals (`uncertainty.py`)
+  - `bootstrap_fairness_metrics`, `bootstrap_performance_metrics`,
+    `paired_arm_differences`, `adaptive_bootstrap_replicates`,
+    `BootstrapResult`, `PairedEffectResult`.
+
+## Bootstrap Intervals
+
+`uncertainty.py` resamples the prediction frame and re-runs the whole
+`FairnessMetrics` computation per replicate, so every reported scalar gets a
+percentile interval. Resampling is stratified by group × outcome and falls back
+(group, then unstratified) when a stratum is too small; the scheme that ran is
+recorded.
+
+- **Max-gap intervals are descriptive only.** `max(rate) - min(rate)` is never
+  below zero and biased upward, so its interval almost never contains zero, even
+  on null data.
+- **The pairwise table is the test.** Signed differences between two named
+  groups, each with an interval, a two-sided bootstrap p-value and a
+  Benjamini-Hochberg adjusted p-value across the run.
+- `paired_arm_differences` compares two arms (e.g. baseline vs mitigated) on the
+  same test rows.
+- `adaptive_bootstrap_replicates(n)` picks the replicate count from cohort size.
+- Individual fairness is excluded: O(n²) per replicate, and duplicate rows
+  inflate k-NN consistency.
+
+Stage 8 (`assess_predictions.py`) and stage 10 (`assess_mitigated_predictions.py`)
+write the `*_ci.csv` / `*_pairwise_ci.csv` tables; see
+[results-schema.md](../../../docs/reference/results-schema.md).
 
 ## Image Fairness Assessment
 
@@ -65,6 +97,20 @@ import from `fairxai.fairness.image_assessment` directly.
 
 Default support gates: `DEFAULT_MIN_GROUP_SAMPLES = 50`,
 `DEFAULT_INTERSECTION_MIN_GROUP_SAMPLES = 30`.
+
+## Image Mitigation
+
+Dermatology stage 11 matches cardiac's mitigation matrix technique for technique.
+Both modules are script-facing (`scripts/dermatology/mitigate.py`).
+
+- `image_mitigation.py` never loads a model. Per sensitive attribute and
+  constraint, it fits `ThresholdOptimizer` on train predictions, applies it to
+  test predictions and recomputes the stage-8 report for before/after deltas.
+  Entry point: `mitigate_run`.
+- `image_feature_mitigation.py` runs the frozen backbone once to rebuild the
+  feature matrix, standardises it, then runs `MitigationEngine` on the linear
+  head. Entry point: `mitigate_run_features`. The intervention is on the head,
+  not the representation; every report carries that caveat in its `scope` field.
 
 ## Fairness Concepts
 

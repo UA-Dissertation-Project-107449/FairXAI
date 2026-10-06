@@ -34,8 +34,8 @@ Every binning strategy is declared in the YAML config. The code resolves strateg
 binning_strategies:
   clinical:
     method: fixed
-    bins: [0, 40, 55, 65, 75, 100]
-    labels: ["<40", "40-54", "55-64", "65-74", "75+"]
+    bins: [0, 45, 55, 65, 100]
+    labels: ["<45", "45-54", "55-64", "65+"]
 
   quantile_4:
     method: quantile
@@ -109,7 +109,7 @@ python3 scripts/experiments/run_attribute_binning_analysis.py
 
 # Specific datasets / strategies
 python3 scripts/experiments/run_attribute_binning_analysis.py \
-    --datasets cleveland kaggle_heart \
+    --datasets cleveland_uci four_site_uci \
     --strategies clinical quantile_4
 
 # With verbosity
@@ -119,16 +119,21 @@ python3 scripts/experiments/run_attribute_binning_analysis.py -vv
 Or via the pipeline after earlier checkpoints exist:
 
 ```bash
-bash scripts/cardiac/cardiac_pipeline.sh --resume-from attribute_binning --go-until attribute_binning
+bash scripts/cardiac/cardiac_pipeline.sh --resume-from bin_attributes --go-until bin_attributes
 ```
 
 ### Output artefacts
 
-| File                               | Content                          |
-|------------------------------------|----------------------------------|
-| `attribute_binning_comparison_*.csv`     | One row per strategy × dataset   |
-| `attribute_binning_analysis_*.json`      | Full analysis dict (all metrics) |
-| `attribute_binning_report_*.md`          | Human-readable summary + tables  |
+Inside a pipeline run the files land in
+`output/cardiac/runs/<run_id>/experiments/attribute_binning/`. A standalone
+run without `--run-id` writes to a `latest_run/attribute_binning/` folder and
+archives the previous one; pass `--output-dir` to choose the folder.
+
+| File              | Content                          |
+|-------------------|----------------------------------|
+| `comparison.csv`  | One row per strategy × dataset   |
+| `analysis.json`   | Full analysis dict (all metrics) |
+| `report.md`       | Human-readable summary + tables  |
 
 ---
 

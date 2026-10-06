@@ -32,7 +32,7 @@ schema-aware labels, and reusing plotting palettes.
 from fairxai.notebook_utils import load_raw_datasets, resolve_root_dir
 
 root = resolve_root_dir()
-datasets = load_raw_datasets(root / "data/raw/cardiac", ["cleveland"])
+datasets = load_raw_datasets(root / "data/raw/cardiac", ["cleveland_uci"])
 ```
 
 ## Related

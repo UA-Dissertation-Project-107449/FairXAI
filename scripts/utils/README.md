@@ -1,6 +1,7 @@
 # scripts/utils
 
-Standalone provenance, overlap, and archival utilities for the cardiac datasets.
+Standalone cohort-building, provenance, overlap, and archival utilities for the
+cardiac datasets.
 All are keepable/re-runnable; run from the repo root (`Code/FairXAI/`) with the
 venv active. The three analysis utilities accept `--json` to persist a
 machine-readable summary; `archive_run.py` records directly in
@@ -10,6 +11,7 @@ machine-readable summary; `archive_run.py` records directly in
 
 | Script | Purpose |
 |---|---|
+| `build_cardiac_uci_cohorts.py` | Build the two default analytical cohorts from the raw UCI `processed.*.data` files: `cleveland_uci` (303 rows, full panel) and `four_site_uci` (four sites deduplicated on the 12-field canonical key to 918 rows, common panel). Uses the same key as `cardiac_overlap_matrix.py`; Statlog is excluded because it is fully contained in Cleveland. |
 | `cleveland_provenance.py` | Diff raw UCI `processed.cleveland.data` (303) against the working `cleveland_standardized.csv` (297): confirms complete-case derivation, the 6 dropped ca/thal-missing rows, and cp/slope/target encoding deltas. |
 | `cardiac_record_overlap.py` | One-to-one multiset overlap between two standardized cardiac files using a six-field clinical fingerprint. This measures likely reuse, not exact record or patient identity. |
 | `cardiac_overlap_matrix.py` | All-pairs fingerprint overlap plus a strict 11-predictor + target source-union audit across the four UCI Heart Disease databases, UCI Statlog Heart, curated Kaggle files, and standardized working files. |

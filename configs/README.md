@@ -8,7 +8,6 @@ See [../docs/README.md](../docs/README.md) for the full docs index.
 
 ```text
 configs/
-├── datasets/          # Dataset registry placeholder and future domain registry
 ├── domain/            # Domain metadata, feature maps, constraints, labels
 ├── experiments/       # Experiment and study configs
 ├── models/            # One YAML file per model type
@@ -21,18 +20,20 @@ configs/
 ## Runtime Use
 
 - `pipelines/cardiac.yaml` controls cardiac datasets, paths, sensitive attributes, XAI, scheduling, and default binning.
+- `pipelines/dermatology.yaml` controls the dermatology dataset (`pad_ufes_20`), the patient-grouped split, image training, augmentation, XAI, and both stage-11 mitigation parts.
 - `models/*.yaml` are the authoritative model hyperparameter defaults.
 - `experiments/*.yaml` configure HPO, feature selection, attribute binning, mitigation, combinatorial, comparison, and clustering/grouping studies.
 - `domain/cardiac.yaml` contains clinical constraints, sex/age mappings, and domain labels.
+- `domain/<pipeline>_feature_map.yaml` maps source column names to canonical names; `scripts/common/load_data.py` passes it to the loader. For `cleveland_uci` and `four_site_uci` the numeric encoding comes from `scripts/utils/build_cardiac_uci_cohorts.py`, not from the cardiac map.
 - `profiling/complexity.yaml` configures complexity metric runtime behavior.
 - `recommendations/thresholds.yaml` is the central triage/fairness threshold file.
 - `schema/cardiac.json` supports standardized dataset metadata and WebApp-compatible ingestion.
+- `schema/dermatology.json` declares the image datasets (`pad_ufes_20`, `scin`) with their metadata files and standardizers. Only `pad_ufes_20` is in the default run.
 
 ## Experiment Configs
 
 | File | Status | Purpose |
 |------|--------|---------|
-| `baseline.yaml` | Active | Baseline experiment defaults |
 | `hpo.yaml` | Active | Grid/random search settings per model |
 | `feature_selection_study.yaml` | Active | Sensitive-attribute ablation settings |
 | `age_binning.yaml` | Active | Attribute/age binning strategy sweep |
@@ -54,5 +55,6 @@ configs/
 
 - Config files should stay declarative. Runtime behavior belongs in `src/` or `scripts/`.
 - `schema/` format should remain stable for WebApp compatibility.
-- Dermatology is scaffolded but not an active end-to-end pipeline.
+- Cardiac (`pipelines/cardiac.yaml`) and dermatology (`pipelines/dermatology.yaml`)
+  both run end to end.
 - Architecture and flow-control details live in [../docs/architecture/pipeline-flow-control.md](../docs/architecture/pipeline-flow-control.md).

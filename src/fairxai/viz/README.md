@@ -13,6 +13,10 @@ dissertation figures.
 | `transformations.py` | Pre/post transformation and scaling plots |
 | `fairness_comparison.py` | Dissertation comparison figures from canonical tables |
 | `clustering.py` | Cluster profile and fairness figures |
+| `dermatology_readiness.py` | Stage 4: pre-model split fairness profiles (`render_readiness_figures`) |
+| `dermatology_fairness.py` | Stage 8: subgroup heatmaps and group-view figures (`render_subgroup_heatmaps`, `render_group_view_figures`) |
+| `dermatology_comparison.py` | Stage 9: learning curves and model comparison (`render_learning_curves`, `render_comparison_figures`) |
+| `dermatology_mitigation.py` | Stage 11: baseline vs mitigated gaps per attribute × constraint (`render_mitigation_figures`) |
 | `constants.py` | Cardiac category normalization/display order |
 | `labels.py` | Display label helpers |
 | `style.py` | Shared palettes and units |
@@ -27,6 +31,9 @@ dissertation figures.
 - Fairness: `plot_fairness_metric_heatmap`, `plot_group_performance_gaps`, `plot_bias_amplification_waterfall`
 - Dissertation comparisons: `save_mitigation_delta_matrix`, `save_before_after_metric_radar`, `save_cross_model_best_available_radar`, `save_intersectional_heatmap`
 - Clustering: `save_cluster_profile_bars`, `save_cluster_fairness_heatmap`
+- Dermatology: the four `dermatology_*` modules. Not re-exported; their
+  callers import them only when figures are requested, so the CSV/JSON paths
+  stay matplotlib-free.
 
 Current cross-experiment/dissertation figures live in
 `fairness_comparison.py`.
@@ -36,6 +43,10 @@ Current cross-experiment/dissertation figures live in
 - Reads canonical comparison tables from `output/cardiac/runs/<run_id>/experiments/comparisons/data/`.
 - Dissertation batch figures go to `output/cardiac/studies/dissertation_figures/<run_id>/`.
 - Notebook figures may be written under `notebooks/figures/<pipeline>/`.
+- Dermatology figures go under `output/dermatology/runs/<run_id>/`, next to the
+  stage output they plot.
+- Thesis figures come from `scripts/thesis/make_figures.py`, not this package's
+  batch script; see [plots.md](../../../docs/reference/plots.md).
 
 ## Usage
 

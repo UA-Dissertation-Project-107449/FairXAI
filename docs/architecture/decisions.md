@@ -67,8 +67,12 @@ subgroup evidence rather than strong natural phenotype discovery.
 
 ### Dermatology Scope
 
-Dermatology has scaffolding, but the end-to-end implemented research pipeline
-is cardiac. Docs should avoid implying equivalent pipeline maturity.
+Both domains run end to end (load through mitigate). Cardiac carries the
+quantitative fairness claims: tabular cohorts, HPO, feature-selection ablation,
+binning, the mitigation sweep and bootstrap intervals. Dermatology reuses the
+shared front end and adds image training, saliency and image mitigation, but
+has no stages 5–6 and a single default dataset. Docs should say which domain a
+claim comes from rather than imply equal depth.
 
 ## Dermatology Design Notes
 
@@ -118,8 +122,7 @@ subgroup definitions, including two intersectional views `sex_x_fitzpatrick` and
 while reporting them as skipped, so small subgroups never silently inflate a
 fairness delta.
 
-**Mitigation for images is post-processing only** (stage 11,
-`fairness/image_mitigation.py`). Group-wise decision thresholds via fairlearn
+**Stage 11 part 1 is post-processing** (`fairness/image_mitigation.py`). Group-wise decision thresholds via fairlearn
 `ThresholdOptimizer` are fit on the saved **train** predictions and applied to the
 **test** predictions (never fit and evaluated on the same rows), per sensitive
 attribute *in isolation*, for every configured constraint side-by-side

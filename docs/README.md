@@ -15,6 +15,18 @@ READMEs under `src/fairxai/`.
 | Plotting APIs and figure outputs | [reference/plots.md](reference/plots.md) |
 | Current implementation status | [planning/roadmap.md](planning/roadmap.md) |
 | Dissertation interpretation checkpoint | [research/dissertation-evidence-check.md](research/dissertation-evidence-check.md) |
+| Design decisions and known limits | [architecture/decisions.md](architecture/decisions.md) |
+| Running and marking tests | [guides/testing.md](guides/testing.md) |
+| Attribute binning experiment | [reference/attribute-binning.md](reference/attribute-binning.md) |
+| Dermatology pipeline | [DERMATOLOGY.md](DERMATOLOGY.md) |
+
+## Notes
+
+| Topic | Read |
+|-------|------|
+| PAD-UFES-20 all-benign "unknown demographics" cohort | [dermatology_unknown_demographics.md](dermatology_unknown_demographics.md) |
+| loky "worker stopped" warning in the cardiac sweep (investigation, not fixed) | [cardiac_loky_worker_warning.md](cardiac_loky_worker_warning.md) |
+| Architecture diagrams (`.drawio` sources and renders) | [diagrams/README.md](diagrams/README.md) |
 
 ## Sections
 
@@ -23,6 +35,7 @@ READMEs under `src/fairxai/`.
 - `reference/` - stable contracts for results, plots, and experiment-specific behavior.
 - `research/` - dissertation-facing evidence notes and interpretation checkpoints.
 - `planning/` - roadmap, deferred work, and implementation status.
+- `diagrams/` - draw.io sources and their PNG/SVG renders.
 
 ## Documentation Rules
 
