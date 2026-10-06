@@ -122,8 +122,7 @@ subgroup definitions, including two intersectional views `sex_x_fitzpatrick` and
 while reporting them as skipped, so small subgroups never silently inflate a
 fairness delta.
 
-**Mitigation for images is post-processing only** (stage 11,
-`fairness/image_mitigation.py`). Group-wise decision thresholds via fairlearn
+**Stage 11 part 1 is post-processing** (`fairness/image_mitigation.py`). Group-wise decision thresholds via fairlearn
 `ThresholdOptimizer` are fit on the saved **train** predictions and applied to the
 **test** predictions (never fit and evaluated on the same rows), per sensitive
 attribute *in isolation*, for every configured constraint side-by-side

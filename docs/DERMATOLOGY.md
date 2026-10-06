@@ -1,11 +1,13 @@
 # Dermatology PAD Baseline
 
-Scope: PAD-UFES-20 through baseline image training.
+Scope: PAD-UFES-20, stages 1–4 and 7–11 (load through mitigate). There are no
+stages 5 and 6.
 
 Entry point:
 
 ```bash
-bash scripts/dermatology/dermatology_pipeline.sh --go-until train
+bash scripts/dermatology/dermatology_pipeline.sh                    # all stages
+bash scripts/dermatology/dermatology_pipeline.sh --go-until train   # stop after training
 ```
 
 Useful overrides follow the project precedence rule: CLI flags > pipeline YAML > code defaults.
@@ -72,25 +74,31 @@ See `src/fairxai/training/README.md` for the trainer-level detail.
 
 ## Post-prediction stages (8–11)
 
-Stages 8–11 run on saved prediction CSVs — no retraining, no model reload — and are opt-in
-(`--go-until` or `RESUME_FROM=`/`GO_UNTIL=`):
+Stages 8–11 run after training without retraining the CNN. They run by default; use `--go-until`
+or `RESUME_FROM=`/`GO_UNTIL=` to select them. Stage 10 follows `xai.enabled`; override it with
+`--explain` / `--no-explain`.
 
 - **8 assess** — subgroup fairness from test predictions, with post-hoc group views (binnings) recomputed
   on the same CSV. Views include `age_coarse`, `sex`, `fitzpatrick_group`, and the intersectional
   `sex_x_fitzpatrick` and `age_coarse_x_fitzpatrick` (gated by `intersection_min_group_samples`).
 - **9 compare** — canonical CSV/Markdown + figures across models.
 - **10 explain** — SHAP / LIME / Grad-CAM overlays for a small stratified sample.
-- **11 mitigate** — **post-processing only.** Group-wise decision thresholds via fairlearn
-  `ThresholdOptimizer`, fit on the train predictions and applied to the test predictions, per sensitive
-  attribute in isolation, for every configured constraint side-by-side
-  (`demographic_parity`, `equalized_odds`, `true_positive_rate_parity`, `false_positive_rate_parity`).
-  Output: `baseline/mitigation/` (before/after JSON, Markdown, per-attr×constraint CSV).
+- **11 mitigate** — two parts.
+  - *Post-processing.* Group-wise decision thresholds via fairlearn `ThresholdOptimizer`, fit on the
+    train predictions and applied to the test predictions, per sensitive attribute in isolation, for
+    every configured constraint side-by-side (`demographic_parity`, `equalized_odds`,
+    `true_positive_rate_parity`, `false_positive_rate_parity`). Output: `baseline/mitigation/`
+    (before/after JSON, Markdown, per-attr×constraint CSV).
+  - *Feature space* (`mitigation.feature_space`). Rebuilds each model's frozen-backbone features with
+    one forward pass and runs cardiac's pre/in-processing catalog on the linear head. Output:
+    `baseline/mitigation/feature_space/`. Skip it with `--no-feature-space` on
+    `scripts/dermatology/mitigate.py`.
 
 ```bash
 RUN_ID=<run_id> GO_UNTIL=mitigate RESUME_FROM=mitigate \
   bash scripts/dermatology/dermatology_pipeline.sh
 ```
 
-Mitigation is post-processing only by deliberate scope (pre/in-processing would require retraining the
-CNN). See the rationale and limitation in
+Neither part retrains the CNN backbone. The feature-space arms act on the head only, so bias in the
+frozen features survives. See the rationale and limitation in
 [architecture/decisions.md](architecture/decisions.md#image-fairness-is-post-prediction-only-no-retrain).
