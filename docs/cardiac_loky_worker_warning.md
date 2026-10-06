@@ -1,4 +1,4 @@
-# Cardiac pipeline — loky "worker stopped" warning (stage 11 combinatorial)
+# Cardiac pipeline — loky "worker stopped" warning (stage 11 `sweep`)
 
 Status: **investigation only, not fixed.** Captures what the warning is, why it appears
 where it does, and the candidate fixes. No code changed.
@@ -13,7 +13,7 @@ short worker timeout or by a memory leak.
 ```
 
 Observed:
-- Stage **11 combinatorial** (`scripts/cardiac/combinatorial.py` → `scripts/experiments/run_combinatorial_experiments.py`).
+- Stage **11 `sweep`** (formerly `combinatorial`) (`scripts/cardiac/combinatorial.py` → `scripts/experiments/run_combinatorial_experiments.py`).
 - Fires **once per enabled dataset**.
 - Only when **logistic regression** experiments run.
 
