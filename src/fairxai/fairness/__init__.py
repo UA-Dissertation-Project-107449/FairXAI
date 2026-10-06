@@ -16,6 +16,7 @@ from .uncertainty import (
     PairedEffectResult,
     adaptive_bootstrap_replicates,
     bootstrap_fairness_metrics,
+    bootstrap_performance_metrics,
     paired_arm_differences,
 )
 
@@ -23,6 +24,7 @@ __all__ = [
     "FairnessMetrics",
     "BootstrapResult",
     "bootstrap_fairness_metrics",
+    "bootstrap_performance_metrics",
     "adaptive_bootstrap_replicates",
     "PairedEffectResult",
     "paired_arm_differences",

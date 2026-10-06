@@ -55,5 +55,5 @@ explainability:
 
 fairness:
   supports_sample_weights: true
-  supports_class_weights: false  # XGBoost uses scale_pos_weight instead; handled separately
+  supports_class_weights: true   # balanced weights via BalancedXGBClassifier; multiply sample_weight
   supports_fairness_constraints: false

@@ -1,0 +1,23 @@
+# Runs the dissertation's results chapter reads. Edit the IDs here after a rerun;
+# build_ledger.py, make_figures.py and similarity_heldout.py all read this file.
+# Paths are relative to the FairXAI output/ directory unless absolute.
+
+cardiac:
+  uci: run_20260927_182904_816_5050_ee20af            # run 1b (_agefix): Cleveland + four-site
+  cardio70k_subsample: run_20260926_143903_278_484356_d1ab8b  # run 2: 10k subsample
+  cardio70k: run_20260926_162620_206_680953_2acce6      # run 3: full cohort, LR/RF/XGB
+
+dermatology:
+  augmented: run_20260927_000445_766_897598_399e84      # run 4
+  cached_no_aug: run_20260927_013725_120_903298_1f274c  # run 5: no augmentation, cached features
+
+studies:
+  null_calibration: cardiac/studies/null_calibration/bsweep_20260928
+  synthetic: synthetic/studies/profiling_sensitivity/run_20260930_124520_238_58445_1ff6fc
+
+# Raw data the outcome tables read (relative to the FairXAI root).
+data:
+  four_site: data/raw/cardiac/four_site_uci_standardized.csv
+
+# Sibling WebApp repo (relative to the FairXAI root); missing is reported, not fatal.
+usability: ../WebApp_DataLenzAI/usability_tests/results

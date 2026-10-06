@@ -775,6 +775,8 @@ def characterize_dataset(
             1.0,
         )
     )
+    # Clip what is reported, after the EBM saw the raw values it was trained on.
+    _clip_metrics(metrics)
 
     pca2d, pca2d_explained_variance = _compute_pca2d(X, y)
 

@@ -26,6 +26,24 @@ def test_build_grid_has_unique_dataset_ids():
     assert any(cfg.label == "duplicates" and cfg.duplicate_pct > 0 for cfg in grid)
 
 
+def test_grid_seeding_is_paired():
+    # Every condition of one grid shares its baseline's seed (common random numbers).
+    assert {cfg.seed for cfg in build_grid(11)} == {11}
+    assert {cfg.seed for cfg in build_smoke_grid(11)} == {11}
+    assert {cfg.seed for cfg in build_grid(12)} == {12}
+
+
+def test_paired_missingness_only_masks_the_baseline_frame():
+    grid = build_grid(5)
+    base = next(c for c in grid if c.tier == "healthcare" and c.label == "base")
+    miss = next(c for c in grid if c.tier == "healthcare" and c.missing_mechanism == "mcar")
+    df_base, _ = generate(base)
+    df_miss, _ = generate(miss)
+    observed = df_miss.notna()
+    assert (~observed).sum().sum() > 0
+    pd.testing.assert_frame_equal(df_miss[observed], df_base[observed])
+
+
 def test_generate_is_deterministic():
     cfg = build_grid()[0]
     df_a, _ = generate(cfg)

@@ -99,6 +99,17 @@ class TestPairedDifferences:
         recall = performance.set_index("quantity").loc["recall"]
         assert recall["difference"] > 0
 
+    def test_auc_is_skipped_when_an_arm_has_only_hard_labels(self) -> None:
+        """Arms without probabilities store y_pred as y_proba; that is no AUC."""
+        baseline = _cohort()
+        arm = _biased_arm(baseline)
+        arm["y_proba"] = arm["y_pred"]
+        result = paired_arm_differences(baseline, arm, SENSITIVE, n_boot=50)
+        performance = result.table[result.table["scope"] == "performance"]
+
+        assert "auc" not in set(performance["quantity"])
+        assert not result.metadata["auc_reported"]
+
     def test_significant_effects_is_the_adjusted_shortlist(self) -> None:
         baseline = _cohort()
         result = paired_arm_differences(baseline, _biased_arm(baseline), SENSITIVE, n_boot=200)

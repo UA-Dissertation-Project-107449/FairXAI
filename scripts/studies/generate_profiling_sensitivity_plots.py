@@ -1,9 +1,11 @@
 """Figures for the profiling-sensitivity study.
 
-Reads the aggregated CSVs written by ``run_profiling_sensitivity_study.py`` and
-emits matplotlib/seaborn figures under the study's ``figures/`` directory. Each
-plot is skipped (with a warning) when its input columns are missing, so a partial
-study still produces as many figures as possible.
+Reads the CSVs written by ``run_profiling_sensitivity_study.py`` and emits
+matplotlib/seaborn figures under the study's ``figures/`` directory. The study is
+replicated with paired seeds, so per-dataset plots aggregate the replicates
+(mean and 95% CI), and the knob-response figures read the paired deltas from
+``knob_response_summary.csv``. Each plot is skipped (with a warning) when its
+input is missing, so a partial study still produces as many figures as possible.
 
 Usage
 -----
@@ -19,6 +21,7 @@ import sys
 from pathlib import Path
 
 import matplotlib
+import numpy as np
 import pandas as pd
 
 matplotlib.use("Agg")
@@ -32,6 +35,25 @@ sys.path.insert(0, str(_ROOT / "src"))
 logger = logging.getLogger(__name__)
 
 STUDY_TYPE = "profiling_sensitivity"
+
+# Measures in the knob-response forest plot; the heatmap shows all of them.
+FOREST_METRICS = ["ebmDifficulty", "N3Imbalance", "F3Imbalance"]
+HEATMAP_METRICS = [
+    "ebmDifficulty",
+    "F2Imbalance",
+    "F3Imbalance",
+    "F4Imbalance",
+    "L1Imbalance",
+    "L2Imbalance",
+    "L3Imbalance",
+    "N2Imbalance",
+    "N3Imbalance",
+    "N4Imbalance",
+    "T1Imbalance",
+    "RaugImbalance",
+    "BayesImbalance",
+]
+TIER_COLORS = {"abstract": "#1f77b4", "healthcare": "#d62728"}
 
 
 def _resolve_study_root(pipeline: str, study_id: str) -> Path:
@@ -58,12 +80,36 @@ def _safe_read_csv(path: Path) -> pd.DataFrame | None:
         return None
 
 
-def _save(fig: plt.Figure, out_dir: Path, name: str) -> None:
+def _save(fig: plt.Figure, out_dir: Path, name: str, pdf: bool = False) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / name
     fig.savefig(path, dpi=150, bbox_inches="tight", facecolor="white")
+    if pdf:
+        fig.savefig(path.with_suffix(".pdf"), bbox_inches="tight", facecolor="white")
     plt.close(fig)
-    logger.info("[SUCCESS] wrote %s", path.relative_to(_ROOT))
+    logger.info("[SUCCESS] wrote %s", path)
+
+
+def _condition_label(condition: str) -> str:
+    """Readable label for a runner condition key (``missingness_mcar_0.2`` etc.)."""
+    parts = condition.split("_")
+    knob, value = parts[0], parts[-1]
+    if knob == "missingness":
+        return f"{parts[1].upper()} {float(value):.0%}"
+    labels = {
+        "imbalance": f"minority {float(value):.0%}",
+        "separability": f"class_sep {value}",
+        "size": f"n = {value}",
+        "cardinality": f"{value} levels, 3 high-card",
+        "duplicates": f"duplicates {float(value):.0%}",
+    }
+    return labels.get(knob, condition)
+
+
+def _knob_conditions(summary_df: pd.DataFrame) -> list[str]:
+    """Non-baseline conditions in grid order (the runner writes them in that order)."""
+    conditions = summary_df.loc[summary_df["knob"] != "base", "condition"]
+    return list(dict.fromkeys(conditions))
 
 
 def plot_missingness(dataset_df: pd.DataFrame, fig_dir: Path) -> None:
@@ -72,13 +118,15 @@ def plot_missingness(dataset_df: pd.DataFrame, fig_dir: Path) -> None:
         logger.warning("[WARNING] no missingness rows; skipping missingness plot")
         return
     fig, ax = plt.subplots(figsize=(7, 5))
-    sns.scatterplot(
+    sns.lineplot(
         data=sub,
         x="missing_pct",
         y="top_missing_pct",
         hue="missing_mechanism",
         style="tier",
-        s=120,
+        markers=True,
+        errorbar=("ci", 95),
+        err_style="bars",
         ax=ax,
     )
     lims = [0, max(sub["missing_pct"].max() * 100, sub["top_missing_pct"].max()) + 5]
@@ -109,28 +157,97 @@ def plot_class_balance(dataset_df: pd.DataFrame, fig_dir: Path) -> None:
     _save(fig, fig_dir / "class_balance", "balance_delta_vs_minority_ratio.png")
 
 
-def plot_complexity_vs_knob(dataset_df: pd.DataFrame, fig_dir: Path) -> None:
-    for label, xcol, xlabel in [
-        ("separability", "class_sep", "class_sep"),
-        ("size", "n_samples", "n_samples"),
-    ]:
-        sub = dataset_df[dataset_df["label"] == label]
-        if sub.empty or "ebmDifficulty" not in sub:
-            logger.warning("[WARNING] no %s rows; skipping complexity plot", label)
-            continue
-        fig, ax = plt.subplots(figsize=(7, 5))
-        sns.lineplot(
-            data=sub.sort_values(xcol),
-            x=xcol,
-            y="ebmDifficulty",
-            hue="tier",
-            marker="o",
+def plot_paired_forest(summary_df: pd.DataFrame, fig_dir: Path) -> None:
+    """Paired delta vs baseline (mean, 95% CI) per condition, one panel per measure."""
+    metrics = [m for m in FOREST_METRICS if m in set(summary_df["metric"])]
+    conditions = _knob_conditions(summary_df)
+    if not metrics or not conditions:
+        logger.warning("[WARNING] no paired deltas; skipping forest plot")
+        return
+    y = np.arange(len(conditions))
+    fig, axes = plt.subplots(
+        1, len(metrics), figsize=(3.2 * len(metrics), 0.32 * len(conditions) + 1.2), sharey=True
+    )
+    axes = np.atleast_1d(axes)
+    for ax, metric in zip(axes, metrics):
+        for offset, (tier, color) in zip((-0.17, 0.17), TIER_COLORS.items()):
+            rows = (
+                summary_df[(summary_df["metric"] == metric) & (summary_df["tier"] == tier)]
+                .set_index("condition")
+                .reindex(conditions)
+            )
+            mean = rows["delta_mean"].to_numpy()
+            err = np.vstack(
+                [
+                    mean - rows["delta_ci95_low"].to_numpy(),
+                    rows["delta_ci95_high"].to_numpy() - mean,
+                ]
+            )
+            ax.errorbar(
+                mean, y + offset, xerr=err, fmt="o", ms=4, capsize=2, color=color, label=tier
+            )
+        ax.axvline(0, color="grey", lw=0.8, ls="--")
+        ax.set_title(metric, fontsize=10)
+        ax.set_xlabel("Paired delta vs baseline")
+    axes[0].set_yticks(y, [_condition_label(c) for c in conditions])
+    axes[0].invert_yaxis()
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.legend(handles, labels, loc="upper center", ncol=len(labels), frameon=False)
+    _save(fig, fig_dir / "complexity", "paired_delta_forest.png", pdf=True)
+
+
+def plot_paired_heatmap(summary_df: pd.DataFrame, fig_dir: Path) -> None:
+    """Mean paired delta for every measure; cells whose 95% CI covers zero are faded."""
+    conditions = _knob_conditions(summary_df)
+    sub = summary_df[summary_df["metric"].isin(HEATMAP_METRICS)]
+    if sub.empty or not conditions:
+        logger.warning("[WARNING] no paired deltas; skipping delta heatmap")
+        return
+    tiers = [t for t in TIER_COLORS if t in set(sub["tier"])]
+    metrics = [m for m in HEATMAP_METRICS if m in set(sub["metric"])]
+    limit = float(sub.loc[sub["knob"] != "base", "delta_mean"].abs().max()) or 1.0
+    fig, axes = plt.subplots(
+        1, len(tiers), figsize=(7 * len(tiers), 0.4 * len(conditions) + 2), sharey=True
+    )
+    axes = np.atleast_1d(axes)
+    for ax, tier in zip(axes, tiers):
+        rows = sub[sub["tier"] == tier]
+        pivot = rows.pivot(index="condition", columns="metric", values="delta_mean")
+        low = rows.pivot(index="condition", columns="metric", values="delta_ci95_low")
+        high = rows.pivot(index="condition", columns="metric", values="delta_ci95_high")
+        pivot, low, high = (
+            f.reindex(index=conditions, columns=metrics) for f in (pivot, low, high)
+        )
+        covers_zero = (low <= 0) & (high >= 0)
+        sns.heatmap(
+            pivot,
+            mask=covers_zero,
+            cmap="RdBu_r",
+            vmin=-limit,
+            vmax=limit,
+            annot=True,
+            fmt=".2f",
+            annot_kws={"fontsize": 7},
+            cbar=ax is axes[-1],
             ax=ax,
         )
-        ax.set_xlabel(xlabel)
-        ax.set_ylabel("ebmDifficulty")
-        ax.set_title(f"EBM difficulty vs {xlabel}")
-        _save(fig, fig_dir / "complexity", f"ebm_difficulty_vs_{label}.png")
+        sns.heatmap(
+            pivot.where(covers_zero),
+            cmap=["#f0f0f0"],
+            annot=True,
+            fmt=".2f",
+            annot_kws={"fontsize": 7, "color": "#9a9a9a"},
+            cbar=False,
+            ax=ax,
+        )
+        ax.set_title(f"{tier} tier", fontsize=11)
+        ax.set_xlabel("")
+        ax.set_ylabel("")
+        ax.set_yticks(np.arange(len(conditions)) + 0.5, [_condition_label(c) for c in conditions])
+        plt.setp(ax.get_xticklabels(), rotation=60, ha="right", rotation_mode="anchor")
+    fig.tight_layout()
+    _save(fig, fig_dir / "complexity", "paired_delta_heatmap.png", pdf=True)
 
 
 def plot_duplicates(dataset_df: pd.DataFrame, fig_dir: Path) -> None:
@@ -139,12 +256,15 @@ def plot_duplicates(dataset_df: pd.DataFrame, fig_dir: Path) -> None:
         logger.warning("[WARNING] no duplicates rows; skipping duplicates plot")
         return
     fig, ax = plt.subplots(figsize=(7, 5))
-    sns.scatterplot(
+    sns.lineplot(
         data=sub,
         x="duplicate_pct",
         y="duplicate_pct_observed",
+        hue="tier",
         style="tier",
-        s=120,
+        markers=True,
+        errorbar=("ci", 95),
+        err_style="bars",
         ax=ax,
     )
     lims = [0, max(sub["duplicate_pct"].max(), sub["duplicate_pct_observed"].max()) + 0.05]
@@ -216,21 +336,24 @@ def main(argv: list[str] | None = None) -> int:
     dataset_df = _safe_read_csv(study_root / "dataset_results.csv")
     column_df = _safe_read_csv(study_root / "column_results.csv")
     confusion_df = _safe_read_csv(study_root / "type_confusion.csv")
+    summary_df = _safe_read_csv(study_root / "knob_response_summary.csv")
 
     sns.set_theme(style="whitegrid")
 
     if dataset_df is not None:
         plot_missingness(dataset_df, fig_dir)
         plot_class_balance(dataset_df, fig_dir)
-        plot_complexity_vs_knob(dataset_df, fig_dir)
         plot_duplicates(dataset_df, fig_dir)
         plot_type_accuracy(dataset_df, fig_dir)
+    if summary_df is not None:
+        plot_paired_forest(summary_df, fig_dir)
+        plot_paired_heatmap(summary_df, fig_dir)
     if confusion_df is not None:
         plot_type_confusion(confusion_df, fig_dir)
     if column_df is not None:
         plot_lowcard_boundary(column_df, fig_dir)
 
-    logger.info("[SUCCESS] figures under %s", fig_dir.relative_to(_ROOT))
+    logger.info("[SUCCESS] figures under %s", fig_dir)
     return 0
 
 

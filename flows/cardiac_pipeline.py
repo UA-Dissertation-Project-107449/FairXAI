@@ -578,13 +578,14 @@ def cardiac_pipeline(
         logger.warning("Unknown study_mode '%s' - falling back to auto_safe", resolved_study_mode)
         resolved_study_mode = "auto_safe"
 
-    if parallel_studies is None:
-        if "parallel_studies" in scheduling_cfg:
-            resolved_parallel_studies = bool(scheduling_cfg.get("parallel_studies"))
-        else:
-            resolved_parallel_studies = resolved_study_mode != "serial"
-    else:
-        resolved_parallel_studies = parallel_studies
+    # Stage 6 reads the tuned params stage 5 writes, so the studies never overlap.
+    requested = (
+        scheduling_cfg.get("parallel_studies") if parallel_studies is None else parallel_studies
+    )
+    if requested:
+        logger.warning(
+            "parallel_studies is deprecated and ignored; select_features always waits for tune"
+        )
 
     if parallel_experiments is None:
         if "parallel_experiments" in scheduling_cfg:
@@ -595,7 +596,6 @@ def cardiac_pipeline(
         resolved_parallel_experiments = parallel_experiments
 
     if resolved_study_mode == "serial":
-        resolved_parallel_studies = False
         resolved_parallel_experiments = False
 
     resolved_max_cores = (
@@ -626,16 +626,10 @@ def cardiac_pipeline(
     cfg_hpo_model_n_jobs = _as_int(scheduling_cfg.get("hpo_model_n_jobs"))
     cfg_fs_jobs = _as_int(scheduling_cfg.get("fs_jobs"))
 
-    studies_parallel_pair = (
-        resolved_parallel_studies and run_hpo_study_enabled and run_feature_selection_study_enabled
-    )
-    default_hpo_branch = max(1, effective_cores // 2) if studies_parallel_pair else effective_cores
-    default_fs_jobs = max(1, effective_cores - default_hpo_branch) if studies_parallel_pair else 1
-
     resolved_hpo_search_n_jobs = (
         _as_int(hpo_search_n_jobs)
         if hpo_search_n_jobs is not None
-        else cfg_hpo_search_n_jobs if cfg_hpo_search_n_jobs is not None else default_hpo_branch
+        else cfg_hpo_search_n_jobs if cfg_hpo_search_n_jobs is not None else effective_cores
     )
     if resolved_hpo_search_n_jobs is None or resolved_hpo_search_n_jobs == 0:
         resolved_hpo_search_n_jobs = 1
@@ -649,9 +643,7 @@ def cardiac_pipeline(
         resolved_hpo_model_n_jobs = 1
 
     resolved_fs_jobs = (
-        _as_int(fs_jobs)
-        if fs_jobs is not None
-        else cfg_fs_jobs if cfg_fs_jobs is not None else default_fs_jobs
+        _as_int(fs_jobs) if fs_jobs is not None else cfg_fs_jobs if cfg_fs_jobs is not None else 1
     )
     if resolved_fs_jobs is None or resolved_fs_jobs <= 0:
         resolved_fs_jobs = 1
@@ -706,9 +698,8 @@ def cardiac_pipeline(
     logger.info(f"Stage window: {first.number}..{last.number} ({first.name} to {last.name})")
     logger.info(f"Skip studies: {resolved_skip_studies}")
     logger.info(
-        "Scheduling: mode=%s parallel_studies=%s parallel_experiments=%s",
+        "Scheduling: mode=%s parallel_experiments=%s",
         resolved_study_mode,
-        resolved_parallel_studies,
         resolved_parallel_experiments,
     )
     logger.info(
@@ -809,14 +800,6 @@ def cardiac_pipeline(
     elif _should_run(7):
         logger.info("[CLUSTER] subgroup discovery - skipped (run_grouping disabled)")
 
-    parallel_studies_enabled = (
-        resolved_parallel_studies
-        and _should_run(5)
-        and _should_run(6)
-        and run_hpo_study_enabled
-        and run_feature_selection_study_enabled
-    )
-
     # Stage 5 - HPO study (optional + gated)
     if _should_run(5):
         if run_hpo_study_enabled:
@@ -838,9 +821,7 @@ def cardiac_pipeline(
     # Stage 6 - Feature-selection study (optional + gated)
     if _should_run(6):
         if run_feature_selection_study_enabled:
-            if parallel_studies_enabled:
-                wait = [preprocess_data_task] if preprocess_data_task else []
-            elif hpo_study_task:
+            if hpo_study_task:
                 wait = [hpo_study_task]
             elif preprocess_data_task:
                 wait = [preprocess_data_task]
@@ -1145,13 +1126,13 @@ Examples:
         "--parallel-studies",
         dest="parallel_studies",
         action="store_true",
-        help="Run HPO and feature-selection studies in parallel.",
+        help="Deprecated and ignored: select_features always waits for tune.",
     )
     ps_group.add_argument(
         "--no-parallel-studies",
         dest="parallel_studies",
         action="store_false",
-        help="Force serial execution of study stages.",
+        help="Deprecated and ignored: study stages always run serially.",
     )
     pe_group = p.add_mutually_exclusive_group()
     pe_group.add_argument(
