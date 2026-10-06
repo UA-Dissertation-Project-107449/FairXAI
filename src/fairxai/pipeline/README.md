@@ -30,14 +30,20 @@ FairXAI orchestrators.
 | 2 | `profile` |
 | 3 | `recommend` |
 | 4 | `preprocess` |
-| 5 | `hpo_study` |
-| 6 | `feature_selection_study` |
+| 5 | `tune` |
+| 6 | `select_features` |
 | 7 | `train` |
 | 8 | `assess` |
-| 9 | `attribute_binning` |
-| 10 | `mitigation` |
-| 11 | `combinatorial` |
+| 9 | `bin_attributes` |
+| 10 | `mitigate` |
+| 11 | `sweep` |
 | 12 | `compare` |
+
+These are the cardiac stages (`STAGES`). Dermatology has its own catalog,
+`DERMATOLOGY_STAGES`, numbered 1–4 and 7–11 so a stage number means the same
+thing in both domains. Pre-rename names (`hpo_study`, `attribute_binning`,
+`mitigation`, ...) resolve as aliases, and their old `.done` markers are still
+accepted on resume; only canonical names are written.
 
 ## Checkpoint Contract
 

@@ -32,14 +32,19 @@ Dermatology is scaffolded only. Cardiac is the active end-to-end pipeline.
 | 2 | `profile` | `scripts/cardiac/profile_data.py` |
 | 3 | `recommend` | `scripts/cardiac/generate_recommendations.py` |
 | 4 | `preprocess` | `scripts/cardiac/preprocess.py` |
-| 5 | `hpo_study` | `scripts/studies/run_hpo.py` |
-| 6 | `feature_selection_study` | `scripts/studies/run_feature_selection_study.py` |
+| 5 | `tune` | `scripts/studies/run_hpo.py` |
+| 6 | `select_features` | `scripts/studies/run_feature_selection_study.py` |
 | 7 | `train` | `scripts/cardiac/train_baseline.py` |
 | 8 | `assess` | `scripts/cardiac/assess_predictions.py` |
-| 9 | `attribute_binning` | `scripts/experiments/run_attribute_binning_analysis.py` |
-| 10 | `mitigation` | `scripts/cardiac/mitigation.py` |
-| 11 | `combinatorial` | `scripts/cardiac/combinatorial.py` |
+| 9 | `bin_attributes` | `scripts/experiments/run_attribute_binning_analysis.py` |
+| 10 | `mitigate` | `scripts/cardiac/mitigation.py` |
+| 11 | `sweep` | `scripts/cardiac/combinatorial.py` |
 | 12 | `compare` | `scripts/cardiac/compare.py`, `scripts/studies/run_grouping_analysis.py`, `scripts/studies/generate_dissertation_plots.py` |
+
+Names come from `fairxai.pipeline.stages.STAGES`. Pre-rename names (`hpo_study`,
+`feature_selection_study`, `attribute_binning`, `mitigation`, `combinatorial`)
+still resolve as aliases; see the
+[cheat sheet](../docs/guides/cheat-sheet.md#pre-rename-aliases).
 
 Grouping currently runs during stage 12 and does not have its own checkpointed
 stage marker.
