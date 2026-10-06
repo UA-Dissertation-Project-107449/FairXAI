@@ -13,8 +13,9 @@ scripts/
 ├── cardiac/      # Cardiac bash orchestrator and thin wrappers
 ├── dermatology/  # Dermatology bash orchestrator and stage wrappers
 ├── experiments/  # Attribute binning, mitigation, combinatorial, comparison
-├── studies/      # HPO, feature selection, selector contract, grouping, dissertation plots
-└── thesis/       # Chapter 6 numbers ledger, figures, similarity, performance intervals
+├── studies/      # HPO, feature selection, selector contract, grouping, calibration, plots
+├── thesis/       # Chapter 6 numbers ledger, figures, similarity, performance intervals
+└── utils/        # Cohort building, provenance, overlap, run archiving (see utils/README.md)
 ```
 
 `scripts/thesis/` reads finished runs only. Set the run IDs in `scripts/thesis/runs.yaml`,
@@ -50,6 +51,51 @@ still resolve as aliases; see the
 Grouping currently runs during stage 12 and does not have its own checkpointed
 stage marker.
 
+Most `scripts/cardiac/` files are thin wrappers that call the shared
+implementation in `scripts/common/` with the cardiac pipeline config.
+
+### Optional Cardiac Steps
+
+These steps are off by default. Each one is analysis-only, except clustering,
+which adds a column to the splits.
+
+| Step | Script | Runs | Enable | Output |
+|------|--------|------|--------|--------|
+| Subgroup clustering | `scripts/cardiac/cluster_subgroups.py` | before stage 7 | `RUN_GROUPING=1` or `grouping.enabled` | `group_cluster` in the splits; `runs/<run_id>/grouping_pretrain/<dataset>/` |
+| SHAP status report | `scripts/common/report_shap_status.py` | after stage 7 | always | one report over every `shap_status.json`; `--strict` exits 1 on any fallback |
+| Individual fairness | `scripts/cardiac/similarity_analysis.py` | after stage 8 | `RUN_SIMILARITY=1` or `similarity.enabled` | `runs/<run_id>/baseline/individual_fairness/` |
+| Mitigation intervals | `scripts/common/assess_mitigated_predictions.py` | after stage 10 | `RUN_MITIGATION_INTERVALS=1` or `fairness.uncertainty.enabled` | `runs/<run_id>/experiments/mitigation/prediction_fairness/` |
+| Age-binning sensitivity | `scripts/cardiac/age_binning_analysis.py` | after stage 10 | `RUN_AGE_BINNING=1` or `age_binning_sensitivity.enabled` | `runs/<run_id>/baseline/age_binning_sensitivity/` |
+
+## Dermatology Stage Order
+
+`scripts/dermatology/dermatology_pipeline.sh` runs these stages. There are no
+stages 5 and 6; numbering follows `fairxai.pipeline.stages.DERMATOLOGY_STAGES`.
+
+| # | Stage | Script |
+|---|-------|--------|
+| 1 | `load` | `scripts/dermatology/load_data.py` |
+| 2 | `profile` | `scripts/dermatology/profile_data.py` |
+| 3 | `recommend` | `scripts/dermatology/generate_recommendations.py` |
+| 4 | `preprocess` | `scripts/dermatology/preprocess.py` |
+| 7 | `train` | `scripts/dermatology/train_baseline.py` |
+| 8 | `assess` | `scripts/dermatology/assess_predictions.py` |
+| 9 | `compare` | `scripts/dermatology/compare.py` |
+| 10 | `explain` | `scripts/dermatology/explain.py` |
+| 11 | `mitigate` | `scripts/dermatology/mitigate.py` |
+
+Outputs land in `output/dermatology/runs/<run_id>/`.
+
+## Shared Implementations (`scripts/common/`)
+
+| Script | Purpose |
+|--------|---------|
+| `load_data.py`, `profile_data.py`, `generate_recommendations.py`, `preprocess_data.py`, `train_baseline.py`, `assess_predictions.py` | Domain-agnostic stage 1–4, 7 and 8 bodies behind the cardiac wrappers |
+| `assess_mitigated_predictions.py` | Bootstrap fairness intervals for the stage-10 mitigation arms |
+| `report_shap_status.py` | One report over every `shap_status.json` a run wrote |
+| `export_stage_registry.py` | Emits a domain stage catalog from `fairxai.pipeline.stages` as Bash declarations |
+| `stage_registry.sh` | Sourced by both orchestrators; loads the catalog through `export_stage_registry.py` |
+
 ## Orchestrators
 
 ```bash
@@ -81,6 +127,22 @@ pipeline config, then defaults/auto-discovery.
 | `studies/build_selector_contract.py` | Converts study outputs into downstream selection hints | `output/cardiac/runs/<run_id>/recommendations/selector_contract.json` |
 | `studies/run_grouping_analysis.py` | Clustering and similarity subgroup discovery | `output/cardiac/studies/grouping/` and run-linked grouping outputs |
 | `studies/generate_dissertation_plots.py` | Batch dissertation figures | `output/cardiac/studies/dissertation_figures/<run_id>/` |
+| `studies/run_bootstrap_calibration.py` | Null-calibration study for the fairness bootstrap | stdout; CSVs only with `--output <file>` |
+| `studies/run_profiling_sensitivity_study.py` | Profiling metric sensitivity on synthetic datasets | `output/synthetic/studies/profiling_sensitivity/<study_id>/` |
+| `studies/generate_profiling_sensitivity_plots.py` | Plots for the profiling sensitivity study | `<study_id>/figures/` |
+
+## Thesis
+
+| Script | Purpose | Output |
+|--------|---------|--------|
+| `thesis/runs.yaml` | Run IDs every thesis script reads | — |
+| `thesis/thesis_runs.py` | Loads `runs.yaml`; shared run IDs and paths | — |
+| `thesis/performance_intervals.py` | Bootstrap intervals for baseline performance and paired feature-selection ablation | `baseline_performance.csv`, `ablation_paired.csv` |
+| `thesis/build_ledger.py` | Chapter 6 numbers ledger | `ledger.md` |
+| `thesis/make_figures.py` | Chapter 6 and 7 figures | `figures/` |
+| `thesis/similarity_heldout.py` | Held-out k-NN consistency with pairwise bootstrap | `similarity_heldout.json` |
+
+All thesis outputs land under `output/thesis/` unless `--out` says otherwise.
 
 ## Experiments
 
