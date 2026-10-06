@@ -18,7 +18,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
-from build_ledger import _nondominated  # noqa: E402
+from build_ledger import _nondominated, split_of  # noqa: E402
 from matplotlib.image import imread  # noqa: E402
 from thesis_runs import (  # noqa: E402
     C70_MODELS,
@@ -413,6 +413,75 @@ def fig_frontier() -> None:
     save(fig, "frontier_sex")
 
 
+# Single techniques in table order; the plain resamplers act on no group and are left out.
+TECHNIQUES = {
+    "exponentiated_gradient": "Exp. gradient",
+    "threshold_optimizer": "Threshold rule",
+    "grid_search": "Grid search",
+    "reweighting": "Reweighting",
+    "smote_group": "Group SMOTE",
+    "uniform_sampling": "Uniform sampl.",
+}
+
+
+def fig_mitigation_deltas() -> None:
+    """Change in the targeted parity gap per arm, one panel per constraint attribute."""
+    frames = []
+    for run, cohort in COHORTS:
+        base = CARD / "runs" / run / "experiments" / "mitigation"
+        name = "paired_effects.csv" if split_of(cohort) == "test" else "paired_effects_cv.csv"
+        pe = pd.read_csv(base / name)
+        frames.append(
+            pe[
+                (pe.dataset == cohort)
+                & (pe.scope == "group_fairness")
+                & (pe.metric == "demographic_parity")
+                & (pe.quantity == "max_difference")
+                & (pe.attribute == pe.constraint_attr)
+                & pe.technique.isin(list(TECHNIQUES))
+            ]
+        )
+    d = pd.concat(frames)
+    d["significant"] = d.significant.fillna(False).astype(bool)
+    rows = [(t, c) for t in TECHNIQUES for _, c in COHORTS]
+    offs = {"LR": -0.27, "RF": -0.09, "SVM": 0.09, "XGB": 0.27}
+    panels = [("sex", "Sex"), ("age_group", "Age group"), ("group_cluster", "Cluster")]
+    fig, axes = plt.subplots(1, 3, figsize=(WIDTH, 4.4), sharey=True)
+    for ax, (attr, title) in zip(axes, panels):
+        s = d[d.constraint_attr == attr]
+        for _, r in s.iterrows():
+            fam = FAMILY[r.model_type]
+            col = FAM_COLOR[fam]
+            yv = rows.index((r.technique, r.dataset)) + offs[fam]
+            alpha = 0.9 if r.significant else 0.45
+            ax.plot([r.ci_low, r.ci_high], [yv, yv], color=col, lw=0.8, alpha=alpha)
+            mfc = col if r.significant else "white"
+            ax.plot(r.difference, yv, "o", ms=2.6, color=col, mfc=mfc, mew=0.6)
+        ax.axvline(0, color="#555555", lw=0.6)
+        for k in range(len(COHORTS), len(rows), len(COHORTS)):
+            ax.axhline(k - 0.5, color="#cccccc", lw=0.5, zorder=0)
+        ax.set_title(f"Constrained on {title.lower()}", loc="left")
+        ax.set_xlabel("change in parity gap")
+        print(f"  mitigation {attr}: {len(s)} arms, {int(s.significant.sum())} significant")
+    labels = [f"{TECHNIQUES[t]}, {COHORT[c]}" for t, c in rows]
+    axes[0].set_yticks(range(len(rows)), labels)
+    axes[0].set_ylim(len(rows) - 0.5, -0.5)
+    handles = [
+        plt.Line2D([], [], color=FAM_COLOR[k], marker="o", ms=3, lw=1.0, label=k) for k in offs
+    ]
+    handles.append(
+        plt.Line2D(
+            [], [], color="#777777", marker="o", mfc="white", ms=3, lw=1.0, alpha=0.5,
+            label="not significant after BH",
+        )  # fmt: skip
+    )
+    fig.legend(
+        handles=handles, loc="lower center", ncol=5, frameon=False, bbox_to_anchor=(0.5, -0.05)
+    )
+    fig.tight_layout()
+    save(fig, "mitigation_deltas")
+
+
 FIGURES = (
     fig_evidence,
     fig_foursite_age,
@@ -421,6 +490,7 @@ FIGURES = (
     fig_shap_share,
     fig_gradcam,
     fig_frontier,
+    fig_mitigation_deltas,
 )
 
 
@@ -430,7 +500,6 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=OUT, help="figure directory")
     OUT = parser.parse_args().out
     OUT.mkdir(parents=True, exist_ok=True)
-    # mitigation_deltas awaits its per-constraint redesign, so it is not built yet.
     for fn in FIGURES:
         fn()
 
