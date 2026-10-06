@@ -5,6 +5,16 @@ pipeline artifacts; production logic should live in `src/` or `scripts/`.
 
 See [../docs/README.md](../docs/README.md) for the full docs index.
 
+## Notebooks
+
+| Notebook | Purpose |
+|----------|---------|
+| `cardiac_eda.ipynb` | Exploratory analysis: representation by age, sex and their intersection, feature distributions, and data quality across cohorts |
+| `cardiac_profilling.ipynb` | Complexity metrics and pre-training fairness risk signals, read from profiling outputs |
+
+`cardiac_eda.ipynb` predates the raw-UCI cohorts. It still compares Cleveland,
+Kaggle Heart and Cardio70k, not `cleveland_uci` and `four_site_uci`.
+
 ## Expected Inputs
 
 Profiling artifacts:
