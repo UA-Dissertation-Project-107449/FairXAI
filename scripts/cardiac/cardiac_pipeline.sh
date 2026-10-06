@@ -270,12 +270,16 @@ if [[ "$STUDY_MODE" != "serial" && "$STUDY_MODE" != "auto_safe" && "$STUDY_MODE"
     STUDY_MODE="auto_safe"
 fi
 
+# Stage 6 reads the tuned params stage 5 writes, so the studies never overlap.
+if [[ "$PARALLEL_STUDIES" == "true" ]]; then
+    echo "WARNING: parallel_studies is deprecated and ignored; select_features always waits for tune" >&2
+fi
+PARALLEL_STUDIES=false
+
 # serial forces no parallelism; otherwise apply mode-driven defaults
 if [[ "$STUDY_MODE" == "serial" ]]; then
-    PARALLEL_STUDIES=false
     PARALLEL_EXPERIMENTS=false
 else
-    [[ -z "$PARALLEL_STUDIES"     ]] && PARALLEL_STUDIES=true
     [[ -z "$PARALLEL_EXPERIMENTS" ]] && { [[ "$STUDY_MODE" == "aggressive" ]] && PARALLEL_EXPERIMENTS=true || PARALLEL_EXPERIMENTS=false; }
 fi
 
@@ -300,23 +304,9 @@ CORES_PY
 )
 
 # Auto-compute HPO jobs if not set
-if [[ -z "$HPO_SEARCH_N_JOBS" ]]; then
-    if [[ "$PARALLEL_STUDIES" == "true" && "$RUN_HPO_STUDY" == "true" && "$RUN_FEATURE_SELECTION_STUDY" == "true" ]]; then
-        HPO_SEARCH_N_JOBS=$(( EFFECTIVE_CORES / 2 ))
-        (( HPO_SEARCH_N_JOBS < 1 )) && HPO_SEARCH_N_JOBS=1
-    else
-        HPO_SEARCH_N_JOBS="$EFFECTIVE_CORES"
-    fi
-fi
+[[ -z "$HPO_SEARCH_N_JOBS" ]] && HPO_SEARCH_N_JOBS="$EFFECTIVE_CORES"
 [[ -z "$HPO_MODEL_N_JOBS" ]] && { [[ "$HPO_SEARCH_N_JOBS" == "1" ]] && HPO_MODEL_N_JOBS=-1 || HPO_MODEL_N_JOBS=1; }
 
-# Auto-balance FS_JOBS from remaining cores when parallel and not explicitly set
-if [[ "$PARALLEL_STUDIES" == "true" && "$FS_JOBS_FROM_CLI" != "true" && -z "$_SCHED_FS_JOBS" ]]; then
-    if [[ "$HPO_SEARCH_N_JOBS" =~ ^[1-9][0-9]*$ ]]; then
-        FS_JOBS=$(( EFFECTIVE_CORES - HPO_SEARCH_N_JOBS ))
-        (( FS_JOBS < 1 )) && FS_JOBS=1
-    fi
-fi
 DATASET_ARGS=()
 if (( ${#DATASETS[@]} > 0 )); then
     DATASET_ARGS=(--datasets "${DATASETS[@]}")
@@ -497,7 +487,6 @@ echo "Stages:           $START_NUM..${END_NUM}  (${STAGE_NAME[$START_NUM]} → $
 echo "HPO study:        $RUN_HPO_STUDY"
 echo "Feature study:    $RUN_FEATURE_SELECTION_STUDY"
 echo "Study mode:       $STUDY_MODE"
-echo "Parallel studies: $PARALLEL_STUDIES"
 echo "Parallel exps:    $PARALLEL_EXPERIMENTS"
 echo "FS jobs:          $FS_JOBS"
 echo "HPO search jobs:  $HPO_SEARCH_N_JOBS"
@@ -591,44 +580,8 @@ else
 fi
 
 # Stage 5/6 — studies (optional)
-PARALLEL_STUDIES_HANDLED=false
-if should_run 5 && should_run 6 && [[ "$RUN_HPO_STUDY" == "true" ]] && [[ "$RUN_FEATURE_SELECTION_STUDY" == "true" ]] && [[ "$PARALLEL_STUDIES" == "true" ]]; then
-    echo "[PHASE 5-6/12] Running HPO and Feature-selection studies in parallel"
-    set +e
-    python3 "$ROOT_DIR/scripts/studies/run_hpo.py" \
-        --pipeline cardiac --config "$HPO_CONFIG" \
-        --search-n-jobs "$HPO_SEARCH_N_JOBS" \
-        --model-n-jobs "$HPO_MODEL_N_JOBS" \
-        "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $STUDY_VERBOSE_FLAG &
-    HPO_PID=$!
-
-    python3 "$ROOT_DIR/scripts/studies/run_feature_selection_study.py" \
-        --pipeline cardiac --config "$FEATURE_SELECTION_STUDY_CONFIG" \
-        --jobs "$FS_JOBS" \
-        "${DATASET_ARGS[@]}" "${MODEL_TYPE_ARGS[@]}" $STUDY_VERBOSE_FLAG &
-    FS_PID=$!
-
-    wait "$HPO_PID"
-    HPO_RC=$?
-    wait "$FS_PID"
-    FS_RC=$?
-    set -e
-
-    if (( HPO_RC != 0 || FS_RC != 0 )); then
-        echo "ERROR: Parallel studies failed (hpo_rc=$HPO_RC fs_rc=$FS_RC)" >&2
-        exit 1
-    fi
-
-    mark_done 5
-    mark_done 6
-    PARALLEL_STUDIES_HANDLED=true
-    echo ""
-fi
-
 if should_run 5; then
-    if [[ "$PARALLEL_STUDIES_HANDLED" == "true" ]]; then
-        :
-    elif [[ "$RUN_HPO_STUDY" == "true" ]]; then
+    if [[ "$RUN_HPO_STUDY" == "true" ]]; then
         echo "[PHASE 5/12] Hyperparameter optimisation study"
         python3 "$ROOT_DIR/scripts/studies/run_hpo.py" \
             --pipeline cardiac --config "$HPO_CONFIG" \
@@ -648,9 +601,7 @@ fi
 
 # Stage 6 — Feature-selection study (optional)
 if should_run 6; then
-    if [[ "$PARALLEL_STUDIES_HANDLED" == "true" ]]; then
-        :
-    elif [[ "$RUN_FEATURE_SELECTION_STUDY" == "true" ]]; then
+    if [[ "$RUN_FEATURE_SELECTION_STUDY" == "true" ]]; then
         echo "[PHASE 6/12] Feature-selection ablation study"
         python3 "$ROOT_DIR/scripts/studies/run_feature_selection_study.py" \
             --pipeline cardiac --config "$FEATURE_SELECTION_STUDY_CONFIG" \

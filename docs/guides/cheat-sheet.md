@@ -129,7 +129,7 @@ bash scripts/dermatology/dermatology_pipeline.sh --no-explain --cache-frozen-fea
 |-----------------|--------|
 | `--no-hpo-study`, `--no-feature-selection-study`, `--skip-studies` | Skip stages 5 and 6 |
 | `--study-mode`, `--fs-jobs`, `--hpo-search-n-jobs`, `--hpo-model-n-jobs` | Study parallelism |
-| `--parallel-studies` / `--no-parallel-studies` | Run stages 5 and 6 concurrently |
+| `--parallel-studies` / `--no-parallel-studies` | Deprecated and ignored: stage 6 always waits for stage 5 |
 | `--parallel-experiments` / `--no-parallel-experiments` | Run stages 9-11 concurrently |
 | `--max-cores`, `--cpu-fraction` | Core budget |
 | `COMPARE_EXCLUDE_MODEL_TYPES` (env var, **not** a flag) | Space-separated families dropped from the stage-12 comparison. Not the same as `--model-types`: those families still ran and their results stay on disk. Use it when a family's grid is only partly complete, so its finished cells are a cost-biased subsample that cannot be ranked fairly against families that completed every cell. |

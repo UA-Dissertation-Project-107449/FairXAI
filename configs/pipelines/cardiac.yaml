@@ -171,7 +171,7 @@ scheduling:
   mode: auto_safe
   max_cores: null
   cpu_fraction: 0.75
-  parallel_studies: true
+  # parallel_studies was removed: select_features (6) reads tune's (5) output.
   parallel_experiments: false
   fs_jobs: 7                  # was 1; the 2026-09-26 cold run used 7 (--fs-jobs 7, --max-cores 14)
   hpo_search_n_jobs: null
