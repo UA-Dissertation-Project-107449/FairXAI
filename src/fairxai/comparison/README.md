@@ -12,6 +12,7 @@ deltas, and figure naming.
 | `plot_frames.py` | Plot-ready metric frames |
 | `config.py` | Comparison config loader and deep merge |
 | `naming.py` | Slugs and configured figure filenames |
+| `dermatology.py` | Dermatology stage-9 table: per-model metrics + fairness deltas across architectures |
 | `__init__.py` | Public exports |
 
 ## Public API
@@ -28,12 +29,19 @@ deltas, and figure naming.
 - `slugify_token`
 - `write_canonical_comparison_outputs`
 
+`dermatology.py` is script-facing and not re-exported: `compare_run`,
+`build_rows`, `render_markdown`. Import from `fairxai.comparison.dermatology`.
+
 ## Config And Artifacts
 
 - Config: `configs/experiments/comparison.yaml`
 - Main script: `scripts/cardiac/compare.py`
 - Canonical outputs: `output/cardiac/runs/<run_id>/experiments/comparisons/data/`
 - Figure outputs: `output/cardiac/runs/<run_id>/experiments/comparisons/plots/` and dissertation figure roots.
+- Dermatology: `scripts/dermatology/compare.py` writes
+  `output/dermatology/runs/<run_id>/baseline/comparison/model_comparison.{csv,md}`.
+  It reads the run's metrics JSON and stage-8 fairness report; no model load, no
+  manifest. Figures come from `fairxai.viz.dermatology_comparison` on request.
 
 ## Usage
 

@@ -1,11 +1,13 @@
 # Explainability Module
 
-Post-hoc explainability for FairXAI models. Two surfaces:
+Post-hoc explainability for FairXAI models. Three surfaces:
 
 - **Tabular** (`tabular.py`): SHAP and LIME wrappers for the cardiac/tabular
   models. Counterfactual support remains an explicit placeholder.
 - **Image** (`image.py`): SHAP, LIME, and Grad-CAM heatmaps for the dermatology
   CNN baselines, with a driver that stratifies overlays by group × outcome.
+- **Subgroup** (`subgroup.py`): splits an already-computed `|SHAP|` matrix by
+  sensitive group to ask whether the model explains every group the same way.
 
 ## Files
 
@@ -13,7 +15,8 @@ Post-hoc explainability for FairXAI models. Two surfaces:
 |------|---------|
 | `tabular.py` | SHAP/LIME dataclasses and helper functions (tabular models) |
 | `image.py` | Image heatmaps (SHAP/LIME/Grad-CAM) + dermatology XAI driver |
-| `__init__.py` | Public exports (tabular surface) |
+| `subgroup.py` | Per-group SHAP summary, cross-group disparity and rank agreement |
+| `__init__.py` | Public exports (tabular + subgroup surface) |
 
 ## Public API (tabular)
 
@@ -22,6 +25,28 @@ Post-hoc explainability for FairXAI models. Two surfaces:
 - `shap_explain_tabular`
 - `lime_explain_instance`
 - `counterfactual_stub`
+- `SubgroupShapSummary`
+- `summarise_subgroup_shap`
+
+## Subgroup SHAP
+
+`summarise_subgroup_shap` computes no SHAP values; the caller passes `|phi|`
+and the group labels of the same rows. It returns three tables:
+
+- `per_group`: mean/std/percentiles per feature, one block per group.
+- `disparity`: per feature, the spread of attribution across groups.
+- `agreement`: per group, distance of its feature ranking from the cohort
+  ranking (Spearman, top-k overlap, worst rank shift).
+
+Each group gets two magnitudes. `mean_abs_shap` moves with model confidence on
+that group. `share` normalises each group's vector to sum to one, so it shows
+*which* features carry the explanation. A gap that survives in `share` is a
+structural difference; one only in `mean_abs_shap` is a confidence difference.
+
+`save_subgroup_shap` writes `subgroup_summary.csv`, `subgroup_disparity.csv`
+and `subgroup_agreement.csv`. Stage 7 (`scripts/common/train_baseline.py`) and
+the stage-10 mitigation arms (`scripts/experiments/run_mitigation_comparison.py`)
+call it next to their global SHAP summaries.
 
 ## Image API
 
