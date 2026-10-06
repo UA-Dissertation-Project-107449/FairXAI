@@ -20,6 +20,9 @@ from fairxai.fairness.uncertainty import (
     flatten_fairness_metrics,
 )
 
+# Bootstrap-heavy; PR CI skips it, main validation runs it.
+pytestmark = pytest.mark.slow
+
 SENSITIVE = ["sex", "age_group"]
 
 

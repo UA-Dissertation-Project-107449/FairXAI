@@ -76,10 +76,10 @@ jobs:
         run: python3 -m pip install -e ".[experiment]"
 
       - name: Install test tooling
-        run: python3 -m pip install pytest matplotlib seaborn jenkspy prefect tabulate
+        run: python3 -m pip install pytest pytest-xdist matplotlib seaborn jenkspy prefect tabulate
 
       - name: Unit tests
-        run: pytest tests/unit/ -q -m "not local_data"
+        run: pytest tests/unit/ -q -n auto -m "not local_data"
 
   build:
     name: Build wheel & sdist

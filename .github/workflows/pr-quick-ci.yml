@@ -77,15 +77,15 @@ jobs:
         run: python3 -m pip install -e ".[experiment]"
 
       - name: Install test tooling
-        run: python3 -m pip install pytest matplotlib seaborn jenkspy prefect tabulate
+        run: python3 -m pip install pytest pytest-xdist matplotlib seaborn jenkspy prefect tabulate
 
       - name: CLI help smoke check
         run: |
           python3 -m fairxai.cli.main characterize --help
           python3 -m fairxai.cli.main triage --help
 
-      - name: Unit tests (skip viz smoke in PR quick CI)
-        run: pytest tests/unit/ -q -m "not local_data" --ignore=tests/unit/test_viz_smoke.py
+      - name: Unit tests (skip viz smoke and slow tests in PR quick CI)
+        run: pytest tests/unit/ -q -n auto -m "not local_data and not slow" --ignore=tests/unit/test_viz_smoke.py
 
   build:
     name: Build wheel & sdist
