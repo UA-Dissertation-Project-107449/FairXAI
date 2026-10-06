@@ -63,6 +63,15 @@ COHORT = {"cleveland_uci": "Cleveland", "four_site_uci": "Four-site", "cardio70k
 FAM_COLOR = {"LR": "#1b6ca8", "RF": "#3a9d5d", "SVM": "#c0762c", "XGB": "#8e4585"}
 AGE_RANK = {"<40": 0, "40-49": 1, "50-59": 2, "60-69": 3, "70+": 4}
 COHORTS = [(RUN_CARDIAC, "cleveland_uci"), (RUN_CARDIAC, "four_site_uci"), (RUN_C70, "cardio70k")]
+# The age-binning catalogue by scheme family, in plotting order.
+SCHEME_FAMILIES = {
+    "fixed": ["fixed_2", "fixed_3", "fixed_5yr", "fixed_10yr"],
+    "clinical": ["clinical"],
+    "quantile": [f"quantile_{k}" for k in range(3, 11)]
+    + [f"adaptive_quantile_{k}" for k in (5, 8, 10)],
+    "equal width": [f"equal_width_{k}" for k in (3, 4, 5, 6, 8, 10)],
+    "Jenks": [f"jenks_{k}" for k in (3, 4, 5)],
+}
 
 
 def save(fig: plt.Figure, name: str) -> None:
@@ -245,6 +254,58 @@ def fig_binning() -> None:
     save(fig, "binning_spread")
 
 
+def fig_binning_grid() -> None:
+    """Appendix C: age parity gap under every binning scheme, per cohort and model family."""
+    schemes = [s for fam in SCHEME_FAMILIES.values() for s in fam]
+    fig, axes = plt.subplots(1, 3, figsize=(WIDTH, 4.6), sharey=True)
+    offs = {"LR": -0.24, "RF": -0.08, "SVM": 0.08, "XGB": 0.24}
+    for ax, (run, cohort) in zip(axes, COHORTS):
+        rd = CARD / "runs" / run
+        lab = pd.read_csv(rd / "experiments" / "attribute_binning" / "comparison.csv")
+        label = lab[lab.dataset == cohort].set_index("strategy").max_sp_difference
+        sens = rd / "baseline" / "age_binning_sensitivity" / cohort
+        for f in sorted(sens.glob("*/age_binning_sensitivity.csv")):
+            d = pd.read_csv(f)
+            d = d[(d.regime == "baseline") & d.strategy.isin(schemes)]
+            g = d.groupby("strategy").agg(dp=("dp_gap", "first"), nmin=("n", "min"))
+            fam = FAMILY[f.parent.name]
+            col = FAM_COLOR[fam]
+            y = np.array([schemes.index(s) for s in g.index]) + offs[fam]
+            big = (g.nmin >= 30).values
+            ax.scatter(g.dp[big], y[big], s=9, color=col, lw=0, label=fam)
+            ax.scatter(g.dp[~big], y[~big], s=9, facecolor="none", edgecolor=col, lw=0.6)
+        y = [schemes.index(s) for s in label.index if s in schemes]
+        x = [label[s] for s in label.index if s in schemes]
+        ax.scatter(x, y, marker="|", s=40, color="#222222", lw=1.0, label="outcome-rate gap")
+        edge = 0
+        for k, fam in enumerate(SCHEME_FAMILIES.values()):
+            if k % 2:
+                ax.axhspan(edge - 0.5, edge + len(fam) - 0.5, color="#f2f2f2", lw=0, zorder=0)
+            edge += len(fam)
+        ax.set_title(COHORT[cohort], loc="left")
+        ax.set_xlabel("age parity gap")
+        ax.set_xlim(0, None)
+    names = [s.replace("_", " ").replace("adaptive quantile", "adaptive q.") for s in schemes]
+    axes[0].set_yticks(range(len(schemes)), names)
+    axes[0].set_ylim(len(schemes) - 0.5, -0.5)
+    h, _ = axes[0].get_legend_handles_labels()
+    h += [
+        plt.Line2D(
+            [],
+            [],
+            ls="",
+            marker="o",
+            ms=3.5,
+            mfc="none",
+            mec="#777777",
+            label="smallest group < 30",
+        )
+    ]
+    fig.legend(handles=h, loc="lower center", ncol=6, frameon=False, bbox_to_anchor=(0.5, -0.05))
+    fig.tight_layout()
+    save(fig, "binning_grid")
+
+
 def fig_shap_share() -> None:
     """Per-group attribution share by age group, four-site and Cardio70k logistic regression."""
     specs = [
@@ -352,7 +413,15 @@ def fig_frontier() -> None:
     save(fig, "frontier_sex")
 
 
-FIGURES = (fig_evidence, fig_foursite_age, fig_binning, fig_shap_share, fig_gradcam, fig_frontier)
+FIGURES = (
+    fig_evidence,
+    fig_foursite_age,
+    fig_binning,
+    fig_binning_grid,
+    fig_shap_share,
+    fig_gradcam,
+    fig_frontier,
+)
 
 
 def main() -> None:
