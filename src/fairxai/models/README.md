@@ -38,7 +38,6 @@ and cross-validation trainer utilities.
 ## Config And Artifacts
 
 - Model defaults: `configs/models/*.yaml`
-- Baseline experiment defaults: `configs/experiments/baseline.yaml`
 - HPO outputs: `output/cardiac/studies/hpo/best_params_<dataset>_<model>.json`
 - Baseline run artifacts: `output/cardiac/runs/<run_id>/baseline/`
 

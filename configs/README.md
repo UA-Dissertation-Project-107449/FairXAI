@@ -34,7 +34,6 @@ configs/
 
 | File | Status | Purpose |
 |------|--------|---------|
-| `baseline.yaml` | Active | Baseline experiment defaults |
 | `hpo.yaml` | Active | Grid/random search settings per model |
 | `feature_selection_study.yaml` | Active | Sensitive-attribute ablation settings |
 | `age_binning.yaml` | Active | Attribute/age binning strategy sweep |

@@ -11,7 +11,7 @@ experiment:
     effects and hidden biases not captured by predefined sensitive attributes.
 
 data:
-  base_config: "domain/cardiac.yaml"
+  # Domain metadata lives in configs/domain/cardiac.yaml (read by preprocess, not here).
   datasets:
     - cleveland_uci
     - four_site_uci

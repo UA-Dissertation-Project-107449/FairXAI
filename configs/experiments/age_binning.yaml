@@ -26,7 +26,7 @@ experiment:
     - Sensitive attribute distribution within bins
 
 data:
-  base_config: "domain/cardiac.yaml"
+  # Domain metadata lives in configs/domain/cardiac.yaml (read by preprocess, not here).
   # Pinned to the raw-UCI analytical cohorts.
   datasets: [cleveland_uci, four_site_uci]
   age_column: "age_raw"

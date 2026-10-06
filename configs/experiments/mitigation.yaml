@@ -10,7 +10,7 @@ experiment:
     for cardiac disease prediction while maintaining clinical utility.
 
 data:
-  base_config: "domain/cardiac.yaml"
+  # Domain metadata lives in configs/domain/cardiac.yaml (read by preprocess, not here).
   datasets:
     - cleveland_uci
     - four_site_uci
@@ -18,7 +18,6 @@ data:
     - sex
     - age_group
     - group_cluster
-  preprocessing: "configs/experiments/baseline.yaml"  # Use baseline preprocessing
 
 # Which sensitive attrs to impose a fairness constraint on, per technique:
 #   all    -> every available sensitive attr (thorough; default)
