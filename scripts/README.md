@@ -138,7 +138,7 @@ pipeline config, then defaults/auto-discovery.
 | `thesis/runs.yaml` | Run IDs every thesis script reads | — |
 | `thesis/thesis_runs.py` | Loads `runs.yaml`; shared run IDs and paths | — |
 | `thesis/performance_intervals.py` | Bootstrap intervals for baseline performance and paired feature-selection ablation | `baseline_performance.csv`, `ablation_paired.csv` |
-| `thesis/build_ledger.py` | Chapter 6 numbers ledger | `ledger.md` |
+| `thesis/build_ledger.py` | Chapter 6 numbers ledger | `chapter6_ledger.md` |
 | `thesis/make_figures.py` | Chapter 6 and 7 figures | `figures/` |
 | `thesis/similarity_heldout.py` | Held-out k-NN consistency with pairwise bootstrap | `similarity_heldout.json` |
 

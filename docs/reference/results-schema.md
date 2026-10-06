@@ -233,6 +233,6 @@ writes under `output/thesis/`:
 | File | Writer |
 |------|--------|
 | `baseline_performance.csv`, `ablation_paired.csv` | `performance_intervals.py` |
-| `ledger.md` | `build_ledger.py` |
+| `chapter6_ledger.md` | `build_ledger.py` |
 | `figures/` | `make_figures.py` |
 | `similarity_heldout.json` | `similarity_heldout.py` |
