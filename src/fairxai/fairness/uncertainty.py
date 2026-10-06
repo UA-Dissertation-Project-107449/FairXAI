@@ -54,7 +54,13 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 
 from .metrics import FairnessMetrics
 
@@ -571,6 +577,61 @@ def _pairwise_differences(
     ).reset_index(drop=True)
 
 
+def _interval_table(
+    point: Dict[MetricKey, float],
+    replicates: Dict[MetricKey, List[float]],
+    n_boot: int,
+    alpha: float,
+    scheme: str,
+) -> pd.DataFrame:
+    """One percentile-interval row per scalar, in the ``_TABLE_COLUMNS`` layout."""
+    lo_pct, hi_pct = 100 * (alpha / 2), 100 * (1 - alpha / 2)
+    rows = []
+    for key, values in replicates.items():
+        scope, attribute, metric, group, quantity = key
+        arr = np.asarray(values, dtype=float)
+        valid = arr[np.isfinite(arr)]
+        # A quantity that returns the same value in every replicate has no
+        # sampling distribution to summarise — its "interval" is a point. This
+        # happens where a group is too small or too homogeneous to vary under
+        # resampling, and an endpoint pair that looks tight for that reason must
+        # not be read as precision.
+        degenerate = valid.size < 2 or bool(np.ptp(valid) == 0.0)
+        if valid.size == 0:
+            ci_low = ci_high = se = boot_mean = np.nan
+        else:
+            ci_low, ci_high = (float(v) for v in np.percentile(valid, [lo_pct, hi_pct]))
+            se = float(valid.std(ddof=1)) if valid.size > 1 else np.nan
+            boot_mean = float(valid.mean())
+
+        rows.append(
+            {
+                "scope": scope,
+                "attribute": attribute,
+                "metric": metric,
+                "group": group,
+                "quantity": quantity,
+                "point": point[key],
+                "ci_low": ci_low,
+                "ci_high": ci_high,
+                "se": se,
+                "bootstrap_mean": boot_mean,
+                "includes_zero": bool(ci_low <= 0.0 <= ci_high) if valid.size else False,
+                "descriptive_only": _is_descriptive_only(quantity),
+                "degenerate": degenerate,
+                "n_valid": int(valid.size),
+                "n_boot": int(n_boot),
+                "alpha": float(alpha),
+                "method": "percentile",
+                "stratify": scheme,
+            }
+        )
+
+    return pd.DataFrame(rows, columns=_TABLE_COLUMNS).sort_values(
+        ["scope", "attribute", "metric", "group", "quantity"]
+    )
+
+
 def _draw_replicate(
     frame: pd.DataFrame,
     blocks: Optional[List[np.ndarray]],
@@ -693,51 +754,7 @@ def bootstrap_fairness_metrics(
         key: [drawn.get(key, np.nan) for drawn in drawn_replicates] for key in point
     }
 
-    lo_pct, hi_pct = 100 * (alpha / 2), 100 * (1 - alpha / 2)
-    rows = []
-    for key, values in replicates.items():
-        scope, attribute, metric, group, quantity = key
-        arr = np.asarray(values, dtype=float)
-        valid = arr[np.isfinite(arr)]
-        # A quantity that returns the same value in every replicate has no
-        # sampling distribution to summarise — its "interval" is a point. This
-        # happens where a group is too small or too homogeneous to vary under
-        # resampling, and an endpoint pair that looks tight for that reason must
-        # not be read as precision.
-        degenerate = valid.size < 2 or bool(np.ptp(valid) == 0.0)
-        if valid.size == 0:
-            ci_low = ci_high = se = boot_mean = np.nan
-        else:
-            ci_low, ci_high = (float(v) for v in np.percentile(valid, [lo_pct, hi_pct]))
-            se = float(valid.std(ddof=1)) if valid.size > 1 else np.nan
-            boot_mean = float(valid.mean())
-
-        rows.append(
-            {
-                "scope": scope,
-                "attribute": attribute,
-                "metric": metric,
-                "group": group,
-                "quantity": quantity,
-                "point": point[key],
-                "ci_low": ci_low,
-                "ci_high": ci_high,
-                "se": se,
-                "bootstrap_mean": boot_mean,
-                "includes_zero": bool(ci_low <= 0.0 <= ci_high) if valid.size else False,
-                "descriptive_only": _is_descriptive_only(quantity),
-                "degenerate": degenerate,
-                "n_valid": int(valid.size),
-                "n_boot": int(n_boot),
-                "alpha": float(alpha),
-                "method": "percentile",
-                "stratify": scheme,
-            }
-        )
-
-    table = pd.DataFrame(rows, columns=_TABLE_COLUMNS).sort_values(
-        ["scope", "attribute", "metric", "group", "quantity"]
-    )
+    table = _interval_table(point, replicates, n_boot, alpha, scheme)
 
     n_degenerate = int(table["degenerate"].sum())
     if n_degenerate:
@@ -865,7 +882,7 @@ _PAIRED_COLUMNS = [
 # Performance scalars the paired table carries alongside the fairness ones. A
 # fairness gain is only a result next to what it cost, and the fairness
 # calculator reports no overall performance.
-PAIRED_PERFORMANCE_METRICS = ("f1", "accuracy", "precision", "recall")
+PAIRED_PERFORMANCE_METRICS = ("f1", "accuracy", "precision", "recall", "auc")
 
 
 @dataclass
@@ -898,10 +915,28 @@ class PairedEffectResult:
         return self.table[keep].reset_index(drop=True)
 
 
+def _score_column(frame: pd.DataFrame, proba_col: Optional[str]) -> Optional[str]:
+    """``proba_col`` when it holds real scores, else ``None`` (no AUC).
+
+    Arms without probabilities store ``y_pred`` in ``y_proba``, and an AUC of
+    hard labels is balanced accuracy, not a ranking measure. Decided once on the
+    full frame so every replicate of one arm reports the same quantities.
+    """
+    if not proba_col or proba_col not in frame.columns:
+        return None
+    scores = pd.to_numeric(frame[proba_col], errors="coerce")
+    if scores.isna().any() or scores.isin([0, 1]).all():
+        return None
+    return proba_col
+
+
 def _performance_scalars(
-    frame: pd.DataFrame, true_col: str, pred_col: str
+    frame: pd.DataFrame, true_col: str, pred_col: str, score_col: Optional[str] = None
 ) -> Dict[MetricKey, float]:
-    """Overall performance for one arm, keyed like a flattened fairness metric."""
+    """Overall performance for one arm, keyed like a flattened fairness metric.
+
+    AUC is reported only when ``score_col`` is given (see :func:`_score_column`).
+    """
     scorers = {
         "f1": f1_score,
         "accuracy": accuracy_score,
@@ -911,10 +946,13 @@ def _performance_scalars(
     y_true = frame[true_col]
     y_pred = frame[pred_col]
     out: Dict[MetricKey, float] = {}
-    for name in PAIRED_PERFORMANCE_METRICS:
-        scorer = scorers[name]
+    for name, scorer in scorers.items():
         kwargs = {} if name == "accuracy" else {"zero_division": 0}
         out[("performance", "", "overall", "", name)] = float(scorer(y_true, y_pred, **kwargs))
+    if score_col is not None:
+        # A replicate holding one class has no AUC; NaN drops it from the interval.
+        auc = float(roc_auc_score(y_true, frame[score_col])) if y_true.nunique() > 1 else np.nan
+        out[("performance", "", "overall", "", "auc")] = auc
     return out
 
 
@@ -923,10 +961,11 @@ def _arm_scalars(
     calculator: FairnessMetrics,
     true_col: str,
     pred_col: str,
+    score_col: Optional[str] = None,
 ) -> Dict[MetricKey, float]:
     """Every scalar one arm contributes: fairness metrics plus performance."""
     scalars = flatten_fairness_metrics(calculator.calculate_all_metrics(frame))
-    scalars.update(_performance_scalars(frame, true_col, pred_col))
+    scalars.update(_performance_scalars(frame, true_col, pred_col, score_col))
     return scalars
 
 
@@ -937,14 +976,16 @@ def _draw_paired_replicate(
     calculator: FairnessMetrics,
     true_col: str,
     pred_col: str,
+    base_scores: Optional[str],
+    arm_scores: Optional[str],
     seed: np.random.SeedSequence,
 ) -> Tuple[Dict[MetricKey, float], Dict[MetricKey, float]]:
     """Resample the row indices once and score both arms on the same draw."""
     rng = np.random.default_rng(seed)
     indices = _replicate_indices(len(baseline), blocks, rng)
     return (
-        _arm_scalars(baseline.take(indices), calculator, true_col, pred_col),
-        _arm_scalars(arm.take(indices), calculator, true_col, pred_col),
+        _arm_scalars(baseline.take(indices), calculator, true_col, pred_col, base_scores),
+        _arm_scalars(arm.take(indices), calculator, true_col, pred_col, arm_scores),
     )
 
 
@@ -961,6 +1002,7 @@ def paired_arm_differences(
     min_stratum: int = DEFAULT_MIN_STRATUM,
     metrics_calculator: Optional[FairnessMetrics] = None,
     n_jobs: int = DEFAULT_N_JOBS,
+    proba_col: Optional[str] = "y_proba",
     baseline_label: str = "baseline",
     arm_label: str = "arm",
 ) -> PairedEffectResult:
@@ -983,6 +1025,8 @@ def paired_arm_differences(
         min_stratum: Smallest stratum that may be resampled before degrading.
         metrics_calculator: Optional pre-configured calculator.
         n_jobs: Worker processes for the replicate loop; -1 uses every core.
+        proba_col: Score column for AUC. An arm whose column is missing or holds
+            only 0/1 labels reports no AUC, so the AUC row needs both arms.
         baseline_label: Name recorded for the baseline arm.
         arm_label: Name recorded for the mitigated arm.
 
@@ -1022,8 +1066,10 @@ def paired_arm_differences(
         return PairedEffectResult(table=pd.DataFrame(columns=_PAIRED_COLUMNS), metadata={})
 
     calculator = metrics_calculator or FairnessMetrics(sensitive_attributes=list(usable))
-    point_base = _arm_scalars(baseline, calculator, true_col, pred_col)
-    point_arm = _arm_scalars(arm, calculator, true_col, pred_col)
+    base_scores = _score_column(baseline, proba_col)
+    arm_scores = _score_column(arm, proba_col)
+    point_base = _arm_scalars(baseline, calculator, true_col, pred_col, base_scores)
+    point_arm = _arm_scalars(arm, calculator, true_col, pred_col, arm_scores)
     # Only quantities both arms report can be differenced. A group present in
     # one arm alone is a different cohort description, not an effect.
     shared = [key for key in point_base if key in point_arm]
@@ -1037,7 +1083,7 @@ def paired_arm_differences(
     blocks = _stratum_blocks(strata, len(baseline))
 
     seeds = np.random.SeedSequence(random_state).spawn(n_boot)
-    args = (baseline, arm, blocks, calculator, true_col, pred_col)
+    args = (baseline, arm, blocks, calculator, true_col, pred_col, base_scores, arm_scores)
     if n_jobs == 1:
         drawn = [_draw_paired_replicate(*args, s) for s in seeds]
     else:
@@ -1117,5 +1163,118 @@ def paired_arm_differences(
         "n_tested": int(testable.sum()),
         "n_significant": int(table["significant"].sum()),
         "p_value_resolution": float(2.0 / (n_boot + 1)),
+        "auc_reported": bool(base_scores and arm_scores),
     }
     return PairedEffectResult(table=table.reset_index(drop=True), metadata=metadata)
+
+
+# --------------------------------------------------------------------------
+# Single-arm performance
+# --------------------------------------------------------------------------
+# The fairness calculator reports no overall performance, so a model's F1 or
+# AUC would otherwise be the one scalar in a run without an interval.
+
+
+def _draw_performance_replicate(
+    frame: pd.DataFrame,
+    blocks: Optional[List[np.ndarray]],
+    true_col: str,
+    pred_col: str,
+    score_col: Optional[str],
+    seed: np.random.SeedSequence,
+) -> Dict[MetricKey, float]:
+    """Resample the cohort once and re-score overall performance on the draw."""
+    rng = np.random.default_rng(seed)
+    sample = frame.take(_replicate_indices(len(frame), blocks, rng))
+    return _performance_scalars(sample, true_col, pred_col, score_col)
+
+
+def bootstrap_performance_metrics(
+    df: pd.DataFrame,
+    sensitive_attributes: Sequence[str] = (),
+    n_boot: Optional[int] = None,
+    alpha: float = DEFAULT_ALPHA,
+    stratify: str = STRATIFY_GROUP_OUTCOME,
+    random_state: int = 42,
+    true_col: str = "y_true",
+    pred_col: str = "y_pred",
+    proba_col: Optional[str] = "y_proba",
+    min_stratum: int = DEFAULT_MIN_STRATUM,
+    n_jobs: int = DEFAULT_N_JOBS,
+) -> BootstrapResult:
+    """Percentile intervals on one arm's F1, accuracy, precision, recall and AUC.
+
+    The same resampling as :func:`bootstrap_fairness_metrics`: pass the same
+    sensitive attributes, seed and replicate count and both tables come from the
+    same draws. Rows use the fairness table layout with ``scope="performance"``,
+    so the two can be concatenated.
+
+    Args:
+        df: Prediction frame with ``y_true``, ``y_pred`` and optionally scores.
+        sensitive_attributes: Columns for the stratum key. Empty stratifies by
+            outcome alone.
+        n_boot: Replicate count; ``None`` uses :func:`adaptive_bootstrap_replicates`.
+        alpha: Two-sided level. 0.05 gives a 95% interval.
+        stratify: ``group_outcome`` (default), ``group``, or ``none``.
+        random_state: Seed, so a reported interval is reproducible.
+        true_col: Outcome column.
+        pred_col: Predicted-label column.
+        proba_col: Score column for AUC; hard labels or a missing column skip AUC.
+        min_stratum: Smallest stratum that may be resampled before degrading.
+        n_jobs: Worker processes for the replicate loop; -1 uses every core.
+
+    Returns:
+        A :class:`BootstrapResult` with an empty ``pairwise`` table, empty when
+        the frame is.
+
+    Raises:
+        ValueError: If ``n_boot`` is below 2, ``alpha`` is not in (0, 1), or
+            ``n_jobs`` is 0.
+    """
+    if n_boot is None:
+        n_boot = adaptive_bootstrap_replicates(len(df))
+    if n_boot < 2:
+        raise ValueError(f"n_boot must be at least 2, got {n_boot}")
+    if not 0.0 < alpha < 1.0:
+        raise ValueError(f"alpha must lie in (0, 1), got {alpha}")
+    if n_jobs == 0:
+        raise ValueError("n_jobs must be a positive worker count or -1, got 0")
+    if df.empty:
+        logging.warning("Performance bootstrap skipped: empty prediction frame")
+        return BootstrapResult(table=pd.DataFrame(columns=_TABLE_COLUMNS), metadata={})
+
+    frame = df.reset_index(drop=True)
+    usable = [c for c in sensitive_attributes if c in frame.columns]
+    score_col = _score_column(frame, proba_col)
+    point = _performance_scalars(frame, true_col, pred_col, score_col)
+
+    scheme, strata = _resolve_stratification(
+        frame, usable, stratify, true_col, min_stratum=min_stratum
+    )
+    blocks = _stratum_blocks(strata, len(frame))
+
+    seeds = np.random.SeedSequence(random_state).spawn(n_boot)
+    args = (frame, blocks, true_col, pred_col, score_col)
+    if n_jobs == 1:
+        drawn = [_draw_performance_replicate(*args, s) for s in seeds]
+    else:
+        drawn = Parallel(n_jobs=n_jobs)(
+            delayed(_draw_performance_replicate)(*args, s) for s in seeds
+        )
+
+    replicates = {key: [rep.get(key, np.nan) for rep in drawn] for key in point}
+    table = _interval_table(point, replicates, n_boot, alpha, scheme)
+
+    metadata = {
+        "n_boot": int(n_boot),
+        "n_jobs": int(n_jobs),
+        "alpha": float(alpha),
+        "method": "percentile",
+        "stratify_requested": stratify,
+        "stratify_used": scheme,
+        "random_state": int(random_state),
+        "n_rows": int(len(frame)),
+        "sensitive_attributes": usable,
+        "auc_reported": score_col is not None,
+    }
+    return BootstrapResult(table=table.reset_index(drop=True), metadata=metadata)

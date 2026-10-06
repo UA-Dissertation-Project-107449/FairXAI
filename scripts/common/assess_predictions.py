@@ -32,6 +32,7 @@ from fairxai.fairness.uncertainty import (
     STRATIFY_GROUP_OUTCOME,
     adaptive_bootstrap_replicates,
     bootstrap_fairness_metrics,
+    bootstrap_performance_metrics,
 )
 
 _KNOWN_MODELS = ["logistic_regression", "random_forest", "svm", "xgboost"]
@@ -263,6 +264,43 @@ def _resolve_n_bootstrap(cfg_value, n_rows: int) -> int:
     return int(cfg_value)
 
 
+def _write_performance_uncertainty(
+    df: pd.DataFrame,
+    sensitive: list,
+    output_dir: Path,
+    file_stem: str,
+    cfg: Dict,
+    n_boot: int,
+) -> Dict:
+    """Bootstrap overall F1/accuracy/precision/recall/AUC and write ``*_performance_ci.csv``.
+
+    Uses the fairness bootstrap's seed, strata and replicate count, so both
+    tables come from the same draws. Failures are logged and swallowed.
+    """
+    try:
+        result = bootstrap_performance_metrics(
+            df,
+            sensitive,
+            n_boot=n_boot,
+            alpha=float(cfg.get("alpha", DEFAULT_ALPHA)),
+            stratify=str(cfg.get("stratify", STRATIFY_GROUP_OUTCOME)),
+            random_state=int(cfg.get("random_state", 42)),
+            n_jobs=int(cfg.get("n_jobs", DEFAULT_N_JOBS)),
+        )
+    except Exception as exc:  # noqa: BLE001 — intervals are additive, never fatal
+        logging.warning("Performance bootstrap failed for %s: %s", file_stem, exc)
+        logging.debug("Performance bootstrap traceback:", exc_info=True)
+        return {}
+
+    if result.is_empty:
+        return {}
+
+    perf_file = output_dir / f"{file_stem}_performance_ci.csv"
+    result.table.to_csv(perf_file, index=False)
+    logging.info("[SUCCESS] Performance confidence intervals saved to: %s", perf_file)
+    return result.metadata
+
+
 def _write_uncertainty(
     df: pd.DataFrame,
     sensitive: list,
@@ -270,7 +308,7 @@ def _write_uncertainty(
     file_stem: str,
     cfg: Dict = None,
 ) -> Dict:
-    """Bootstrap the fairness metrics for one split and write both CI tables.
+    """Bootstrap the fairness and performance metrics for one split and write the CI tables.
 
     Returns the run metadata (empty when the bootstrap is disabled or produced
     nothing). Failures are logged and swallowed: an interval is an addition to
@@ -292,6 +330,8 @@ def _write_uncertainty(
         len(df),
         n_boot,
     )
+
+    performance = _write_performance_uncertainty(df, sensitive, output_dir, file_stem, cfg, n_boot)
 
     try:
         result = bootstrap_fairness_metrics(
@@ -343,7 +383,11 @@ def _write_uncertainty(
             row["p_value_bh"],
         )
 
-    return {**result.metadata, "n_significant_differences": int(len(findings))}
+    return {
+        **result.metadata,
+        "n_significant_differences": int(len(findings)),
+        "performance": performance,
+    }
 
 
 def assess_dataset_fairness(

@@ -16,6 +16,7 @@ from fairxai.fairness.uncertainty import (
     _stratum_blocks,
     adaptive_bootstrap_replicates,
     bootstrap_fairness_metrics,
+    bootstrap_performance_metrics,
     flatten_fairness_metrics,
 )
 
@@ -549,3 +550,49 @@ def test_group_sizes_recorded_on_the_comparison_are_the_cohort_sizes():
     row = result.pairwise.iloc[0]
     assert row["n_group_a"] == observed[row["group_a"]]
     assert row["n_group_b"] == observed[row["group_b"]]
+
+
+# --- single-arm performance ---------------------------------------------------
+
+
+def test_performance_bootstrap_brackets_every_point_estimate():
+    df = _cohort(n=400)
+    df["y_proba"] = np.clip(df["y_true"] * 0.3 + df["y_proba"] * 0.7, 0, 1)
+    result = bootstrap_performance_metrics(df, SENSITIVE, n_boot=200)
+    table = result.table.set_index("quantity")
+
+    assert set(table.index) == {"f1", "accuracy", "precision", "recall", "auc"}
+    assert (table["scope"] == "performance").all()
+    assert (table["ci_low"] <= table["point"]).all()
+    assert (table["point"] <= table["ci_high"]).all()
+    assert table.loc["auc", "point"] > 0.6
+    assert result.pairwise.empty
+
+
+def test_performance_bootstrap_skips_auc_for_hard_labels():
+    df = _cohort(n=200)
+    df["y_proba"] = df["y_pred"]
+    result = bootstrap_performance_metrics(df, SENSITIVE, n_boot=50)
+
+    assert "auc" not in set(result.table["quantity"])
+    assert not result.metadata["auc_reported"]
+
+
+def test_performance_bootstrap_uses_adaptive_replicates_by_default():
+    result = bootstrap_performance_metrics(_cohort(n=200), SENSITIVE)
+    assert result.metadata["n_boot"] == adaptive_bootstrap_replicates(200)
+
+
+def test_performance_bootstrap_shares_draws_with_the_fairness_bootstrap():
+    """Same seed, strata and replicate count give the same resampled rows."""
+    df = _cohort(n=300)
+    fairness = bootstrap_fairness_metrics(df, SENSITIVE, n_boot=40, random_state=3)
+    performance = bootstrap_performance_metrics(df, SENSITIVE, n_boot=40, random_state=3)
+
+    assert fairness.metadata["stratify_used"] == performance.metadata["stratify_used"]
+    parallel = bootstrap_performance_metrics(df, SENSITIVE, n_boot=40, random_state=3, n_jobs=2)
+    pd.testing.assert_frame_equal(performance.table, parallel.table)
+
+
+def test_performance_bootstrap_empty_frame_is_empty():
+    assert bootstrap_performance_metrics(_cohort(n=10).iloc[0:0], SENSITIVE, n_boot=10).is_empty
