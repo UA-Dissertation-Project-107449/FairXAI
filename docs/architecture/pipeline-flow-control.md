@@ -215,12 +215,12 @@ python flows/cardiac_pipeline.py --no-hpo-study --no-feature-selection-study
 ```bash
 # Bash orchestrator (CLI flags)
 bash scripts/cardiac/cardiac_pipeline.sh \
-      --datasets cleveland \
+      --datasets cleveland_uci \
       --model-types logistic_regression xgboost
 
 # Prefect orchestrator
 python flows/cardiac_pipeline.py \
-      --datasets cleveland \
+      --datasets cleveland_uci \
       --model-types logistic_regression xgboost
 ```
 
@@ -230,13 +230,13 @@ python flows/cardiac_pipeline.py \
 bash scripts/cardiac/cardiac_pipeline.sh \
       --resume-from train \
       --go-until compare \
-      --datasets cleveland \
+      --datasets cleveland_uci \
       --model-types logistic_regression
 
 python flows/cardiac_pipeline.py \
       --resume-from train \
       --go-until compare \
-      --datasets cleveland \
+      --datasets cleveland_uci \
       --model-types logistic_regression
 ```
 

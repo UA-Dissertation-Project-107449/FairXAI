@@ -90,7 +90,7 @@ bash scripts/dermatology/dermatology_pipeline.sh
 python3 flows/dermatology_pipeline.py --no-explain
 
 # Cleveland-only smoke run
-python3 flows/cardiac_pipeline.py --datasets cleveland
+python3 flows/cardiac_pipeline.py --datasets cleveland_uci
 
 # Stop after recommendations
 bash scripts/cardiac/cardiac_pipeline.sh --go-until recommend
@@ -103,7 +103,7 @@ bash scripts/cardiac/cardiac_pipeline.sh --resume-from train
 
 # Selected dataset/model scope
 bash scripts/cardiac/cardiac_pipeline.sh \
-  --datasets cleveland \
+  --datasets cleveland_uci \
   --model-types logistic_regression xgboost
 
 # Drop an incomplete model family from the stage-12 ranking only

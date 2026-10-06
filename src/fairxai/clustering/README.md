@@ -54,7 +54,8 @@ balanced KMeans. If **no** solution qualifies, `fit` raises `ClusteringError`;
 `min_clusters=2`) → the WebApp adapter (`integration/clustering.py`) is byte-for-byte
 unchanged. The cardiac pipeline opts in via `grouping.{min_clusters,
 min_cluster_size_abs, min_cluster_size_frac}` in `configs/pipelines/cardiac.yaml`
-(cleveland keeps a floor of 20, scaling up by 5 % of train size).
+(the small Cleveland cohort keeps a floor of 20; larger cohorts scale up by 5 % of
+train size).
 
 ## Leakage guard (pre-train path)
 

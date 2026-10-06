@@ -34,7 +34,7 @@ Top-level shape:
 ```json
 {
   "experiment_id": "a3f2b1...",
-  "dataset": "cleveland",
+  "dataset": "cleveland_uci",
   "configuration": {},
   "test_metrics": {},
   "fairness_metrics": {},
@@ -50,7 +50,7 @@ Top-level shape:
 
 ```json
 {
-  "dataset": "cleveland",
+  "dataset": "cleveland_uci",
   "binning_strategy": "fixed_10yr",
   "mitigation_technique": "reweighting",
   "training_method": "single_split",
@@ -185,7 +185,7 @@ The shape is flatter than combinatorial results:
 
 ```json
 {
-  "cleveland": {
+  "cleveland_uci": {
     "logistic_regression": {
       "status": "success",
       "model_params": {},

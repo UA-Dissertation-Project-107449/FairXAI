@@ -46,7 +46,7 @@ not flat files under `data/processed/cardiac/`.
 from fairxai.data.loaders import load_processed_dataset
 
 train_df, test_df = load_processed_dataset(
-    dataset="cleveland",
+    dataset="cleveland_uci",
     root=".",
     area="cardiac",
     binning="fixed_10yr",

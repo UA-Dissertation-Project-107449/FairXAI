@@ -7,7 +7,8 @@ Last reconciled against the code: 2026-09-21.
 
 ## Implemented For Cardiac
 
-- Data loading and schema harmonization for Cleveland, Kaggle Heart, and Cardio70k.
+- Data loading and schema harmonization for the `cleveland_uci` and `four_site_uci`
+  cohorts (built from raw UCI files) and opt-in Cardio70k.
 - Profiling with complexity metrics, group/intersection diagnostics, and EBM difficulty.
 - Pre-model recommendation engine with task framing, sensitive adequacy, representation, overlap, explainability, and readiness checks.
 - Preprocessing with clinical constraints, age binning, feature selection modes, train/test split, and scaling.

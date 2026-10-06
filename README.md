@@ -45,7 +45,7 @@ bash scripts/cardiac/cardiac_pipeline.sh
 python3 flows/cardiac_pipeline.py
 
 # Cleveland-only smoke run
-python3 flows/cardiac_pipeline.py --datasets cleveland
+python3 flows/cardiac_pipeline.py --datasets cleveland_uci
 
 # Stop after recommendations
 bash scripts/cardiac/cardiac_pipeline.sh --go-until recommend
