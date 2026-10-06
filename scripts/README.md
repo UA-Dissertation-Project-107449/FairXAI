@@ -14,12 +14,13 @@ scripts/
 ├── dermatology/  # Scaffolded future-domain wrapper area
 ├── experiments/  # Attribute binning, mitigation, combinatorial, comparison
 ├── studies/      # HPO, feature selection, selector contract, grouping, dissertation plots
-└── thesis/       # Chapter 6 numbers ledger, figures and held-out similarity
+└── thesis/       # Chapter 6 numbers ledger, figures, similarity, performance intervals
 ```
 
 `scripts/thesis/` reads finished runs only. Set the run IDs in `scripts/thesis/runs.yaml`,
-then run `build_ledger.py`, `make_figures.py` and `similarity_heldout.py`. Each writes
-under `output/thesis/` by default; pass `--out` to write elsewhere.
+then run `performance_intervals.py` (minutes; the ledger reads its CSVs), `build_ledger.py`,
+`make_figures.py` and `similarity_heldout.py`. Each writes under `output/thesis/` by default;
+pass `--out` to write elsewhere.
 
 Dermatology is scaffolded only. Cardiac is the active end-to-end pipeline.
 

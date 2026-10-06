@@ -39,6 +39,8 @@ from thesis_runs import (
 )
 
 lines: list[str] = []
+# Where performance_intervals.py wrote its CSVs; --intervals overrides.
+intervals_dir = DEFAULT_OUT
 
 
 def emit(text: str = "") -> None:
@@ -795,12 +797,15 @@ def section_mitigation_effects() -> None:
             agg = agg.join(f1.groupby(keys).difference.mean().rename("d_f1")).reset_index()
             agg.insert(0, "cohort", cohort)
             rows.append(agg)
-            hit = gap[gap.significant]
-            sig.append(
-                hit[["dataset", "constraint_attr", "technique", "model_type"]].assign(
-                    baseline=hit.baseline, arm=hit.arm, difference=hit.difference
-                )
+            arm_keys = ["dataset", "constraint_attr", "technique", "model_type"]
+            hit = gap[gap.significant][arm_keys + ["baseline", "arm", "difference"]]
+            f1_ci = f1[arm_keys].assign(
+                d_f1=[
+                    ci(d, lo, hi, s)
+                    for d, lo, hi, s in zip(f1.difference, f1.ci_low, f1.ci_high, f1.significant)
+                ]
             )
+            sig.append(hit.merge(f1_ci, on=arm_keys, how="left"))
     emit()
     df = pd.concat(rows)
     order = {t: i for i, t in enumerate(ACTING)}
@@ -809,7 +814,7 @@ def section_mitigation_effects() -> None:
         key=lambda s: s.map(order).fillna(99) if s.name == "group" else s,
     )
     table(df.rename(columns={"group": "technique"}))
-    emit("Every arm with a significant targeted-gap change:")
+    emit("Every arm with a significant targeted-gap change, and its F1 change [95% interval]:")
     emit()
     table(pd.concat(sig))
 
@@ -925,6 +930,66 @@ def section_shap_mitigation() -> None:
     table(df.drop(columns="arm"))
 
 
+def ci(point: float, low: float, high: float, star: bool = False) -> str:
+    """``+0.024 [-0.007, +0.052]``, starred when significant after BH."""
+    return f"{point:+.3f} [{low:+.3f}, {high:+.3f}]{'*' if star else ''}"
+
+
+def _intervals(name: str) -> pd.DataFrame | None:
+    path = intervals_dir / f"{name}.csv"
+    if not path.exists():
+        emit(f"MISSING: `{rel(path)}`; run `scripts/thesis/performance_intervals.py`.")
+        emit()
+        return None
+    emit(f"Source: `{rel(path)}`")
+    emit()
+    return pd.read_csv(path)
+
+
+def section_baseline_intervals() -> None:
+    emit("## L4c. Baseline performance with 95% percentile intervals (held-out test split)")
+    emit()
+    df = _intervals("baseline_performance")
+    if df is None:
+        return
+    df["cell"] = [
+        f"{p:.3f} [{lo:.3f}, {hi:.3f}]" for p, lo, hi in zip(df.point, df.ci_low, df.ci_high)
+    ]
+    keys = ["run", "cohort", "model", "n_boot", "stratify"]
+    wide = df.pivot_table(index=keys, columns="quantity", values="cell", aggfunc="first")
+    wide = wide.reset_index()
+    wide["run"] = wide.run.map(short)
+    table(wide[keys + ["f1", "auc", "accuracy", "precision", "recall"]])
+
+
+def section_ablation_intervals() -> None:
+    emit("## L11b. Ablation: paired change against exclude_sensitive (shared test rows)")
+    emit()
+    emit(
+        "Difference [95% interval], * = significant after BH within the comparison. Separate "
+        "fits scored on the same rows: the interval covers test-sample noise, not refit noise. "
+        "dp_* = demographic_parity max_difference (descriptive gap, see L7b)."
+    )
+    emit()
+    df = _intervals("ablation_paired")
+    if df is None:
+        return
+    keys = ["run", "cohort", "model", "mode"]
+    perf = df[df.scope == "performance"].assign(col="d_" + df.quantity)
+    dp = df[(df.metric == "demographic_parity") & (df.quantity == "max_difference")]
+    dp = dp.assign(col="d_dp_" + dp.attribute.astype(str))
+    both = pd.concat([perf, dp])
+    both["cell"] = [
+        ci(d, lo, hi, s)
+        for d, lo, hi, s in zip(both.difference, both.ci_low, both.ci_high, both.significant)
+    ]
+    wide = both.pivot_table(index=keys, columns="col", values="cell", aggfunc="first")
+    wide = wide.reset_index()
+    wide["run"] = wide.run.map(short)
+    cols = [c for c in ("d_f1", "d_auc", "d_dp_age_group", "d_dp_sex") if c in wide]
+    table(wide[keys + cols])
+
+
 def section_synthetic() -> None:
     emit("## L14. Synthetic profiling-sensitivity study (Appendix E)")
     emit()
@@ -1005,7 +1070,12 @@ def section_usability() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT / "chapter6_ledger.md")
+    parser.add_argument(
+        "--intervals", type=Path, default=DEFAULT_OUT, help="performance_intervals.py output"
+    )
     args = parser.parse_args()
+    global intervals_dir
+    intervals_dir = args.intervals
 
     emit("# Chapter 6 numbers ledger")
     emit()
@@ -1023,6 +1093,7 @@ def main() -> None:
         section_resampling,
         section_triage,
         section_baseline,
+        section_baseline_intervals,
         section_derm_groups,
         section_pairwise,
         section_gaps,
@@ -1035,6 +1106,7 @@ def main() -> None:
         section_mitigation_effects,
         section_sweep,
         section_ablation,
+        section_ablation_intervals,
         section_shap,
         section_coef_shap,
         section_shap_mitigation,
