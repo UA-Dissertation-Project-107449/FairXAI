@@ -1,7 +1,7 @@
 # Experiment Results Schema
 
 Schema reference for result artifacts produced by baseline, mitigation,
-combinatorial, and comparison stages.
+combinatorial, and comparison stages, plus the evidence layer and thesis outputs.
 
 ## Run Roots
 
@@ -20,6 +20,9 @@ output/cardiac/latest_run.txt
 
 Do not place a `latest_run` directory under `runs/`; `latest_run` is a pointer
 at `output/cardiac/latest_run`.
+
+Dermatology runs use the same layout under `output/dermatology/runs/<run_id>/`,
+with `output/dermatology/latest_run` as the pointer.
 
 ## Combinatorial Result JSON
 
@@ -198,3 +201,38 @@ The shape is flatter than combinatorial results:
   }
 }
 ```
+
+## Evidence Layer
+
+Bootstrap intervals and subgroup attributions sit beside the point estimates.
+A max-gap interval is descriptive only. The test is the pairwise group
+difference, Benjamini-Hochberg adjusted. See
+[decisions.md](../architecture/decisions.md#fairness-intervals-max-gap-cis-are-descriptive-pairwise-differences-are-the-test).
+
+`<stem>` is the prediction file stem, for example `<dataset>_<model>`. CV
+predictions use `<stem>_cv`.
+
+| Stage | File | Location under `runs/<run_id>/` |
+|-------|------|---------------------------------|
+| 7 train | `subgroup_summary.csv`, `subgroup_disparity.csv`, `subgroup_agreement.csv` | `baseline/xai/<dataset>/holdout/shap/` |
+| 8 assess | `<stem>_ci.csv` (per-group and max-gap intervals) | `baseline/prediction_fairness/` |
+| 8 assess | `<stem>_pairwise_ci.csv` (pairwise differences, adjusted p-values) | `baseline/prediction_fairness/` |
+| 8 assess | `<stem>_performance_ci.csv` (F1, accuracy, precision, recall, AUC) | `baseline/prediction_fairness/` |
+| 10 mitigate | `paired_effects.csv`, `paired_effects_cv.csv` (each arm against its own baseline, paired on shared rows) | `experiments/mitigation/` |
+| 10 mitigate | the three subgroup SHAP tables, one folder per arm | `experiments/mitigation/subgroup_shap/<dataset>_<model>_<technique>_<attribute>/` |
+| after 10 | `<arm>_ci.csv`, `<arm>_pairwise_ci.csv` per arm; `arms_ci.csv`, `arms_pairwise_ci.csv`, `arms_summary.csv` combined | `experiments/mitigation/prediction_fairness/` |
+
+The post-stage-10 tables come from `scripts/common/assess_mitigated_predictions.py`
+and follow `fairness.uncertainty.enabled` (override with `RUN_MITIGATION_INTERVALS`).
+
+## Thesis Outputs
+
+`scripts/thesis/` reads finished runs named in `scripts/thesis/runs.yaml` and
+writes under `output/thesis/`:
+
+| File | Writer |
+|------|--------|
+| `baseline_performance.csv`, `ablation_paired.csv` | `performance_intervals.py` |
+| `ledger.md` | `build_ledger.py` |
+| `figures/` | `make_figures.py` |
+| `similarity_heldout.json` | `similarity_heldout.py` |
