@@ -67,8 +67,12 @@ subgroup evidence rather than strong natural phenotype discovery.
 
 ### Dermatology Scope
 
-Dermatology has scaffolding, but the end-to-end implemented research pipeline
-is cardiac. Docs should avoid implying equivalent pipeline maturity.
+Both domains run end to end (load through mitigate). Cardiac carries the
+quantitative fairness claims: tabular cohorts, HPO, feature-selection ablation,
+binning, the mitigation sweep and bootstrap intervals. Dermatology reuses the
+shared front end and adds image training, saliency and image mitigation, but
+has no stages 5–6 and a single default dataset. Docs should say which domain a
+claim comes from rather than imply equal depth.
 
 ## Dermatology Design Notes
 

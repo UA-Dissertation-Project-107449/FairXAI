@@ -15,13 +15,19 @@ See [../docs/README.md](../docs/README.md) for the full docs index.
 
 ## Current Datasets
 
-Active cardiac pipeline:
+Cardiac (`configs/pipelines/cardiac.yaml`):
 
-- Cleveland
-- Kaggle Heart
-- Cardio70k
+- `cleveland_uci` and `four_site_uci`: the default cohorts, built from the raw
+  UCI files by `scripts/utils/build_cardiac_uci_cohorts.py`.
+- `cardio70k`: opt-in, pass `--datasets cardio70k`.
+- `cleveland` and `kaggle_heart`: the older curated files, kept only for the
+  provenance tools in `scripts/utils/`.
 
-Dermatology data acquisition is scaffolded, but cardiac is the only active end-to-end pipeline.
+Dermatology (`configs/pipelines/dermatology.yaml`):
+
+- `pad_ufes_20`: the default image dataset.
+- `scin`: declared in `configs/schema/dermatology.json` with its own
+  standardizer, but not in the pipeline's default dataset list.
 
 ## Regenerate
 
@@ -30,7 +36,7 @@ Dermatology data acquisition is scaffolded, but cardiac is the only active end-t
 bash scripts/cardiac/cardiac_pipeline.sh --go-until preprocess
 
 # Cleveland-only preprocessing path
-python3 flows/cardiac_pipeline.py --datasets cleveland --go-until preprocess
+python3 flows/cardiac_pipeline.py --datasets cleveland_uci --go-until preprocess
 ```
 
 Pipeline run artifacts live under `output/cardiac/runs/<run_id>/`; reusable processed splits live under `data/processed/cardiac/`.

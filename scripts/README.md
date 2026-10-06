@@ -11,7 +11,7 @@ See [../docs/README.md](../docs/README.md) for the full docs index and
 scripts/
 ├── common/       # Domain-agnostic stage implementations
 ├── cardiac/      # Cardiac bash orchestrator and thin wrappers
-├── dermatology/  # Scaffolded future-domain wrapper area
+├── dermatology/  # Dermatology bash orchestrator and stage wrappers
 ├── experiments/  # Attribute binning, mitigation, combinatorial, comparison
 ├── studies/      # HPO, feature selection, selector contract, grouping, dissertation plots
 └── thesis/       # Chapter 6 numbers ledger, figures, similarity, performance intervals
@@ -22,7 +22,8 @@ then run `performance_intervals.py` (minutes; the ledger reads its CSVs), `build
 `make_figures.py` and `similarity_heldout.py`. Each writes under `output/thesis/` by default;
 pass `--out` to write elsewhere.
 
-Dermatology is scaffolded only. Cardiac is the active end-to-end pipeline.
+Both domains run end to end. Cardiac carries the quantitative fairness claims;
+dermatology (images, PAD-UFES-20) adds explain and image mitigation stages.
 
 ## Cardiac Stage Order
 

@@ -54,5 +54,6 @@ configs/
 
 - Config files should stay declarative. Runtime behavior belongs in `src/` or `scripts/`.
 - `schema/` format should remain stable for WebApp compatibility.
-- Dermatology is scaffolded but not an active end-to-end pipeline.
+- Cardiac (`pipelines/cardiac.yaml`) and dermatology (`pipelines/dermatology.yaml`)
+  both run end to end.
 - Architecture and flow-control details live in [../docs/architecture/pipeline-flow-control.md](../docs/architecture/pipeline-flow-control.md).
