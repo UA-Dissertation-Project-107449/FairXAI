@@ -313,6 +313,29 @@ class DermatologyDataLoader:
             "dermatology_relevant_datasets", ["pad_ufes_20"]
         )
         self.last_image_reports: dict[str, dict[str, Any]] = {}
+        self.feature_map: dict[str, Any] = {}
+        if feature_map_path:
+            try:
+                with open(feature_map_path, "r") as f:
+                    self.feature_map = yaml.safe_load(f) or {}
+            except FileNotFoundError:
+                logging.warning(f"Feature map not found: {feature_map_path}")
+
+    def _source_column(self, df: pd.DataFrame, canonical: str, dataset_name: str) -> str | None:
+        """First column in ``df`` that the feature map declares for ``canonical``.
+
+        The map only names the source column; the standardizer derives the
+        canonical one from it, so there is one rename, never two.
+        """
+        candidates: list[str] = []
+        sections = [self.feature_map.get(k, {}) for k in ("sensitive", "target", "common")]
+        sections.append(self.feature_map.get("dataset_specific", {}).get(dataset_name, {}))
+        for section in sections:
+            for entry in section.values():
+                if entry.get("canonical") == canonical:
+                    candidates += list(entry.get("aliases") or [])
+        candidates.append(canonical)
+        return next((col for col in dict.fromkeys(candidates) if col in df.columns), None)
 
     def load_dataset(self, dataset_name: str, data_dir: str) -> pd.DataFrame:
         if dataset_name not in self.datasets:
@@ -364,19 +387,27 @@ class DermatologyDataLoader:
         dataset_dir: Path,
         cfg: dict[str, Any],
     ) -> pd.DataFrame:
-        target_col = cfg.get("target", "diagnostic")
         positive_labels = {
             str(v).upper() for v in cfg.get("positive_labels", ["BCC", "SCC", "MEL"])
         }
         negative_labels = {
             str(v).upper() for v in cfg.get("negative_labels", ["ACK", "NEV", "SEK"])
         }
-        image_id_col = cfg.get("image_id_column", "img_id")
+        # Source column names come from the feature map only.
+        target_col = self._source_column(df, "skin_cancer", dataset_name)
+        image_id_col = self._source_column(df, "image_path", dataset_name)
+        age_col = self._source_column(df, "age_raw", dataset_name)
+        sex_col = self._source_column(df, "sex", dataset_name)
+        fst_col = self._source_column(df, "fitzpatrick", dataset_name)
 
-        required = [target_col, image_id_col]
-        missing = [col for col in required if col not in df.columns]
+        missing = [
+            name for name, col in (("target", target_col), ("image id", image_id_col)) if not col
+        ]
         if missing:
-            raise ValueError(f"{dataset_name}: missing required metadata columns: {missing}")
+            raise ValueError(
+                f"{dataset_name}: no metadata column for {missing} "
+                "(check dermatology_feature_map.yaml)"
+            )
 
         out = df.copy()
         out["diagnostic_label"] = out[target_col].astype(str).str.strip().str.upper()
@@ -394,8 +425,8 @@ class DermatologyDataLoader:
             out = out[out["skin_cancer"].notna()].copy()
         out["skin_cancer"] = out["skin_cancer"].astype(int)
 
-        if "age" in out.columns:
-            out["age_raw"] = pd.to_numeric(out["age"], errors="coerce")
+        if age_col:
+            out["age_raw"] = pd.to_numeric(out[age_col], errors="coerce")
             out["age_group"] = pd.cut(
                 out["age_raw"],
                 bins=cfg.get("age_bins", [0, 20, 40, 60, 80, 120]),
@@ -407,8 +438,8 @@ class DermatologyDataLoader:
             out["age_raw"] = pd.NA
             out["age_group"] = "unknown"
 
-        if "gender" in out.columns:
-            sex_label = out["gender"].astype("string").str.strip().str.upper()
+        if sex_col:
+            sex_label = out[sex_col].astype("string").str.strip().str.upper()
             sex_label = sex_label.replace({"": pd.NA, "NAN": pd.NA, "NONE": pd.NA})
             out["sex_extended"] = sex_label.map({"FEMALE": "Female", "MALE": "Male"}).fillna(
                 "unknown"
@@ -418,11 +449,6 @@ class DermatologyDataLoader:
         out["sex"] = out["sex_extended"].map({"Female": 0, "Male": 1}).fillna(-1).astype(int)
         out["sex_bin"] = out["sex"]
 
-        fst_col = (
-            "fitspatrick"
-            if "fitspatrick" in out.columns
-            else "fitzpatrick" if "fitzpatrick" in out.columns else None
-        )
         if fst_col:
             fst = pd.to_numeric(out[fst_col], errors="coerce")
             out["fitzpatrick"] = fst.astype("Int64").astype("string").replace("<NA>", "unknown")

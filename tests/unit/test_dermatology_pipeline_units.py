@@ -49,8 +49,6 @@ def _write_schema(path: Path) -> Path:
             "pad_ufes_20": {
                 "metadata_filename": "metadata.csv",
                 "relative_dir": "pad_ufes_20",
-                "target": "diagnostic",
-                "image_id_column": "img_id",
                 "image_globs": ["images/*.png", "images/imgs_part_*/*.png"],
                 "positive_labels": ["BCC", "SCC", "MEL"],
                 "negative_labels": ["ACK", "NEV", "SEK"],
@@ -60,6 +58,9 @@ def _write_schema(path: Path) -> Path:
     }
     path.write_text(json.dumps(payload))
     return path
+
+
+FEATURE_MAP = Path(__file__).parents[2] / "configs" / "domain" / "dermatology_feature_map.yaml"
 
 
 def _write_scin_fixture(root: Path) -> Path:
@@ -220,13 +221,69 @@ def test_pad_loader_maps_target_and_resolves_split_images(tmp_path: Path) -> Non
     _write_pad_fixture(tmp_path)
     schema_path = _write_schema(tmp_path / "dermatology.json")
 
-    loader = DermatologyDataLoader(str(schema_path))
+    loader = DermatologyDataLoader(str(schema_path), str(FEATURE_MAP))
     df = loader.load_dataset("pad_ufes_20", str(tmp_path))
 
     assert df["skin_cancer"].tolist() == [1, 0]
     assert df["diagnostic_label"].tolist() == ["BCC", "NEV"]
     assert df["image_path"].map(Path).map(Path.exists).all()
     assert loader.last_image_reports["pad_ufes_20"]["missing_images"] == 0
+
+
+def test_pad_loader_output_unchanged_by_feature_map(tmp_path: Path) -> None:
+    # Columns and dtypes the loader produced before the feature map was applied.
+    expected = {
+        "patient_id": "object",
+        "lesion_id": "object",
+        "age": "int64",
+        "gender": "object",
+        "fitspatrick": "int64",
+        "diagnostic": "object",
+        "img_id": "object",
+        "_dataset_source": "object",
+        "_dataset_file": "object",
+        "diagnostic_label": "object",
+        "skin_cancer": "int64",
+        "age_raw": "int64",
+        "age_group": "object",
+        "sex_extended": "object",
+        "sex": "int64",
+        "sex_bin": "int64",
+        "fitzpatrick": "string",
+        "fitzpatrick_group": "object",
+        "image_path": "object",
+    }
+    _write_pad_fixture(tmp_path)
+    schema_path = _write_schema(tmp_path / "dermatology.json")
+
+    df = DermatologyDataLoader(str(schema_path), str(FEATURE_MAP)).load_dataset(
+        "pad_ufes_20", str(tmp_path)
+    )
+
+    assert {col: str(dtype) for col, dtype in df.dtypes.items()} == expected
+    assert df["sex"].tolist() == [0, 1]
+    assert df["age_group"].tolist() == ["40-59", "20-39"]
+    assert df["fitzpatrick_group"].tolist() == ["I-II", "V-VI"]
+
+
+def test_pad_loader_reads_source_columns_from_feature_map(tmp_path: Path) -> None:
+    dataset_dir = _write_pad_fixture(tmp_path)
+    meta = pd.read_csv(dataset_dir / "metadata.csv").rename(columns={"diagnostic": "dx"})
+    meta.to_csv(dataset_dir / "metadata.csv", index=False)
+    schema_path = _write_schema(tmp_path / "dermatology.json")
+    feature_map = tmp_path / "map.yaml"
+    feature_map.write_text(
+        FEATURE_MAP.read_text().replace("aliases: [diagnostic]", "aliases: [dx]")
+    )
+
+    df = DermatologyDataLoader(str(schema_path), str(feature_map)).load_dataset(
+        "pad_ufes_20", str(tmp_path)
+    )
+    assert df["skin_cancer"].tolist() == [1, 0]
+
+    # Without the map the loader cannot find the target, and says so.
+    with pytest.raises(ValueError, match="dermatology_feature_map"):
+        DermatologyDataLoader(str(schema_path)).load_dataset("pad_ufes_20", str(tmp_path))
 
 
 def test_dermatology_patient_split_has_no_patient_leakage() -> None:

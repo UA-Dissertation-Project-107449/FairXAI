@@ -24,7 +24,7 @@ configs/
 - `models/*.yaml` are the authoritative model hyperparameter defaults.
 - `experiments/*.yaml` configure HPO, feature selection, attribute binning, mitigation, combinatorial, comparison, and clustering/grouping studies.
 - `domain/cardiac.yaml` contains clinical constraints, sex/age mappings, and domain labels.
-- `domain/<pipeline>_feature_map.yaml` maps source column names to canonical names; `scripts/common/load_data.py` passes it to the loader. Only the cardiac loader applies it; `DermatologyDataLoader` ignores `dermatology_feature_map.yaml`. For `cleveland_uci` and `four_site_uci` the numeric encoding comes from `scripts/utils/build_cardiac_uci_cohorts.py`, not from the cardiac map.
+- `domain/<pipeline>_feature_map.yaml` maps source column names to canonical names; `scripts/common/load_data.py` passes it to the loader. The cardiac loader renames columns from it. `DermatologyDataLoader` reads only the PAD-UFES-20 source column names from `dermatology_feature_map.yaml` (target, image id, age, sex, Fitzpatrick) and derives the canonical columns itself; `schema/dermatology.json` no longer names them. For `cleveland_uci` and `four_site_uci` the numeric encoding comes from `scripts/utils/build_cardiac_uci_cohorts.py`, not from the cardiac map.
 - `profiling/complexity.yaml` configures complexity metric runtime behavior.
 - `recommendations/thresholds.yaml` is the central triage/fairness threshold file.
 - `schema/cardiac.json` supports standardized dataset metadata and WebApp-compatible ingestion.
