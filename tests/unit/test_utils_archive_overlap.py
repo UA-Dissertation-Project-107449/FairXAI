@@ -26,10 +26,7 @@ from scripts.utils.cleveland_provenance import (
     UCI_COLUMNS,
 )
 from scripts.utils.cleveland_provenance import compare as compare_cleveland  # noqa: E402
-from scripts.utils.cleveland_provenance import (
-    load_uci,
-    load_working,
-)
+from scripts.utils.cleveland_provenance import load_uci, load_working
 from scripts.utils.cleveland_provenance import main as provenance_main
 
 KEYS = ["age_raw", "sex_bin", "trestbps", "chol", "thalach", "oldpeak"]

@@ -20,15 +20,11 @@ from _gates import evaluate_recall_gate, load_gate_thresholds
 from fairxai.cli.runner_base import get_project_root, setup_phase_logging
 from fairxai.cli.runner_utils import resolve_latest_run_dir, resolve_run_id
 from fairxai.comparison import baseline_key_from_row as _baseline_key_from_row
-from fairxai.comparison import (
-    load_comparison_config,
-)
+from fairxai.comparison import load_comparison_config
 from fairxai.comparison import normalize_sensitive_attr as _normalize_sensitive_attr
 from fairxai.comparison import safe_float as _safe_float
 from fairxai.comparison import safe_int as _safe_int
-from fairxai.comparison import (
-    write_canonical_comparison_outputs,
-)
+from fairxai.comparison import write_canonical_comparison_outputs
 from fairxai.comparison.baseline_matching import build_baseline_lookups, find_matching_baseline
 from fairxai.experiments.versioning import ExperimentVersioning
 
