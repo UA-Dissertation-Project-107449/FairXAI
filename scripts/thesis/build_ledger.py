@@ -18,7 +18,6 @@ import pandas as pd
 from scipy.stats import spearmanr
 from sklearn.metrics import f1_score, roc_auc_score
 from thesis_runs import (
-    C70_MODELS,
     CALIBRATION,
     CARD,
     CARDIAC_COHORTS,
@@ -34,7 +33,9 @@ from thesis_runs import (
     SYNTHETIC,
     UCI_MODELS,
     USAB,
+    models_of,
     rel,
+    split_of,
     study_dir,
 )
 
@@ -628,15 +629,6 @@ def section_shap() -> None:
     table(pd.DataFrame(rows))
 
 
-def split_of(cohort: str) -> str:
-    """The prediction split the chapter quotes: held-out for Cardio70k, pooled CV otherwise."""
-    return "test" if cohort == "cardio70k" else "cv"
-
-
-def models_of(cohort: str) -> list[str]:
-    return C70_MODELS if cohort == "cardio70k" else UCI_MODELS
-
-
 def section_derm_groups() -> None:
     emit("## L4b. Dermatology recall and AUC by Fitzpatrick group (point estimates, no intervals)")
     emit()
@@ -736,9 +728,9 @@ def section_cluster_age() -> None:
     emit("## L7b. Age and sex gaps within discovered clusters (saved predictions, groups n >= 30)")
     emit()
     emit(
-        "Point estimates, max - min over the groups of one cluster. No interval: a bootstrap "
-        "interval on a max-min gap excludes zero on null data (see L1); only pairwise "
-        "differences are testable, and the pairwise layer does not cross cluster with age or sex."
+        "Point estimates, max - min over the groups of one cluster. No interval on the gap: a "
+        "bootstrap interval on a max-min gap excludes zero on null data (see L1). The pairwise "
+        "differences after these tables are the testable form."
     )
     emit()
     keys = ["cohort", "split", "cluster", "n", "groups", "outcome_rate", "outcome_gap"]
@@ -747,6 +739,31 @@ def section_cluster_age() -> None:
         emit()
         df = cluster_gaps(attribute)
         table(df.pivot_table(index=keys, columns="model", values="parity_gap").reset_index())
+    emit("### Positive-rate differences between groups within a cluster (post hoc)")
+    emit()
+    emit(
+        "group_a - group_b [95% interval], * = significant after BH. One bootstrap per "
+        "model, cluster and attribute; its BH family is every metric and pair of that "
+        "bootstrap. Untested pairs (a group below n = 30, or degenerate) are left out."
+    )
+    emit()
+    df = _intervals("cluster_pairwise")
+    if df is None:
+        return
+    df = df[(df.metric == "demographic_parity") & (df.quantity == "positive_rate") & df.tested]
+    df = df.assign(
+        cell=[
+            ci(d, lo, hi, s)
+            for d, lo, hi, s in zip(df.difference, df.ci_low, df.ci_high, df.significant)
+        ]
+    )
+    pair = ["cohort", "split", "cluster", "group_a", "group_b"]
+    for attribute in ("age_group", "sex"):
+        d = df[df.attribute == attribute]
+        emit(f"By {attribute} ({int(d.significant.sum())} of {len(d)} differences significant):")
+        emit()
+        wide = d.pivot_table(index=pair, columns="model", values="cell", aggfunc="first")
+        table(wide.reset_index())
 
 
 # Techniques that act on the group, in table order; the two within-group resamplers pool.

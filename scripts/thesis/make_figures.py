@@ -18,7 +18,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
-from build_ledger import _nondominated, cluster_gaps, split_of  # noqa: E402
+from build_ledger import _nondominated, cluster_gaps  # noqa: E402
 from matplotlib.image import imread  # noqa: E402
 from thesis_runs import (  # noqa: E402
     C70_MODELS,
@@ -29,7 +29,9 @@ from thesis_runs import (  # noqa: E402
     RUN_C70,
     RUN_CARDIAC,
     RUN_DERM_AUG,
+    RUN_DERM_CACHED,
     UCI_MODELS,
+    split_of,
 )
 
 OUT = DEFAULT_OUT / "figures"
@@ -347,23 +349,29 @@ def fig_shap_share() -> None:
 
 
 def fig_gradcam() -> None:
-    """Four stratified Grad-CAM cases from the augmented dermatology run."""
-    base = DERM / "runs" / RUN_DERM_AUG / "baseline" / "explanations"
+    """Four stratified Grad-CAM cases, augmented arm beside the no-augmentation arm.
+
+    Both arms explain the same stratified image set, so each row is one image and
+    one backbone under the two training regimes; the outcome per arm comes from
+    the explanation manifest, not from the caption.
+    """
+    arms = (("augmented", RUN_DERM_AUG), ("no augmentation", RUN_DERM_CACHED))
     cases = [
-        ("resnet18", "008_PAT_805_1517_154", "(a) ResNet-18, missed cancer, III–IV"),
-        (
-            "mobilenet_v3_large",
-            "008_PAT_805_1517_154",
-            "(b) MobileNetV3-Large, missed cancer, III–IV",
-        ),
-        ("densenet121", "019_PAT_770_1451_136", "(c) DenseNet-121, detected cancer, V–VI"),
-        ("densenet121", "015_PAT_707_1327_245", "(d) DenseNet-121, false alarm, V–VI"),
+        ("resnet18", "014_PAT_207_1280_15", "ResNet-18, cancer, III–IV"),
+        ("densenet121", "007_PAT_926_1758_714", "DenseNet-121, cancer, III–IV"),
+        ("densenet121", "017_PAT_770_1451_136", "DenseNet-121, cancer, V–VI"),
+        ("resnet18", "011_PAT_898_1706_496", "ResNet-18, benign, III–IV"),
     ]
-    fig, axes = plt.subplots(2, 2, figsize=(WIDTH, 3.1))
-    for ax, (backbone, img, lab) in zip(axes.flat, cases):
-        ax.imshow(imread(base / f"pad_ufes_20_{backbone}" / "gradcam" / f"{img}.png"))
-        ax.set_axis_off()
-        ax.set_title(lab, loc="left", fontsize=8.5)
+    words = {"TP": "detected", "FN": "missed", "FP": "false alarm", "TN": "cleared"}
+    fig, axes = plt.subplots(len(cases), 2, figsize=(WIDTH, 5.6))
+    for row, (backbone, img, lab) in zip(axes, cases):
+        for ax, (arm, run) in zip(row, arms):
+            base = DERM / "runs" / run / "baseline" / "explanations" / f"pad_ufes_20_{backbone}"
+            manifest = pd.read_csv(base / "manifest.csv")
+            hit = manifest[(manifest.method == "gradcam") & manifest.png_path.str.contains(img)]
+            ax.imshow(imread(base / "gradcam" / f"{img}.png"))
+            ax.set_axis_off()
+            ax.set_title(f"{lab}: {words[hit.outcome.iloc[0]]} ({arm})", loc="left", fontsize=8)
     fig.tight_layout(h_pad=0.4, w_pad=0.6)
     save(fig, "gradcam_cases")
 

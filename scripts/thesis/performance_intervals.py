@@ -1,6 +1,6 @@
 """Bootstrap intervals on the performance numbers Chapter 6 quotes, from saved predictions.
 
-Two tables, both post hoc from the runs in runs.yaml (no retrain):
+Three tables, all post hoc from the runs in runs.yaml (no retrain):
 
 - baseline_performance.csv: F1, accuracy, precision, recall and AUC of every
   stage-7 baseline on its held-out test split, each with a percentile interval
@@ -8,6 +8,10 @@ Two tables, both post hoc from the runs in runs.yaml (no retrain):
 - ablation_paired.csv: every feature-selection mode against exclude_sensitive,
   paired over the shared test rows (paired_arm_differences). The fits differ,
   so the interval covers test-sample noise only, not refit variance.
+- cluster_pairwise.csv: age and sex group differences inside each discovered
+  cluster (bootstrap_fairness_metrics on one cluster's rows), the crossed
+  cluster x attribute comparison the pipeline's pairwise layer does not make.
+  Same predictions and n >= 30 floor as the ledger's L7b point estimates.
 
 Replicates follow adaptive_bootstrap_replicates unless --n-boot is given.
 
@@ -22,17 +26,21 @@ from pathlib import Path
 import pandas as pd
 from thesis_runs import (
     CARD,
+    CARDIAC_COHORTS,
     DEFAULT_OUT,
     RUN_C70,
     RUN_C70_SUB,
     RUN_CARDIAC,
     UCI,
     UCI_MODELS,
+    models_of,
+    split_of,
     study_dir,
 )
 
 from fairxai.fairness.uncertainty import (
     adaptive_bootstrap_replicates,
+    bootstrap_fairness_metrics,
     bootstrap_performance_metrics,
     paired_arm_differences,
 )
@@ -40,6 +48,8 @@ from fairxai.fairness.uncertainty import (
 SENSITIVE = ["age_group", "sex"]
 REFERENCE = "exclude_sensitive"
 SOURCES = ((RUN_CARDIAC, UCI), (RUN_C70_SUB, ["cardio70k"]), (RUN_C70, ["cardio70k"]))
+# The ledger's L7b only reports groups of at least 30; the tested family matches it.
+CLUSTER_MIN_GROUP = 30
 
 
 def baseline_table(n_boot: int | None, n_jobs: int) -> pd.DataFrame:
@@ -90,6 +100,41 @@ def ablation_table(n_boot: int | None, n_jobs: int) -> pd.DataFrame:
     return pd.concat(parts, ignore_index=True)
 
 
+def cluster_table(n_boot: int | None, n_jobs: int) -> pd.DataFrame:
+    """Pairwise age and sex differences within each discovered cluster.
+
+    One bootstrap per (model, cluster, attribute), so the BH family is every
+    metric and group pair of that cluster and attribute, as in the pipeline.
+    """
+    parts = []
+    for run, cohorts in CARDIAC_COHORTS:
+        pred = CARD / "runs" / run / "baseline" / "results" / "predictions"
+        for cohort in cohorts:
+            split = split_of(cohort)
+            for model in models_of(cohort):
+                path = pred / f"{cohort}_{model}_{split}.csv"
+                if not path.exists():
+                    continue
+                df = pd.read_csv(path)
+                for cluster, rows in df.groupby("group_cluster"):
+                    boots = n_boot or adaptive_bootstrap_replicates(len(rows))
+                    for attribute in SENSITIVE:
+                        res = bootstrap_fairness_metrics(
+                            rows[["y_true", "y_pred", attribute]],
+                            [attribute],
+                            n_boot=boots,
+                            n_jobs=n_jobs,
+                            min_group_size=CLUSTER_MIN_GROUP,
+                        )
+                        parts.append(
+                            res.pairwise.assign(
+                                run=run, cohort=cohort, split=split, model=model, cluster=cluster
+                            )
+                        )
+                    print(f"cluster {run[-6:]} {cohort} {model} {cluster}: n={len(rows)} B={boots}")
+    return pd.concat(parts, ignore_index=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
@@ -101,6 +146,7 @@ def main() -> None:
     for name, build in (
         ("baseline_performance", baseline_table),
         ("ablation_paired", ablation_table),
+        ("cluster_pairwise", cluster_table),
     ):
         path = args.out / f"{name}.csv"
         build(args.n_boot, args.n_jobs).to_csv(path, index=False)
