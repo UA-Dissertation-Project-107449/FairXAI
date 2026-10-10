@@ -238,6 +238,7 @@ def main():
     )
 
     grids_cfg = hpo_cfg.get("grids", {})
+    failed: list[str] = []
 
     for dataset in datasets:
         logger.info(f"[DATASET] name={dataset}")
@@ -314,6 +315,19 @@ def main():
                 )
             except Exception as exc:
                 logger.error(f"  [FAILED] dataset={dataset} model={model_type} error={exc}")
+                failed.append(f"{dataset}/{model_type}")
+
+    if failed:
+        # Exiting zero here let the pipeline checkpoint stage 5 and run stage 6 and the
+        # sweep on default parameters: on 2026-10-09 an OOM killed every family's
+        # search workers and the run carried on untuned. Leave the latest pointer alone
+        # too, so a resume does not read the partial study.
+        logger.error(
+            "[PHASE] HPO study failed: %d family(ies) raised: %s",
+            len(failed),
+            ", ".join(failed),
+        )
+        sys.exit(1)
 
     logger.info("[PHASE] HPO study complete")
     default_hpo_root = project_root / f"output/{args.pipeline}/studies/hpo"
