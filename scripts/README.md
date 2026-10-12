@@ -128,6 +128,7 @@ pipeline config, then defaults/auto-discovery.
 | `studies/run_grouping_analysis.py` | Clustering and similarity subgroup discovery | `output/cardiac/studies/grouping/` and run-linked grouping outputs |
 | `studies/generate_dissertation_plots.py` | Batch dissertation figures | `output/cardiac/studies/dissertation_figures/<run_id>/` |
 | `studies/run_bootstrap_calibration.py` | Null-calibration study for the fairness bootstrap | stdout; CSVs only with `--output <file>` |
+| `studies/run_bootstrap_variance_check.py` | Bootstrap SE vs true spread of each pairwise difference, per scheme, on null cohorts | `output/cardiac/studies/null_calibration/variance_check/` |
 | `studies/run_profiling_sensitivity_study.py` | Profiling metric sensitivity on synthetic datasets | `output/synthetic/studies/profiling_sensitivity/<study_id>/` |
 | `studies/generate_profiling_sensitivity_plots.py` | Plots for the profiling sensitivity study | `<study_id>/figures/` |
 
