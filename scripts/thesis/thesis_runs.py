@@ -37,6 +37,15 @@ CARDIAC_COHORTS = ((RUN_CARDIAC, UCI), (RUN_C70, ["cardio70k"]))
 REDUNDANT = {("equalized_odds", "tpr"), ("equalized_odds", "fnr")}
 
 
+def split_of(cohort: str) -> str:
+    """The prediction split the chapter quotes: held-out for Cardio70k, pooled CV otherwise."""
+    return "test" if cohort == "cardio70k" else "cv"
+
+
+def models_of(cohort: str) -> list[str]:
+    return C70_MODELS if cohort == "cardio70k" else UCI_MODELS
+
+
 def run_dir(run: str) -> Path:
     """A cardiac or dermatology run directory."""
     for base in (CARD, DERM):

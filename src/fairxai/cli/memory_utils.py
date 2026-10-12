@@ -15,6 +15,13 @@ _BYTES_PER_ELEMENT = 8
 # train split + test split + predictions ≈ 3 copies
 _CV_COPY_FACTOR = 3
 
+# Resident memory of one worker process before it touches the data: the
+# interpreter plus the numpy/sklearn/xgboost import chain. Measured at about
+# 2.1 GB per loky worker on 2026-10-09, when 14 HPO workers on Cleveland
+# (303 rows) were OOM-killed on a 30 GB machine. The data term alone budgets
+# a few MB per job on the UCI cohorts, so without this floor the cap never bites.
+_WORKER_BASE_BYTES = 2_500_000_000
+
 
 def safe_n_jobs(
     n_rows: int,
@@ -26,7 +33,7 @@ def safe_n_jobs(
     """Return a job count that keeps estimated CV memory within budget.
 
     Estimates peak memory as:
-        n_rows × n_cols × bytes_per_element × cv_copy_factor × cv_folds × n_jobs
+        (worker_base + n_rows × n_cols × bytes_per_element × cv_copy_factor × cv_folds) × n_jobs
 
     Falls back to a normalized requested value if psutil is unavailable or
     n_rows/n_cols are non-positive.
@@ -57,9 +64,9 @@ def safe_n_jobs(
         logger.debug("psutil unavailable — skipping memory cap on n_jobs")
         return resolved_requested
 
-    bytes_per_job = n_rows * n_cols * _BYTES_PER_ELEMENT * _CV_COPY_FACTOR * cv_folds
-    if bytes_per_job <= 0:
-        return resolved_requested
+    bytes_per_job = (
+        _WORKER_BASE_BYTES + n_rows * n_cols * _BYTES_PER_ELEMENT * _CV_COPY_FACTOR * cv_folds
+    )
 
     budget = int(available_bytes * max_memory_fraction)
     safe = max(1, budget // bytes_per_job)

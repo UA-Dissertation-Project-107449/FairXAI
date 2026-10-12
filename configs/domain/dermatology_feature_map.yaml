@@ -1,4 +1,6 @@
 # Canonical feature mapping for dermatology datasets.
+# DermatologyDataLoader (PAD-UFES-20) takes its source column names from the
+# aliases here. Do not name them again in configs/schema/dermatology.json.
 
 sensitive:
   age:

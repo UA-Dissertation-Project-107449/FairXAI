@@ -5,9 +5,6 @@
       "relative_dir": "pad_ufes_20",
       "source": "PAD-UFES-20",
       "label": "diagnostic",
-      "target": "diagnostic",
-      "target_standardized": "skin_cancer",
-      "image_id_column": "img_id",
       "image_globs": [
         "images/*.png",
         "images/imgs_part_*/*.png"

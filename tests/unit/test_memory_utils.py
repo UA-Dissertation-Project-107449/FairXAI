@@ -32,3 +32,16 @@ def test_safe_n_jobs_caps_auto_request_by_memory_budget(monkeypatch) -> None:
     )
 
     assert capped == 1
+
+
+def test_safe_n_jobs_counts_worker_base_memory_on_small_data(monkeypatch) -> None:
+    # Cleveland-sized data, 30 GB machine: the data term is a few MB per job, so
+    # only the per-worker base keeps 14 workers (~2.1 GB each) from an OOM.
+    fake_psutil = SimpleNamespace(virtual_memory=lambda: SimpleNamespace(available=29_000_000_000))
+    monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+
+    capped = safe_n_jobs(
+        n_rows=303, n_cols=13, n_requested=14, cv_folds=5, max_memory_fraction=0.80
+    )
+
+    assert capped == 9

@@ -18,7 +18,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
-from build_ledger import _nondominated, cluster_gaps, split_of  # noqa: E402
+from build_ledger import _nondominated, cluster_gaps  # noqa: E402
 from matplotlib.image import imread  # noqa: E402
 from thesis_runs import (  # noqa: E402
     C70_MODELS,
@@ -29,7 +29,9 @@ from thesis_runs import (  # noqa: E402
     RUN_C70,
     RUN_CARDIAC,
     RUN_DERM_AUG,
+    RUN_DERM_CACHED,
     UCI_MODELS,
+    split_of,
 )
 
 OUT = DEFAULT_OUT / "figures"
@@ -59,7 +61,7 @@ FAMILY = {
     "svm": "SVM",
     "xgboost": "XGB",
 }
-COHORT = {"cleveland_uci": "Cleveland", "four_site_uci": "Four-site", "cardio70k": "Cardio70k"}
+COHORT = {"cleveland_uci": "Cleveland", "four_site_uci": "Four-site", "cardio70k": "Cardiovascular"}
 FAM_COLOR = {"LR": "#1b6ca8", "RF": "#3a9d5d", "SVM": "#c0762c", "XGB": "#8e4585"}
 AGE_RANK = {"<40": 0, "40-49": 1, "50-59": 2, "60-69": 3, "70+": 4}
 COHORTS = [(RUN_CARDIAC, "cleveland_uci"), (RUN_CARDIAC, "four_site_uci"), (RUN_C70, "cardio70k")]
@@ -94,7 +96,7 @@ def fig_evidence() -> None:
     specs = [
         (RUN_CARDIAC, "cleveland_uci", UCI_MODELS, "Cleveland (n=297)"),
         (RUN_CARDIAC, "four_site_uci", UCI_MODELS, "Four-site (n=918)"),
-        (RUN_C70, "cardio70k", C70_MODELS, "Cardio70k (n=68,749)"),
+        (RUN_C70, "cardio70k", C70_MODELS, "Cardiovascular (n=68,749)"),
     ]
     fig, axes = plt.subplots(1, 3, figsize=(WIDTH, 1.9))
     for ax, (run, cohort, models, title) in zip(axes, specs):
@@ -310,7 +312,7 @@ def fig_shap_share() -> None:
     """Per-group attribution share by age group, four-site and Cardio70k logistic regression."""
     specs = [
         (RUN_CARDIAC, "four_site_uci__logistic_regression", "Four-site LR"),
-        (RUN_C70, "cardio70k__logistic_regression", "Cardio70k LR"),
+        (RUN_C70, "cardio70k__logistic_regression", "Cardiovascular LR"),
     ]
     fig, axes = plt.subplots(1, 2, figsize=(WIDTH, 2.0), gridspec_kw={"wspace": 0.42})
     for ax, (run, key, title) in zip(axes, specs):
@@ -347,23 +349,29 @@ def fig_shap_share() -> None:
 
 
 def fig_gradcam() -> None:
-    """Four stratified Grad-CAM cases from the augmented dermatology run."""
-    base = DERM / "runs" / RUN_DERM_AUG / "baseline" / "explanations"
+    """Four stratified Grad-CAM cases, augmented arm beside the no-augmentation arm.
+
+    Both arms explain the same stratified image set, so each row is one image and
+    one backbone under the two training regimes; the outcome per arm comes from
+    the explanation manifest, not from the caption.
+    """
+    arms = (("augmented", RUN_DERM_AUG), ("no augmentation", RUN_DERM_CACHED))
     cases = [
-        ("resnet18", "008_PAT_805_1517_154", "(a) ResNet-18, missed cancer, III–IV"),
-        (
-            "mobilenet_v3_large",
-            "008_PAT_805_1517_154",
-            "(b) MobileNetV3-Large, missed cancer, III–IV",
-        ),
-        ("densenet121", "019_PAT_770_1451_136", "(c) DenseNet-121, detected cancer, V–VI"),
-        ("densenet121", "015_PAT_707_1327_245", "(d) DenseNet-121, false alarm, V–VI"),
+        ("resnet18", "014_PAT_207_1280_15", "ResNet-18, cancer, III–IV"),
+        ("densenet121", "007_PAT_926_1758_714", "DenseNet-121, cancer, III–IV"),
+        ("densenet121", "017_PAT_770_1451_136", "DenseNet-121, cancer, V–VI"),
+        ("resnet18", "011_PAT_898_1706_496", "ResNet-18, benign, III–IV"),
     ]
-    fig, axes = plt.subplots(2, 2, figsize=(WIDTH, 3.1))
-    for ax, (backbone, img, lab) in zip(axes.flat, cases):
-        ax.imshow(imread(base / f"pad_ufes_20_{backbone}" / "gradcam" / f"{img}.png"))
-        ax.set_axis_off()
-        ax.set_title(lab, loc="left", fontsize=8.5)
+    words = {"TP": "detected", "FN": "missed", "FP": "false alarm", "TN": "cleared"}
+    fig, axes = plt.subplots(len(cases), 2, figsize=(WIDTH, 5.6))
+    for row, (backbone, img, lab) in zip(axes, cases):
+        for ax, (arm, run) in zip(row, arms):
+            base = DERM / "runs" / run / "baseline" / "explanations" / f"pad_ufes_20_{backbone}"
+            manifest = pd.read_csv(base / "manifest.csv")
+            hit = manifest[(manifest.method == "gradcam") & manifest.png_path.str.contains(img)]
+            ax.imshow(imread(base / "gradcam" / f"{img}.png"))
+            ax.set_axis_off()
+            ax.set_title(f"{lab}: {words[hit.outcome.iloc[0]]} ({arm})", loc="left", fontsize=8)
     fig.tight_layout(h_pad=0.4, w_pad=0.6)
     save(fig, "gradcam_cases")
 
@@ -460,7 +468,7 @@ def fig_mitigation_deltas() -> None:
         ax.axvline(0, color="#555555", lw=0.6)
         for k in range(len(COHORTS), len(rows), len(COHORTS)):
             ax.axhline(k - 0.5, color="#cccccc", lw=0.5, zorder=0)
-        ax.set_title(f"Constrained on {title.lower()}", loc="left")
+        ax.set_title(f"{title} constraint", loc="left")
         ax.set_xlabel("change in parity gap")
         print(f"  mitigation {attr}: {len(s)} arms, {int(s.significant.sum())} significant")
     labels = [f"{TECHNIQUES[t]}, {COHORT[c]}" for t, c in rows]

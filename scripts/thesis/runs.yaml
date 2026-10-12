@@ -3,16 +3,16 @@
 # Paths are relative to the FairXAI output/ directory unless absolute.
 
 cardiac:
-  uci: run_20260927_182904_816_5050_ee20af            # run 1b (_agefix): Cleveland + four-site
-  cardio70k_subsample: run_20260926_143903_278_484356_d1ab8b  # run 2: 10k subsample
-  cardio70k: run_20260926_162620_206_680953_2acce6      # run 3: full cohort, LR/RF/XGB
+  uci: run_20261009_095139_698_19024_805235             # run 1: Cleveland + four-site
+  cardio70k_subsample: run_20261009_124543_317_495696_99e234  # run 2: 10k subsample
+  cardio70k: run_20261009_143631_043_695923_d442a7      # run 3: full cohort, LR/RF/XGB
 
 dermatology:
-  augmented: run_20260927_000445_766_897598_399e84      # run 4
-  cached_no_aug: run_20260927_013725_120_903298_1f274c  # run 5: no augmentation, cached features
+  augmented: run_20261009_222736_881_928195_0e5082      # run 4
+  cached_no_aug: run_20261009_235457_936_936595_e3c862  # run 5: no augmentation, cached features
 
 studies:
-  null_calibration: cardiac/studies/null_calibration/bsweep_20260928
+  null_calibration: cardiac/studies/null_calibration/bsweep_20261009
   synthetic: synthetic/studies/profiling_sensitivity/run_20260930_124520_238_58445_1ff6fc
 
 # Raw data the outcome tables read (relative to the FairXAI root).
