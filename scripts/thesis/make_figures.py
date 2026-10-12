@@ -61,7 +61,7 @@ FAMILY = {
     "svm": "SVM",
     "xgboost": "XGB",
 }
-COHORT = {"cleveland_uci": "Cleveland", "four_site_uci": "Four-site", "cardio70k": "Cardio70k"}
+COHORT = {"cleveland_uci": "Cleveland", "four_site_uci": "Four-site", "cardio70k": "Cardiovascular"}
 FAM_COLOR = {"LR": "#1b6ca8", "RF": "#3a9d5d", "SVM": "#c0762c", "XGB": "#8e4585"}
 AGE_RANK = {"<40": 0, "40-49": 1, "50-59": 2, "60-69": 3, "70+": 4}
 COHORTS = [(RUN_CARDIAC, "cleveland_uci"), (RUN_CARDIAC, "four_site_uci"), (RUN_C70, "cardio70k")]
@@ -96,7 +96,7 @@ def fig_evidence() -> None:
     specs = [
         (RUN_CARDIAC, "cleveland_uci", UCI_MODELS, "Cleveland (n=297)"),
         (RUN_CARDIAC, "four_site_uci", UCI_MODELS, "Four-site (n=918)"),
-        (RUN_C70, "cardio70k", C70_MODELS, "Cardio70k (n=68,749)"),
+        (RUN_C70, "cardio70k", C70_MODELS, "Cardiovascular (n=68,749)"),
     ]
     fig, axes = plt.subplots(1, 3, figsize=(WIDTH, 1.9))
     for ax, (run, cohort, models, title) in zip(axes, specs):
@@ -312,7 +312,7 @@ def fig_shap_share() -> None:
     """Per-group attribution share by age group, four-site and Cardio70k logistic regression."""
     specs = [
         (RUN_CARDIAC, "four_site_uci__logistic_regression", "Four-site LR"),
-        (RUN_C70, "cardio70k__logistic_regression", "Cardio70k LR"),
+        (RUN_C70, "cardio70k__logistic_regression", "Cardiovascular LR"),
     ]
     fig, axes = plt.subplots(1, 2, figsize=(WIDTH, 2.0), gridspec_kw={"wspace": 0.42})
     for ax, (run, key, title) in zip(axes, specs):
@@ -468,7 +468,7 @@ def fig_mitigation_deltas() -> None:
         ax.axvline(0, color="#555555", lw=0.6)
         for k in range(len(COHORTS), len(rows), len(COHORTS)):
             ax.axhline(k - 0.5, color="#cccccc", lw=0.5, zorder=0)
-        ax.set_title(f"Constrained on {title.lower()}", loc="left")
+        ax.set_title(f"{title} constraint", loc="left")
         ax.set_xlabel("change in parity gap")
         print(f"  mitigation {attr}: {len(s)} arms, {int(s.significant.sum())} significant")
     labels = [f"{TECHNIQUES[t]}, {COHORT[c]}" for t, c in rows]
