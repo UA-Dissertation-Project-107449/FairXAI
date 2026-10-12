@@ -236,3 +236,4 @@ writes under `output/thesis/`:
 | `chapter6_ledger.md` | `build_ledger.py` |
 | `figures/` | `make_figures.py` |
 | `similarity_heldout.json` | `similarity_heldout.py` |
+| `backbone_comparison.csv` | `backbone_comparison.py` |

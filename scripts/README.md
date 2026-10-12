@@ -20,7 +20,7 @@ scripts/
 
 `scripts/thesis/` reads finished runs only. Set the run IDs in `scripts/thesis/runs.yaml`,
 then run `performance_intervals.py` (minutes; the ledger reads its CSVs), `build_ledger.py`,
-`make_figures.py` and `similarity_heldout.py`. Each writes under `output/thesis/` by default;
+`make_figures.py`, `similarity_heldout.py` and `backbone_comparison.py`. Each writes under `output/thesis/` by default;
 pass `--out` to write elsewhere.
 
 Both domains run end to end. Cardiac carries the quantitative fairness claims;
@@ -141,6 +141,7 @@ pipeline config, then defaults/auto-discovery.
 | `thesis/build_ledger.py` | Chapter 6 numbers ledger | `chapter6_ledger.md` |
 | `thesis/make_figures.py` | Chapter 6 and 7 figures | `figures/` |
 | `thesis/similarity_heldout.py` | Held-out k-NN consistency with pairwise bootstrap | `similarity_heldout.json` |
+| `thesis/backbone_comparison.py` | Patient-clustered paired bootstrap of dermatology backbone AUC, both arms | `backbone_comparison.csv` |
 
 All thesis outputs land under `output/thesis/` unless `--out` says otherwise.
 
