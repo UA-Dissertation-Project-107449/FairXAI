@@ -397,11 +397,18 @@ def fig_gradcam() -> None:
                 if i == 0:
                     ax.text(
                         0.5, 1.22, head, transform=ax.transAxes, ha="center", va="bottom",
-                        fontsize=7.5, color="#555555",
+                        fontsize=7.5,
                     )  # fmt: skip
             pair[0].set_title(
-                f"{lab}: {words[hit.outcome.iloc[0]]} ({arm})", loc="left", fontsize=7.5
+                f"{lab}: {words[hit.outcome.iloc[0]]}", loc="left", fontsize=7.5, color="#555555"
             )
+    # The arm heads its column once; the case titles are lighter, so the headers lead.
+    for j, (arm, _) in enumerate(arms):
+        pos = outer[0, j].get_position(fig)
+        fig.text(
+            (pos.x0 + pos.x1) / 2, pos.y1 + 0.072, arm.capitalize(), ha="center", va="bottom",
+            fontsize=8.5, fontweight="bold",
+        )  # fmt: skip
     save(fig, "gradcam_cases")
 
 
