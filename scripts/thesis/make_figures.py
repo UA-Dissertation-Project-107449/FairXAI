@@ -482,29 +482,39 @@ def fig_mitigation_deltas() -> None:
         )
     d = pd.concat(frames)
     d["significant"] = d.significant.fillna(False).astype(bool)
-    rows = [(t, c) for t in TECHNIQUES for _, c in COHORTS]
+    # Each technique gets a header row, then one row per cohort.
+    step = len(COHORTS) + 1
+    rows = {
+        (t, c): k * step + 1 + j
+        for k, t in enumerate(TECHNIQUES)
+        for j, (_, c) in enumerate(COHORTS)
+    }
     offs = {"LR": -0.27, "RF": -0.09, "SVM": 0.09, "XGB": 0.27}
     panels = [("sex", "Sex"), ("age_group", "Age group"), ("group_cluster", "Cluster")]
-    fig, axes = plt.subplots(1, 3, figsize=(WIDTH, 4.4), sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(WIDTH, 5.4), sharey=True)
     for ax, (attr, title) in zip(axes, panels):
         s = d[d.constraint_attr == attr]
         for _, r in s.iterrows():
             fam = FAMILY[r.model_type]
             col = FAM_COLOR[fam]
-            yv = rows.index((r.technique, r.dataset)) + offs[fam]
+            yv = rows[(r.technique, r.dataset)] + offs[fam]
             alpha = 0.9 if r.significant else 0.45
             ax.plot([r.ci_low, r.ci_high], [yv, yv], color=col, lw=0.8, alpha=alpha)
             mfc = col if r.significant else "white"
             ax.plot(r.difference, yv, "o", ms=2.6, color=col, mfc=mfc, mew=0.6)
         ax.axvline(0, color="#555555", lw=0.6)
-        for k in range(len(COHORTS), len(rows), len(COHORTS)):
-            ax.axhline(k - 0.5, color="#cccccc", lw=0.5, zorder=0)
+        for k in range(1, len(TECHNIQUES)):
+            ax.axhline(k * step - 0.5, color="#cccccc", lw=0.5, zorder=0)
         ax.set_title(f"{title} constraint", loc="left")
         ax.set_xlabel("change in parity gap")
         print(f"  mitigation {attr}: {len(s)} arms, {int(s.significant.sum())} significant")
-    labels = [f"{TECHNIQUES[t]}, {COHORT[c]}" for t, c in rows]
-    axes[0].set_yticks(range(len(rows)), labels)
-    axes[0].set_ylim(len(rows) - 0.5, -0.5)
+    axes[0].set_yticks(list(rows.values()), [COHORT[c] for _, c in rows])
+    axes[0].set_ylim(len(TECHNIQUES) * step - 0.5, -0.5)
+    for k, name in enumerate(TECHNIQUES.values()):
+        axes[0].annotate(
+            name, (0, k * step), xycoords=("axes fraction", "data"), xytext=(-3, 0),
+            textcoords="offset points", ha="right", va="center", fontweight="bold", fontsize=7.5,
+        )  # fmt: skip
     handles = [
         plt.Line2D([], [], color=FAM_COLOR[k], marker="o", ms=3, lw=1.0, label=k) for k in offs
     ]
