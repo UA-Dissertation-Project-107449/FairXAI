@@ -507,12 +507,13 @@ def fig_cluster_gaps() -> None:
             lw=1.2,
             label="outcome-rate gap",
         )
-        ticks = [f"{c}\n{r:.0%}\n{n:,}" for c, r, n in zip(out.cluster, out.outcome_rate, out.n)]
+        ticks = [f"C{c}\n{r:.0%}\n{n:,}" for c, r, n in zip(out.cluster, out.outcome_rate, out.n)]
         ax.set_xticks(range(len(order)), ticks, fontsize=6.5)
         ax.set_title(title, loc="left")
         ax.set_xlabel("cluster, outcome rate, held-out n")
     axes[0].set_ylabel("max – min over groups")
     axes[0].set_ylim(0, None)
+    axes[1].tick_params(labelleft=True)
     h, lab = axes[0].get_legend_handles_labels()
     fig.legend(h, lab, loc="lower center", ncol=4, frameon=False, bbox_to_anchor=(0.5, -0.11))
     fig.tight_layout()
