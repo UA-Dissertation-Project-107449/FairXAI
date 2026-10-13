@@ -20,7 +20,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from build_ledger import _nondominated, cluster_gaps  # noqa: E402
 from matplotlib.image import imread  # noqa: E402
-from matplotlib.ticker import FormatStrFormatter, MaxNLocator  # noqa: E402
+from matplotlib.ticker import FormatStrFormatter, MaxNLocator, MultipleLocator  # noqa: E402
 from thesis_runs import (  # noqa: E402
     C70_MODELS,
     CARD,
@@ -256,7 +256,7 @@ def fig_binning() -> None:
 def fig_binning_grid() -> None:
     """Appendix C: age parity gap under every binning scheme, per cohort and model family."""
     schemes = [s for fam in SCHEME_FAMILIES.values() for s in fam]
-    fig, axes = plt.subplots(1, 3, figsize=(WIDTH, 4.6), sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(WIDTH, 4.6), sharex=True, sharey=True)
     offs = {"LR": -0.24, "RF": -0.08, "SVM": 0.08, "XGB": 0.24}
     for ax, (run, cohort) in zip(axes, COHORTS):
         rd = CARD / "runs" / run
@@ -283,7 +283,9 @@ def fig_binning_grid() -> None:
             edge += len(fam)
         ax.set_title(COHORT[cohort], loc="left")
         ax.set_xlabel("age parity gap")
-        ax.set_xlim(0, None)
+    # One x range for the three cohorts, so a gap reads the same distance in every panel.
+    axes[0].set_xlim(0, None)
+    axes[0].xaxis.set_major_locator(MultipleLocator(0.25))
     names = [s.replace("_", " ").replace("adaptive quantile", "adaptive q.") for s in schemes]
     axes[0].set_yticks(range(len(schemes)), names)
     axes[0].set_ylim(len(schemes) - 0.5, -0.5)
