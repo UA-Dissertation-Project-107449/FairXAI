@@ -20,6 +20,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from build_ledger import _nondominated, cluster_gaps  # noqa: E402
 from matplotlib.image import imread  # noqa: E402
+from matplotlib.ticker import FormatStrFormatter, MaxNLocator  # noqa: E402
 from thesis_runs import (  # noqa: E402
     C70_MODELS,
     CARD,
@@ -407,6 +408,8 @@ def fig_frontier() -> None:
             alpha=0.6,
         )
         ax.set_title(f"{COHORT[cohort]} ({len(t)} cells)", loc="left")
+        ax.yaxis.set_major_locator(MaxNLocator(4, steps=[1, 1.5, 2, 2.5, 5, 10], min_n_ticks=4))
+        ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
         ax.set_xlabel("sex parity gap (5-fold)")
         distinct = len(nd.drop_duplicates(["f1_value", crit]))
         print(f"  frontier {cohort}: {len(t)} cells, {len(nd)} non-dominated, {distinct} distinct")
