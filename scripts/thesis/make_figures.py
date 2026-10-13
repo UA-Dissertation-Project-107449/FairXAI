@@ -76,6 +76,14 @@ SCHEME_FAMILIES = {
 }
 
 
+def _not_significant_handle() -> plt.Line2D:
+    """Legend entry for an open marker; only the line fades, so the fill stays white."""
+    return plt.Line2D(
+        [], [], color="#77777773", marker="o", mfc="white", mec="#777777", ms=3, lw=1.0,
+        label="not significant after BH",
+    )  # fmt: skip
+
+
 def save(fig: plt.Figure, name: str) -> None:
     fig.savefig(OUT / f"{name}.pdf")
     fig.savefig(OUT / f"{name}.png", dpi=300)
@@ -179,19 +187,7 @@ def fig_foursite_age() -> None:
     handles = [
         plt.Line2D([], [], color=FAM_COLOR[k], marker="o", ms=3, lw=1.0, label=k) for k in offs
     ]
-    handles.append(
-        plt.Line2D(
-            [],
-            [],
-            color="#777777",
-            marker="o",
-            mfc="white",
-            ms=3,
-            lw=1.0,
-            alpha=0.5,
-            label="not significant after BH",
-        )
-    )
+    handles.append(_not_significant_handle())
     fig.legend(
         handles=handles, loc="lower center", ncol=5, frameon=False, bbox_to_anchor=(0.5, -0.07)
     )
@@ -477,12 +473,7 @@ def fig_mitigation_deltas() -> None:
     handles = [
         plt.Line2D([], [], color=FAM_COLOR[k], marker="o", ms=3, lw=1.0, label=k) for k in offs
     ]
-    handles.append(
-        plt.Line2D(
-            [], [], color="#777777", marker="o", mfc="white", ms=3, lw=1.0, alpha=0.5,
-            label="not significant after BH",
-        )  # fmt: skip
-    )
+    handles.append(_not_significant_handle())
     fig.legend(
         handles=handles, loc="lower center", ncol=5, frameon=False, bbox_to_anchor=(0.5, -0.05)
     )
