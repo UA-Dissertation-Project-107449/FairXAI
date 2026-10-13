@@ -86,7 +86,7 @@ def _not_significant_handle() -> plt.Line2D:
 
 
 def save(fig: plt.Figure, name: str) -> None:
-    fig.savefig(OUT / f"{name}.pdf")
+    fig.savefig(OUT / f"{name}.pdf", dpi=300)
     fig.savefig(OUT / f"{name}.png", dpi=300)
     plt.close(fig)
     print(f"wrote {OUT / name}.pdf")
@@ -345,12 +345,32 @@ def fig_shap_share() -> None:
     save(fig, "shap_share_age")
 
 
+def _gradcam_halves(path: Path) -> tuple[np.ndarray, np.ndarray]:
+    """The input and the overlay of one saved Grad-CAM panel, without its baked-in titles.
+
+    The panel is a matplotlib figure (input left, overlay right) whose titles sit
+    above the images; the crop keeps the two image boxes found on the white page.
+    """
+    a = imread(path)[..., :3]
+    ink = a.sum(axis=2) < 2.9
+    rows = np.flatnonzero(ink.any(axis=1))
+    top = rows[np.flatnonzero(np.diff(rows) > 1)[-1] + 1]  # first row after the title gap
+    body = ink[top:]
+    cols = np.flatnonzero(body.any(axis=0))
+    split = np.flatnonzero(np.diff(cols) > 1)[0]
+    bottom = top + np.flatnonzero(body.any(axis=1))[-1] + 1
+    left = a[top:bottom, cols[0] : cols[split] + 1]
+    right = a[top:bottom, cols[split + 1] : cols[-1] + 1]
+    return left, right
+
+
 def fig_gradcam() -> None:
     """Four stratified Grad-CAM cases, augmented arm beside the no-augmentation arm.
 
     Both arms explain the same stratified image set, so each row is one image and
     one backbone under the two training regimes; the outcome per arm comes from
-    the explanation manifest, not from the caption.
+    the explanation manifest, not from the caption. Images are embedded at their
+    native resolution (no resampling), and the input/Grad-CAM headers appear once.
     """
     arms = (("augmented", RUN_DERM_AUG), ("no augmentation", RUN_DERM_CACHED))
     cases = [
@@ -360,16 +380,26 @@ def fig_gradcam() -> None:
         ("resnet18", "011_PAT_898_1706_496", "ResNet-18, benign, III–IV"),
     ]
     words = {"TP": "detected", "FN": "missed", "FP": "false alarm", "TN": "cleared"}
-    fig, axes = plt.subplots(len(cases), 2, figsize=(WIDTH, 5.6))
-    for row, (backbone, img, lab) in zip(axes, cases):
-        for ax, (arm, run) in zip(row, arms):
+    fig = plt.figure(figsize=(WIDTH, 6.0))
+    outer = fig.add_gridspec(len(cases), 2, hspace=0.32, wspace=0.14)
+    for i, (backbone, img, lab) in enumerate(cases):
+        for j, (arm, run) in enumerate(arms):
             base = DERM / "runs" / run / "baseline" / "explanations" / f"pad_ufes_20_{backbone}"
             manifest = pd.read_csv(base / "manifest.csv")
             hit = manifest[(manifest.method == "gradcam") & manifest.png_path.str.contains(img)]
-            ax.imshow(imread(base / "gradcam" / f"{img}.png"))
-            ax.set_axis_off()
-            ax.set_title(f"{lab}: {words[hit.outcome.iloc[0]]} ({arm})", loc="left", fontsize=8)
-    fig.tight_layout(h_pad=0.4, w_pad=0.6)
+            halves = _gradcam_halves(base / "gradcam" / f"{img}.png")
+            pair = outer[i, j].subgridspec(1, 2, wspace=0.03).subplots()
+            for ax, half, head in zip(pair, halves, ("input", "Grad-CAM")):
+                ax.imshow(half, interpolation="none")
+                ax.set_axis_off()
+                if i == 0:
+                    ax.text(
+                        0.5, 1.22, head, transform=ax.transAxes, ha="center", va="bottom",
+                        fontsize=7.5, color="#555555",
+                    )  # fmt: skip
+            pair[0].set_title(
+                f"{lab}: {words[hit.outcome.iloc[0]]} ({arm})", loc="left", fontsize=7.5
+            )
     save(fig, "gradcam_cases")
 
 
