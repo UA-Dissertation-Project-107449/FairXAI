@@ -517,11 +517,6 @@ def fig_mitigation_deltas() -> None:
         print(f"  mitigation {attr}: {len(s)} arms, {int(s.significant.sum())} significant")
     axes[0].set_yticks(list(rows.values()), [COHORT[c] for _, c in rows])
     axes[0].set_ylim(len(TECHNIQUES) * step - 0.5, -0.5)
-    for k, name in enumerate(TECHNIQUES.values()):
-        axes[0].annotate(
-            name, (0, k * step), xycoords=("axes fraction", "data"), xytext=(-3, 0),
-            textcoords="offset points", ha="right", va="center", fontweight="bold", fontsize=7.5,
-        )  # fmt: skip
     handles = [
         plt.Line2D([], [], color=FAM_COLOR[k], marker="o", ms=3, lw=1.0, label=k) for k in offs
     ]
@@ -530,6 +525,16 @@ def fig_mitigation_deltas() -> None:
         handles=handles, loc="lower center", ncol=5, frameon=False, bbox_to_anchor=(0.5, -0.05)
     )
     fig.tight_layout()
+    # Technique headers start where the widest cohort label starts, so they read as
+    # left-aligned group titles above right-aligned rows; placed after the layout is fixed.
+    renderer = fig.canvas.get_renderer()
+    left = min(t.get_window_extent(renderer).x0 for t in axes[0].get_yticklabels())
+    x = axes[0].transAxes.inverted().transform((left, 0))[0]
+    for k, name in enumerate(TECHNIQUES.values()):
+        axes[0].text(
+            x, k * step, name, transform=axes[0].get_yaxis_transform(), ha="left", va="center",
+            fontweight="bold", fontsize=7.5,
+        )  # fmt: skip
     save(fig, "mitigation_deltas")
 
 
