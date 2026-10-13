@@ -20,7 +20,12 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from build_ledger import _nondominated, cluster_gaps  # noqa: E402
 from matplotlib.image import imread  # noqa: E402
-from matplotlib.ticker import FormatStrFormatter, MaxNLocator, MultipleLocator  # noqa: E402
+from matplotlib.ticker import (  # noqa: E402
+    FormatStrFormatter,
+    FuncFormatter,
+    MaxNLocator,
+    MultipleLocator,
+)
 from thesis_runs import (  # noqa: E402
     C70_MODELS,
     CARD,
@@ -470,6 +475,11 @@ TECHNIQUES = {
 }
 
 
+def _signed_1dp(v: float, _pos: int) -> str:
+    """One-decimal tick label with a true minus sign, as the default formatter draws it."""
+    return f"{round(v, 1) + 0.0:.1f}".replace("-", "\u2212")
+
+
 def fig_mitigation_deltas() -> None:
     """Change in the targeted parity gap per arm, one panel per constraint attribute."""
     frames = []
@@ -514,6 +524,8 @@ def fig_mitigation_deltas() -> None:
             ax.axhline(k * step - 0.5, color="#cccccc", lw=0.5, zorder=0)
         ax.set_title(f"{title} constraint", loc="left")
         ax.set_xlabel("change in parity gap")
+        ax.xaxis.set_major_locator(MaxNLocator(3, steps=[1, 2, 4, 5, 10], min_n_ticks=3))
+        ax.xaxis.set_major_formatter(FuncFormatter(_signed_1dp))
         print(f"  mitigation {attr}: {len(s)} arms, {int(s.significant.sum())} significant")
     axes[0].set_yticks(list(rows.values()), [COHORT[c] for _, c in rows])
     axes[0].set_ylim(len(TECHNIQUES) * step - 0.5, -0.5)
