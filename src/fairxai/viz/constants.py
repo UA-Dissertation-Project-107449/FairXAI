@@ -1,4 +1,4 @@
-"""Shared constants and normalization helpers for notebook visualizations."""
+"""Shared constants and normalization helpers for visualizations."""
 
 from __future__ import annotations
 

@@ -12,8 +12,6 @@ data/external/
 output/*
 
 # Local analysis outputs
-notebooks/**/.ipynb_checkpoints/
-notebooks/runs/
 logs/
 
 # ===================================================================

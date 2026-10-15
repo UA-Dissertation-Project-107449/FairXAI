@@ -113,7 +113,20 @@ resume. See [docs/architecture/pipeline-flow-control.md](docs/architecture/pipel
 | `data/` | External/raw/processed datasets; generated data is not the source of truth |
 | `output/` | Generated run/study artifacts |
 | `logs/` | Run logs and warning/error summaries |
-| `notebooks/` | Exploratory notebooks plus exported tables/figures |
+
+The exploratory Jupyter notebooks (cardiac EDA and profiling), their exported
+figures and tables, and the `notebook_utils` package were removed on 2026-10-15.
+They no longer ran against the final pipeline, and FairXAI is frozen after the
+dissertation, so they were not rebuilt. Git history still has them.
+
+## WebApp Integration
+
+WebApp_DataLenzAI runs FairXAI as a subprocess through the `fairxai` CLI
+(`src/fairxai/cli/main.py`: `profile`, `characterize`, `triage`, `binning`,
+`clustering`). Each subcommand wraps a JSON adapter in
+[src/fairxai/integration/](src/fairxai/integration/README.md). Those two
+packages and what they import are the whole surface the WebApp uses; the
+WebApp records the contract in `docs/decisions/ADR-001-subprocess-integration.md`.
 
 ## Outputs
 

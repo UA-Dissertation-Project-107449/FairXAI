@@ -15,7 +15,7 @@ Each module folder (e.g., `fairness/`, `models/`) must include:
   - Short usage example
   - External dependencies (when relevant)
 
-Top-level folders (`configs/`, `scripts/`, `data/`, `notebooks/`) should link
+Top-level folders (`configs/`, `scripts/`, `data/`) should link
 back to `docs/README.md`.
 
 ## 1b) Docs Directory Layout

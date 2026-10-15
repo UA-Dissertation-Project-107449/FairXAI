@@ -21,7 +21,6 @@ Each first-level package has a local `README.md` with file-level details.
 | `clustering` | Latent subgroup discovery and per-cluster fairness diagnostics | `ClusteringEngine`, `ClusterProfiler`, `FairnessPerCluster` |
 | `similarity` | k-NN individual fairness and violation-density mapping | `SimilarityEngine`, `ViolationDensityMapper` |
 | `integration` | WebApp-oriented JSON adapters around profiling, characterization, triage, binning, clustering | `characterize_dataset`, `profile_dataset`, `triage_dataset`, `run_binning`, `run_clustering` |
-| `notebook_utils` | Notebook path, schema, loading, palette, and labeling helpers | `resolve_root_dir`, `load_raw_datasets`, label helpers |
 | `utils` | Shared config, logging, warning/error capture, accelerator detection | `load_yaml_config`, `setup_logging`, `detect_accelerator` |
 | `viz` | Plotting functions for EDA, fairness, clustering, dissertation figures, dermatology stage figures | `fairness_comparison`, `distributions`, `clustering`, `transformations` exports |
 

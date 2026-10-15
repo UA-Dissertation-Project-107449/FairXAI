@@ -10,7 +10,7 @@ subpackage generates datasets for the profiling-sensitivity study.
 |------|---------|
 | `loaders.py` | Cardiac dataset loaders, standardized raw loading, processed split loading |
 | `preprocessors.py` | Cleaning, clinical constraints, splits, scaling, fairness profiles |
-| `profilers.py` | Dataset-level profile dictionaries used by recommendations/notebooks |
+| `profilers.py` | Dataset-level profile dictionaries used by recommendations |
 | `schemas.py` | Cardiac schema, sex/age mappings, sensitive attribute helpers |
 | `feature_selection.py` | Feature-selection mode helpers |
 | `synthetic/generators.py` | `generate_abstract` (sklearn core + injected sensitive columns) and `generate_healthcare` (cardiac-shaped frame) |
