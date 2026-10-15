@@ -47,7 +47,7 @@ experiment = [
     "tabulate>=0.9.0",          # (reqs: 0.9.0)  pandas to_markdown() backend
 ]
 
-# DEV: Local notebooks, visualisation, and explainability analysis
+# DEV: Visualisation, explainability analysis, tests, and lint tooling
 # Install: pip install -e ".[dev]"
 dev = [
     "matplotlib>=3.8.0",  # (reqs: 3.10.7) plotting and figure generation
@@ -59,8 +59,6 @@ dev = [
     "pytest>=8.0.0",      # test runner
     "pytest-xdist>=3.6.0",# process-level test parallelism (-n auto)
     "ruff>=0.4.0",        # linter (code smells, unused imports, etc.)
-    "ipykernel>=6.20",    # (reqs: 7.1.0)  Jupyter kernel
-    "notebook>=7.0",      #                Jupyter Notebook UI
 ]
 
 # ORCHESTRATION: Prefect-managed multi-step flows — local use only, NOT for HPC
