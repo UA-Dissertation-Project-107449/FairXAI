@@ -20,6 +20,12 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from build_ledger import _nondominated, cluster_gaps  # noqa: E402
 from matplotlib.image import imread  # noqa: E402
+from matplotlib.ticker import (  # noqa: E402
+    FormatStrFormatter,
+    FuncFormatter,
+    MaxNLocator,
+    MultipleLocator,
+)
 from thesis_runs import (  # noqa: E402
     C70_MODELS,
     CARD,
@@ -76,8 +82,16 @@ SCHEME_FAMILIES = {
 }
 
 
+def _not_significant_handle() -> plt.Line2D:
+    """Legend entry for an open marker; only the line fades, so the fill stays white."""
+    return plt.Line2D(
+        [], [], color="#77777773", marker="o", mfc="white", mec="#777777", ms=3, lw=1.0,
+        label="not significant after BH",
+    )  # fmt: skip
+
+
 def save(fig: plt.Figure, name: str) -> None:
-    fig.savefig(OUT / f"{name}.pdf")
+    fig.savefig(OUT / f"{name}.pdf", dpi=300)
     fig.savefig(OUT / f"{name}.png", dpi=300)
     plt.close(fig)
     print(f"wrote {OUT / name}.pdf")
@@ -179,19 +193,7 @@ def fig_foursite_age() -> None:
     handles = [
         plt.Line2D([], [], color=FAM_COLOR[k], marker="o", ms=3, lw=1.0, label=k) for k in offs
     ]
-    handles.append(
-        plt.Line2D(
-            [],
-            [],
-            color="#777777",
-            marker="o",
-            mfc="white",
-            ms=3,
-            lw=1.0,
-            alpha=0.5,
-            label="not significant after BH",
-        )
-    )
+    handles.append(_not_significant_handle())
     fig.legend(
         handles=handles, loc="lower center", ncol=5, frameon=False, bbox_to_anchor=(0.5, -0.07)
     )
@@ -259,7 +261,7 @@ def fig_binning() -> None:
 def fig_binning_grid() -> None:
     """Appendix C: age parity gap under every binning scheme, per cohort and model family."""
     schemes = [s for fam in SCHEME_FAMILIES.values() for s in fam]
-    fig, axes = plt.subplots(1, 3, figsize=(WIDTH, 4.6), sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(WIDTH, 4.6), sharex=True, sharey=True)
     offs = {"LR": -0.24, "RF": -0.08, "SVM": 0.08, "XGB": 0.24}
     for ax, (run, cohort) in zip(axes, COHORTS):
         rd = CARD / "runs" / run
@@ -286,7 +288,9 @@ def fig_binning_grid() -> None:
             edge += len(fam)
         ax.set_title(COHORT[cohort], loc="left")
         ax.set_xlabel("age parity gap")
-        ax.set_xlim(0, None)
+    # One x range for the three cohorts, so a gap reads the same distance in every panel.
+    axes[0].set_xlim(0, None)
+    axes[0].xaxis.set_major_locator(MultipleLocator(0.25))
     names = [s.replace("_", " ").replace("adaptive quantile", "adaptive q.") for s in schemes]
     axes[0].set_yticks(range(len(schemes)), names)
     axes[0].set_ylim(len(schemes) - 0.5, -0.5)
@@ -348,12 +352,32 @@ def fig_shap_share() -> None:
     save(fig, "shap_share_age")
 
 
+def _gradcam_halves(path: Path) -> tuple[np.ndarray, np.ndarray]:
+    """The input and the overlay of one saved Grad-CAM panel, without its baked-in titles.
+
+    The panel is a matplotlib figure (input left, overlay right) whose titles sit
+    above the images; the crop keeps the two image boxes found on the white page.
+    """
+    a = imread(path)[..., :3]
+    ink = a.sum(axis=2) < 2.9
+    rows = np.flatnonzero(ink.any(axis=1))
+    top = rows[np.flatnonzero(np.diff(rows) > 1)[-1] + 1]  # first row after the title gap
+    body = ink[top:]
+    cols = np.flatnonzero(body.any(axis=0))
+    split = np.flatnonzero(np.diff(cols) > 1)[0]
+    bottom = top + np.flatnonzero(body.any(axis=1))[-1] + 1
+    left = a[top:bottom, cols[0] : cols[split] + 1]
+    right = a[top:bottom, cols[split + 1] : cols[-1] + 1]
+    return left, right
+
+
 def fig_gradcam() -> None:
     """Four stratified Grad-CAM cases, augmented arm beside the no-augmentation arm.
 
     Both arms explain the same stratified image set, so each row is one image and
     one backbone under the two training regimes; the outcome per arm comes from
-    the explanation manifest, not from the caption.
+    the explanation manifest, not from the caption. Images are embedded at their
+    native resolution (no resampling), and the input/Grad-CAM headers appear once.
     """
     arms = (("augmented", RUN_DERM_AUG), ("no augmentation", RUN_DERM_CACHED))
     cases = [
@@ -363,16 +387,33 @@ def fig_gradcam() -> None:
         ("resnet18", "011_PAT_898_1706_496", "ResNet-18, benign, III–IV"),
     ]
     words = {"TP": "detected", "FN": "missed", "FP": "false alarm", "TN": "cleared"}
-    fig, axes = plt.subplots(len(cases), 2, figsize=(WIDTH, 5.6))
-    for row, (backbone, img, lab) in zip(axes, cases):
-        for ax, (arm, run) in zip(row, arms):
+    fig = plt.figure(figsize=(WIDTH, 6.0))
+    outer = fig.add_gridspec(len(cases), 2, hspace=0.32, wspace=0.14)
+    for i, (backbone, img, lab) in enumerate(cases):
+        for j, (arm, run) in enumerate(arms):
             base = DERM / "runs" / run / "baseline" / "explanations" / f"pad_ufes_20_{backbone}"
             manifest = pd.read_csv(base / "manifest.csv")
             hit = manifest[(manifest.method == "gradcam") & manifest.png_path.str.contains(img)]
-            ax.imshow(imread(base / "gradcam" / f"{img}.png"))
-            ax.set_axis_off()
-            ax.set_title(f"{lab}: {words[hit.outcome.iloc[0]]} ({arm})", loc="left", fontsize=8)
-    fig.tight_layout(h_pad=0.4, w_pad=0.6)
+            halves = _gradcam_halves(base / "gradcam" / f"{img}.png")
+            pair = outer[i, j].subgridspec(1, 2, wspace=0.03).subplots()
+            for ax, half, head in zip(pair, halves, ("input", "Grad-CAM")):
+                ax.imshow(half, interpolation="none")
+                ax.set_axis_off()
+                if i == 0:
+                    ax.text(
+                        0.5, 1.22, head, transform=ax.transAxes, ha="center", va="bottom",
+                        fontsize=7.5,
+                    )  # fmt: skip
+            pair[0].set_title(
+                f"{lab}: {words[hit.outcome.iloc[0]]}", loc="left", fontsize=7.5, color="#555555"
+            )
+    # The arm heads its column once; the case titles are lighter, so the headers lead.
+    for j, (arm, _) in enumerate(arms):
+        pos = outer[0, j].get_position(fig)
+        fig.text(
+            (pos.x0 + pos.x1) / 2, pos.y1 + 0.072, arm.capitalize(), ha="center", va="bottom",
+            fontsize=8.5, fontweight="bold",
+        )  # fmt: skip
     save(fig, "gradcam_cases")
 
 
@@ -411,6 +452,8 @@ def fig_frontier() -> None:
             alpha=0.6,
         )
         ax.set_title(f"{COHORT[cohort]} ({len(t)} cells)", loc="left")
+        ax.yaxis.set_major_locator(MaxNLocator(4, steps=[1, 1.5, 2, 2.5, 5, 10], min_n_ticks=4))
+        ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
         ax.set_xlabel("sex parity gap (5-fold)")
         distinct = len(nd.drop_duplicates(["f1_value", crit]))
         print(f"  frontier {cohort}: {len(t)} cells, {len(nd)} non-dominated, {distinct} distinct")
@@ -432,6 +475,11 @@ TECHNIQUES = {
 }
 
 
+def _signed_1dp(v: float, _pos: int) -> str:
+    """One-decimal tick label with a true minus sign, as the default formatter draws it."""
+    return f"{round(v, 1) + 0.0:.1f}".replace("-", "\u2212")
+
+
 def fig_mitigation_deltas() -> None:
     """Change in the targeted parity gap per arm, one panel per constraint attribute."""
     frames = []
@@ -451,42 +499,54 @@ def fig_mitigation_deltas() -> None:
         )
     d = pd.concat(frames)
     d["significant"] = d.significant.fillna(False).astype(bool)
-    rows = [(t, c) for t in TECHNIQUES for _, c in COHORTS]
+    # Each technique gets a header row, then one row per cohort.
+    step = len(COHORTS) + 1
+    rows = {
+        (t, c): k * step + 1 + j
+        for k, t in enumerate(TECHNIQUES)
+        for j, (_, c) in enumerate(COHORTS)
+    }
     offs = {"LR": -0.27, "RF": -0.09, "SVM": 0.09, "XGB": 0.27}
     panels = [("sex", "Sex"), ("age_group", "Age group"), ("group_cluster", "Cluster")]
-    fig, axes = plt.subplots(1, 3, figsize=(WIDTH, 4.4), sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(WIDTH, 5.4), sharey=True)
     for ax, (attr, title) in zip(axes, panels):
         s = d[d.constraint_attr == attr]
         for _, r in s.iterrows():
             fam = FAMILY[r.model_type]
             col = FAM_COLOR[fam]
-            yv = rows.index((r.technique, r.dataset)) + offs[fam]
+            yv = rows[(r.technique, r.dataset)] + offs[fam]
             alpha = 0.9 if r.significant else 0.45
             ax.plot([r.ci_low, r.ci_high], [yv, yv], color=col, lw=0.8, alpha=alpha)
             mfc = col if r.significant else "white"
             ax.plot(r.difference, yv, "o", ms=2.6, color=col, mfc=mfc, mew=0.6)
         ax.axvline(0, color="#555555", lw=0.6)
-        for k in range(len(COHORTS), len(rows), len(COHORTS)):
-            ax.axhline(k - 0.5, color="#cccccc", lw=0.5, zorder=0)
+        for k in range(1, len(TECHNIQUES)):
+            ax.axhline(k * step - 0.5, color="#cccccc", lw=0.5, zorder=0)
         ax.set_title(f"{title} constraint", loc="left")
         ax.set_xlabel("change in parity gap")
+        ax.xaxis.set_major_locator(MaxNLocator(3, steps=[1, 2, 4, 5, 10], min_n_ticks=3))
+        ax.xaxis.set_major_formatter(FuncFormatter(_signed_1dp))
         print(f"  mitigation {attr}: {len(s)} arms, {int(s.significant.sum())} significant")
-    labels = [f"{TECHNIQUES[t]}, {COHORT[c]}" for t, c in rows]
-    axes[0].set_yticks(range(len(rows)), labels)
-    axes[0].set_ylim(len(rows) - 0.5, -0.5)
+    axes[0].set_yticks(list(rows.values()), [COHORT[c] for _, c in rows])
+    axes[0].set_ylim(len(TECHNIQUES) * step - 0.5, -0.5)
     handles = [
         plt.Line2D([], [], color=FAM_COLOR[k], marker="o", ms=3, lw=1.0, label=k) for k in offs
     ]
-    handles.append(
-        plt.Line2D(
-            [], [], color="#777777", marker="o", mfc="white", ms=3, lw=1.0, alpha=0.5,
-            label="not significant after BH",
-        )  # fmt: skip
-    )
+    handles.append(_not_significant_handle())
     fig.legend(
         handles=handles, loc="lower center", ncol=5, frameon=False, bbox_to_anchor=(0.5, -0.05)
     )
     fig.tight_layout()
+    # Technique headers start where the widest cohort label starts, so they read as
+    # left-aligned group titles above right-aligned rows; placed after the layout is fixed.
+    renderer = fig.canvas.get_renderer()
+    left = min(t.get_window_extent(renderer).x0 for t in axes[0].get_yticklabels())
+    x = axes[0].transAxes.inverted().transform((left, 0))[0]
+    for k, name in enumerate(TECHNIQUES.values()):
+        axes[0].text(
+            x, k * step, name, transform=axes[0].get_yaxis_transform(), ha="left", va="center",
+            fontweight="bold", fontsize=7.5,
+        )  # fmt: skip
     save(fig, "mitigation_deltas")
 
 
@@ -513,12 +573,13 @@ def fig_cluster_gaps() -> None:
             lw=1.2,
             label="outcome-rate gap",
         )
-        ticks = [f"{c}\n{r:.0%}\n{n:,}" for c, r, n in zip(out.cluster, out.outcome_rate, out.n)]
+        ticks = [f"C{c}\n{r:.0%}\n{n:,}" for c, r, n in zip(out.cluster, out.outcome_rate, out.n)]
         ax.set_xticks(range(len(order)), ticks, fontsize=6.5)
         ax.set_title(title, loc="left")
         ax.set_xlabel("cluster, outcome rate, held-out n")
     axes[0].set_ylabel("max – min over groups")
     axes[0].set_ylim(0, None)
+    axes[1].tick_params(labelleft=True)
     h, lab = axes[0].get_legend_handles_labels()
     fig.legend(h, lab, loc="lower center", ncol=4, frameon=False, bbox_to_anchor=(0.5, -0.11))
     fig.tight_layout()
