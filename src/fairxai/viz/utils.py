@@ -1,4 +1,4 @@
 """Shared visualization utilities.
 
-This module remains a placeholder while helpers are still notebook-local.
+This module is a placeholder; shared helpers live in the sibling modules.
 """

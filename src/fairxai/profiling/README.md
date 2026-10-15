@@ -65,4 +65,3 @@ payload = characterize_dataset(
 ## Related
 
 - Metric notes: [METRIC_NOTES.md](METRIC_NOTES.md)
-- Notebook inputs: [../../../notebooks/README.md](../../../notebooks/README.md)

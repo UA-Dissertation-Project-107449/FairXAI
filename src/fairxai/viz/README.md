@@ -42,7 +42,6 @@ Current cross-experiment/dissertation figures live in
 
 - Reads canonical comparison tables from `output/cardiac/runs/<run_id>/experiments/comparisons/data/`.
 - Dissertation batch figures go to `output/cardiac/studies/dissertation_figures/<run_id>/`.
-- Notebook figures may be written under `notebooks/figures/<pipeline>/`.
 - Dermatology figures go under `output/dermatology/runs/<run_id>/`, next to the
   stage output they plot.
 - Thesis figures come from `scripts/thesis/make_figures.py`, not this package's

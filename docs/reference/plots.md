@@ -17,7 +17,7 @@ Reference for plotting APIs in `src/fairxai/viz/` and figure-generation scripts.
 | `dermatology_comparison.py` | Stage 9: learning curves and model comparison |
 | `dermatology_mitigation.py` | Stage 11: baseline vs mitigated gaps per attribute × constraint |
 | `constants.py`, `labels.py`, `style.py`, `save_utils.py` | Shared labels, palettes, normalization, and figure saving |
-| `utils.py` | Placeholder; helpers are still notebook-local |
+| `utils.py` | Placeholder; shared helpers live in the modules above |
 
 Older docs used a non-existent experiment-plot module name. Current
 cross-experiment/dissertation figures live in `viz/fairness_comparison.py`.
@@ -84,13 +84,6 @@ output/cardiac/studies/dissertation_figures/<run_id>/
 Dermatology figures land under `output/dermatology/runs/<run_id>/`: stage 4
 writes `profiling/readiness_figures/<dataset>/`, and stages 8, 9 and 11 write a
 `figures/` folder beside their report, for example `baseline/mitigation/figures/`.
-
-Standalone notebooks may write under:
-
-```text
-notebooks/figures/<pipeline>/
-notebooks/tables/<pipeline>/
-```
 
 ## Thesis Figures
 

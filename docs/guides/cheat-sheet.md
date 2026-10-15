@@ -9,7 +9,7 @@ Quick command and layout reference. For the longer flow-control guide, see
 |---------|---------|-----|
 | Core | `pip install -e .` | Imports and lightweight helpers |
 | Experiment | `pip install -e ".[experiment]"` | Pipeline, fairness, HPO, mitigation |
-| Dev | `pip install -e ".[dev]"` | Tests, notebooks, plots, lint tooling |
+| Dev | `pip install -e ".[dev]"` | Tests, plots, lint tooling |
 | Full | `pip install -e ".[full]"` | Local research stack except GPU |
 | GPU | `pip install cuml-cu12==25.2.1` | HPC CUDA host after CUDA module load |
 

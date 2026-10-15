@@ -26,7 +26,7 @@ All strategies pass through a safeguard layer (``validate_and_repair``)
 that clips edges to the actual data range and merges any bin whose count
 falls below ``min_group_size``.
 
-Designed to be imported by notebooks and experiment scripts.
+Designed to be imported by experiment scripts.
 """
 
 import logging

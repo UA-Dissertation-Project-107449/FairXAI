@@ -15,14 +15,12 @@ how generated artifacts should be interpreted.
 | `data/` | External/raw/processed datasets. Generated data is not package source. |
 | `output/` | Run-scoped and study-scoped generated artifacts. |
 | `logs/` | Run logs, warning logs, error logs, and run summaries. |
-| `notebooks/` | Exploration and presentation support. Durable logic belongs in `src/` or `scripts/`. |
 
 ## Workflow
 
 1. Scripts are the primary execution unit.
 2. Bash and Prefect orchestrators coordinate scripts and checkpoint stages.
-3. Notebooks consume generated artifacts and should not be the only home for research logic.
-4. Docs follow code/config truth when drift appears.
+3. Docs follow code/config truth when drift appears.
 
 ## Processed Data Layout
 

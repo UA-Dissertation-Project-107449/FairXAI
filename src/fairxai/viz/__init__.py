@@ -6,7 +6,7 @@ Design Principles:
 - Every plot includes interpretive context
 - Fairness implications highlighted automatically
 - Consistent styling across all functions
-- Reusable across notebooks/reports
+- Reusable across pipeline stages and thesis reports
 """
 
 from .clustering import (
