@@ -14,7 +14,7 @@ PALETTE_DATASET = {
     "cleveland_uci": _CLEVELAND,
     "four_site_uci": _FOUR_SITE,
     "cardio70k": _CARDIO70K,
-    # Pre-rename ids, kept so already-committed notebooks keep their colours.
+    # Pre-rename ids, kept so older run outputs and script defaults keep their colours.
     "cleveland": _CLEVELAND,
     "kaggle_heart": _FOUR_SITE,
 }

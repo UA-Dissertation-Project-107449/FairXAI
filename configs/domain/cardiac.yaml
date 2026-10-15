@@ -75,7 +75,7 @@ age_clipping:
   cardio70k_days_upper: 43830  # ~120 years in days
 
 # Canonical sex-value mappings applied during schema harmonization.
-# Used by schemas.py, loaders.py, and notebook_utils.
+# Used by schemas.py and loaders.py.
 sex_mapping:
   numeric:
     0: "Female"

@@ -1,7 +1,7 @@
 """Guards on the figure conventions the dissertation figures depend on.
 
 Three things are pinned here, each of which was inconsistent enough to either
-crash a notebook or produce a figure that looks wrong next to its neighbours:
+crash a plot or produce a figure that looks wrong next to its neighbours:
 
 * ``PALETTE_DATASET`` must cover the dataset ids the pipeline actually runs.
   Seaborn raises on a dict palette that is missing a hue level, so a stale key
@@ -53,36 +53,8 @@ class TestDatasetPalette:
         missing = _configured_dataset_ids() - set(PALETTE_DATASET)
         assert not missing, f"PALETTE_DATASET has no colour for {sorted(missing)}"
 
-    def test_positive_rate_plot_runs_with_real_dataset_ids(self) -> None:
-        """The regression this guards: a stale key is a crash, not a fallback.
-
-        ``sns.lineplot`` raises ``ValueError: The palette dictionary is missing
-        keys`` when a hue level has no entry, so every call of this function on
-        real cardiac data failed while the palette was keyed on the old ids.
-        """
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        import pandas as pd
-
-        from fairxai.notebook_utils.profiling import plot_positive_rates_by_age
-
-        datasets = sorted(_configured_dataset_ids())
-        frame = pd.DataFrame(
-            [
-                {"dataset": dataset, "age_group": age, "prevalence": 0.3}
-                for dataset in datasets
-                for age in ("40-49", "50-59")
-            ]
-        )
-
-        result = plot_positive_rates_by_age(frame, ["40-49", "50-59"], show=False)
-        assert result is not None
-        plt.close("all")
-
     def test_legacy_dataset_keys_still_resolve(self) -> None:
-        """Committed notebooks still pass the pre-rename ids; they must not break."""
+        """Older run outputs and script defaults still use the pre-rename ids."""
         from fairxai.viz.style import PALETTE_DATASET
 
         for legacy in ("cleveland", "kaggle_heart"):
