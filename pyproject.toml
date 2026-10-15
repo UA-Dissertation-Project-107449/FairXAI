@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fairxai"
-version = "0.1.0"
+version = "1.0.0"
 description = "FairXAI: Fair and Explainable AI for Healthcare Decision Support System"
 readme = "README.md"
 license = { text = "MIT" }
