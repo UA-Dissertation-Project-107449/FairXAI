@@ -1,0 +1,82 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Page-1" id="E1">
+    <mxGraphModel dx="1065" dy="741" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="850" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="hghEVAWFvQhsV1VUehRN-30" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="" vertex="1">
+          <mxGeometry height="630" width="710" x="90" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="DERM" parent="1" style="swimlane;whiteSpace=wrap;html=1;rounded=0;" value="Dermatology track: PAD-UFES-20" vertex="1">
+          <mxGeometry height="180" width="690" x="100" y="480" as="geometry" />
+        </mxCell>
+        <mxCell id="DG" parent="DERM" style="rounded=0;whiteSpace=wrap;html=1;" value="One configuration (§5.2.3, §5.5.2)&lt;br&gt;&lt;br&gt;backbone ×4&lt;br&gt;augmentation ×2&lt;br&gt;attribute ×3&lt;br&gt;&lt;div&gt;mitigation ×9&lt;/div&gt;" vertex="1">
+          <mxGeometry height="135" width="120" x="82.25" y="32.5" as="geometry" />
+        </mxCell>
+        <mxCell id="DM" parent="DERM" style="rounded=0;whiteSpace=wrap;html=1;" value="&lt;div&gt;Measure per group&lt;/div&gt;&lt;div&gt;(§5.5.1, §5.5.3–5.5.4)&lt;/div&gt;&lt;br&gt;performance&lt;br&gt;fairness at 0.5&lt;br&gt;Grad-CAM saliency" vertex="1">
+          <mxGeometry height="105" width="155" x="257.75" y="47.5" as="geometry" />
+        </mxCell>
+        <mxCell id="DB" parent="DERM" style="rounded=0;whiteSpace=wrap;html=1;" value="&lt;div&gt;Backbone check&lt;/div&gt;&lt;div&gt;(§6.2.1, post hoc)&lt;/div&gt;&lt;br&gt;paired bootstrap on AUC" vertex="1">
+          <mxGeometry height="75" width="140" x="467.75" y="62.5" as="geometry" />
+        </mxCell>
+        <mxCell id="DG-DM" edge="1" parent="DERM" source="DG" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="DM">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="DM-DB" edge="1" parent="DERM" source="DM" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="DB">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="hghEVAWFvQhsV1VUehRN-9" parent="1" style="swimlane;whiteSpace=wrap;html=1;rounded=0;" value="Cardiac track: Cleveland, four-site, Cardiovascular" vertex="1">
+          <mxGeometry height="410" width="690" x="100" y="50" as="geometry" />
+        </mxCell>
+        <mxCell id="hghEVAWFvQhsV1VUehRN-10" parent="hghEVAWFvQhsV1VUehRN-9" style="swimlane;whiteSpace=wrap;html=1;rounded=0;startSize=30;dashed=1;" value="Optional studies that fix the configuration" vertex="1">
+          <mxGeometry height="370" width="145" x="7.5" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="hghEVAWFvQhsV1VUehRN-11" parent="hghEVAWFvQhsV1VUehRN-10" style="rounded=0;whiteSpace=wrap;html=1;dashed=1;" value="Tuning (§5.2.4)&lt;br&gt;&lt;br&gt;5-fold CV search per model" vertex="1">
+          <mxGeometry height="100" width="120" x="12.5" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="hghEVAWFvQhsV1VUehRN-12" parent="hghEVAWFvQhsV1VUehRN-10" style="rounded=0;whiteSpace=wrap;html=1;dashed=1;" value="Subgroup discovery (§5.4)&lt;br&gt;&lt;br&gt;3 clustering methods&lt;br&gt;validity gate&lt;br&gt;cluster attribute" vertex="1">
+          <mxGeometry height="100" width="120" x="12.5" y="260" as="geometry" />
+        </mxCell>
+        <mxCell id="hghEVAWFvQhsV1VUehRN-13" parent="hghEVAWFvQhsV1VUehRN-10" style="rounded=0;whiteSpace=wrap;html=1;dashed=1;" value="Feature-selection study (§5.3.2)&lt;br&gt;&lt;br&gt;&lt;div&gt;5 modes × 4 models&lt;/div&gt;&lt;div&gt;(attribute-blind)&lt;/div&gt;" vertex="1">
+          <mxGeometry height="100" width="120" x="12.5" y="150" as="geometry" />
+        </mxCell>
+        <mxCell id="hghEVAWFvQhsV1VUehRN-26" edge="1" parent="hghEVAWFvQhsV1VUehRN-9" source="hghEVAWFvQhsV1VUehRN-16" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;defaultLabelBackgroundColor=gap;" target="hghEVAWFvQhsV1VUehRN-20">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="hghEVAWFvQhsV1VUehRN-27" edge="1" parent="hghEVAWFvQhsV1VUehRN-9" source="hghEVAWFvQhsV1VUehRN-16" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;defaultLabelBackgroundColor=gap;" target="hghEVAWFvQhsV1VUehRN-17">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="hghEVAWFvQhsV1VUehRN-16" parent="hghEVAWFvQhsV1VUehRN-9" style="rounded=0;whiteSpace=wrap;html=1;" value="One configuration (§5.2–5.4, §5.5.2)&lt;br&gt;&lt;br&gt;model ×4&lt;br&gt;training ×2&lt;br&gt;attribute ×3&lt;br&gt;mitigation ×10" vertex="1">
+          <mxGeometry height="110" width="120" x="190" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="hghEVAWFvQhsV1VUehRN-17" parent="hghEVAWFvQhsV1VUehRN-9" style="rounded=0;whiteSpace=wrap;html=1;" value="Trade-off sweep&lt;br&gt;&lt;br&gt;binning ×5&lt;br&gt;technique ×6 + chain ×6&lt;br&gt;constraint: sex, age&lt;br&gt;SHAP on top 3 per cohort" vertex="1">
+          <mxGeometry height="100" width="155" x="335" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="hghEVAWFvQhsV1VUehRN-28" edge="1" parent="hghEVAWFvQhsV1VUehRN-9" source="hghEVAWFvQhsV1VUehRN-20" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;defaultLabelBackgroundColor=gap;" target="hghEVAWFvQhsV1VUehRN-22">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="hghEVAWFvQhsV1VUehRN-29" edge="1" parent="hghEVAWFvQhsV1VUehRN-9" source="hghEVAWFvQhsV1VUehRN-20" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;defaultLabelBackgroundColor=gap;" target="hghEVAWFvQhsV1VUehRN-23">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="hghEVAWFvQhsV1VUehRN-20" parent="hghEVAWFvQhsV1VUehRN-9" style="rounded=0;whiteSpace=wrap;html=1;" value="&lt;div&gt;Measure per group&lt;/div&gt;&lt;div&gt;(§5.5.1, §5.5.3–5.5.4)&lt;/div&gt;&lt;br&gt;performance at 5 thresholds&lt;br&gt;fairness at 0.5&lt;br&gt;attributions" vertex="1">
+          <mxGeometry height="100" width="155" x="335" y="250" as="geometry" />
+        </mxCell>
+        <mxCell id="hghEVAWFvQhsV1VUehRN-21" parent="hghEVAWFvQhsV1VUehRN-9" style="rounded=0;whiteSpace=wrap;html=1;" value="Trade-off frontier (§5.5.6)&lt;br&gt;&lt;br&gt;point estimates" vertex="1">
+          <mxGeometry height="80" width="140" x="540" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="hghEVAWFvQhsV1VUehRN-22" parent="hghEVAWFvQhsV1VUehRN-9" style="rounded=0;whiteSpace=wrap;html=1;" value="Uncertainty (§5.5.5)&lt;br&gt;&lt;br&gt;bootstrap&lt;br&gt;pairwise tests&lt;br&gt;calibrated on null cohorts" vertex="1">
+          <mxGeometry height="80" width="140" x="540" y="190" as="geometry" />
+        </mxCell>
+        <mxCell id="hghEVAWFvQhsV1VUehRN-23" parent="hghEVAWFvQhsV1VUehRN-9" style="rounded=0;whiteSpace=wrap;html=1;" value="Binning re-cut (§5.3.3)&lt;br&gt;&lt;br&gt;same predictions&lt;br&gt;25 schemes" vertex="1">
+          <mxGeometry height="65" width="140" x="540" y="338" as="geometry" />
+        </mxCell>
+        <mxCell id="hghEVAWFvQhsV1VUehRN-24" edge="1" parent="hghEVAWFvQhsV1VUehRN-9" source="hghEVAWFvQhsV1VUehRN-10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;dashed=1;" target="hghEVAWFvQhsV1VUehRN-16">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="hghEVAWFvQhsV1VUehRN-25" edge="1" parent="hghEVAWFvQhsV1VUehRN-9" source="hghEVAWFvQhsV1VUehRN-17" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="hghEVAWFvQhsV1VUehRN-21">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
